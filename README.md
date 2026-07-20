@@ -48,3 +48,9 @@ Special thanks to the [TP decompilation](https://github.com/zeldaret/tp) team, t
         <img src="assets/aurora-powered.png" alt="Powered by Aurora" width="800">
     </a>
 </div>
+
+
+```
+"build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight" \
+  --dvd "/Users/ahmedelbannan/Ahmed/dusklight-coop/Legend of Zelda, The - Twilight Princess (USA).rvz"
+```
