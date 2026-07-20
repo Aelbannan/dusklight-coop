@@ -1435,7 +1435,7 @@ void daB_MGN_c::executeDash() {
         // fallthrough
     case 1:
         attention_info.flags = 0;
-        if (player_sp14->checkNowWolf()) {
+        if (player_sp14->checkWolf()) {
             attention_info.flags = fopAc_AttnFlag_BATTLE_e;
         }
 
@@ -1485,7 +1485,7 @@ void daB_MGN_c::executeDash() {
         mHeadLightEffFlag = 1;
         attention_info.flags = 0;
 
-        if (player_sp14->checkNowWolf()) {
+        if (player_sp14->checkWolf()) {
             attention_info.flags |= fopAc_AttnFlag_BATTLE_e;
 
             cXyz sp48;

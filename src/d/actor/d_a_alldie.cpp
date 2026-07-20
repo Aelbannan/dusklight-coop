@@ -9,6 +9,11 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_enemy.h"
+#endif
+
 u8 daAlldie_c::getEventNo() {
     return fopAcM_GetParam(this) >> 0x18;
 }
@@ -21,8 +26,20 @@ int daAlldie_c::actionWait() {
     return 1;
 }
 
+static bool coopRoomStillHasEnemies(s8 roomNo) {
+    if (fopAcM_myRoomSearchEnemy(roomNo) != NULL) {
+        return true;
+    }
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::isEnabled() && dusk::coop::enemy::roomClearBlocked()) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 int daAlldie_c::actionCheck() {
-    if (fopAcM_myRoomSearchEnemy(fopAcM_GetRoomNo(this)) == NULL) {
+    if (!coopRoomStillHasEnemies(fopAcM_GetRoomNo(this))) {
         mAction = ACT_TIMER;
         mTimer = 65;
     }
@@ -31,7 +48,7 @@ int daAlldie_c::actionCheck() {
 }
 
 int daAlldie_c::actionTimer() {
-    if (fopAcM_myRoomSearchEnemy(fopAcM_GetRoomNo(this)) != NULL) {
+    if (coopRoomStillHasEnemies(fopAcM_GetRoomNo(this))) {
         mAction = ACT_CHECK;
     } else {
         if (mTimer > 0) {

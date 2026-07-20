@@ -14,6 +14,9 @@
 #include "d/actor/d_a_boomerang.h"
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop_forms_bridge.h"
+#endif
 
 bool daPy_frameCtrl_c::checkAnmEnd() {
     if (getEndFlg() != 0 && getNowSetFlg() == 0) {
@@ -469,7 +472,11 @@ f32 daPy_py_c::getAttentionOffsetY() {
 }
 
 int daPy_py_c::checkNowWolfEyeUp() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    return dusk_coop_checkNowWolfEyeUp();
+#else
     return daAlink_getAlinkActorClass()->checkWolfEyeUp();
+#endif
 }
 
 void daAlink_c::startRestartRoomFromOut(int i_dmgAmount, u32 i_mode, int param_2) {

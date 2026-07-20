@@ -118,7 +118,7 @@ int daTagWljump_c::execute() {
         }
     }
 
-    if (!player->checkNowWolf() || !daPy_py_c::checkFirstMidnaDemo() || midna->checkMidnaTired()) {
+    if (!player->checkWolf() || !daPy_py_c::checkFirstMidnaDemo() || midna->checkMidnaTired()) {
         return 1;
     } 
 

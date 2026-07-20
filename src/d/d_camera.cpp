@@ -36,6 +36,9 @@
 #include "dusk/settings.h"
 #include "dusk/touch_camera.h"
 #include "imgui.h"
+#if defined(ENABLE_LOCAL_COOP)
+#include "dusk/coop/coop_camera.h"
+#endif
 #endif
 
 namespace {
@@ -256,6 +259,12 @@ dCamera_c::dCamera_c(camera_class* i_camera) : mCamParam(0) {
 }
 
 dCamera_c::~dCamera_c() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Cameras 1-7 must not write primary turn-restart state or clear global stop status.
+    if (mCameraID != 0) {
+        return;
+    }
+#endif
     if (!daPy_py_c::checkPeepEndSceneChange()) {
         dComIfGs_getTurnRestart().setCameraCtr(mCenter);
         dComIfGs_getTurnRestart().setCameraEye(mEye);
@@ -11607,7 +11616,14 @@ static int init_phase2(camera_class* i_this) {
 #endif
     }
     i_this->field_0x238 = 0;
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Only the primary camera owns the global attention manager.
+    if (camera_id == 0) {
+        dComIfGp_getAttention()->Init(player, PAD_1);
+    }
+#else
     dComIfGp_getAttention()->Init(player, PAD_1);
+#endif
     return cPhs_NEXT_e;
 }
 
@@ -11629,15 +11645,21 @@ static int camera_create(camera_class* i_this) {
 
 static int camera_delete(camera_process_class* i_this) {
     dCamera_c* camera = &i_this->mCamera;
+    const int camera_id = camera->CameraID();
 
-    if (camera->CameraID() == 0) {
+    if (camera_id == 0) {
 #if DEBUG
         dDbgCamera.Finish();
 #endif
     }
 
     camera->~dCamera_c();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Clear the matching sparse slot — never force camera 0 when deleting secondaries.
+    dComIfGp_setCamera(camera_id, NULL);
+#else
     dComIfGp_setCamera(0, NULL);
+#endif
     return 1;
 }
 

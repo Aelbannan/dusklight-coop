@@ -42,7 +42,7 @@ bool is_player_wear_magneboots() {
 }
 
 bool is_player_wolf() {
-    return Player->checkNowWolf();
+    return Player->checkWolf();
 }
 
 bool is_player_pulling_chainblock() {

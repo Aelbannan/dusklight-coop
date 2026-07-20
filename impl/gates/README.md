@@ -6,16 +6,16 @@ Gates are mandatory checkpoints. Implementation does not advance past a gate unt
 
 | Gate | Description | Status | Depends on |
 |------|-------------|--------|------------|
-| **A** | Render replay boundary | ❌ Not started | — |
-| **B** | Secondary camera safety | ❌ Not started | — |
-| **C** | Input abstraction | ❌ Not started | — |
-| **D** | Proxy player | ❌ Not started | A, B, C |
-| **E** | Resource adapter | ❌ Not started | — |
-| **F** | Combat attribution | ❌ Not started | D, E |
-| **G** | One enemy adapter | ❌ Not started | D, F |
-| **H** | Difficulty and drops | ❌ Not started | E, G |
-| **I** | Independent forms | ❌ Not started | D |
-| **J** | Multiple Eponas | ❌ Not started | D |
+| **A** | Render replay boundary | 🟡 PoC implemented | — |
+| **B** | Secondary camera safety | 🟡 PoC implemented | — |
+| **C** | Input abstraction | 🟡 PoC implemented | — |
+| **D** | Proxy player | 🟡 PoC implemented | A, B, C |
+| **E** | Resource adapter | 🟡 PoC implemented | — |
+| **F** | Combat attribution | 🟡 PoC implemented | D, E |
+| **G** | One enemy adapter | 🟡 PoC implemented | D, F |
+| **H** | Difficulty and drops | 🟡 PoC implemented | E, G |
+| **I** | Independent forms | 🟡 PoC implemented | D |
+| **J** | Multiple Eponas | 🟡 PoC implemented | D |
 
 **Legend:** ❌ Not started 🟡 In progress ✅ Complete
 

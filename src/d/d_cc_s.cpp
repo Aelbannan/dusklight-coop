@@ -12,6 +12,10 @@
 #if TARGET_PC
 #include "dusk/settings.h"
 #endif
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_combat.h"
+#endif
 
 class dCcS_HIO : public JORReflexible {
 public:
@@ -536,6 +540,19 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
     dCcD_GStts* at_gstts = (dCcD_GStts*)i_atGStts;
     dCcD_GStts* tg_gstts = (dCcD_GStts*)i_tgGStts;
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    bool coop_contact_only = false;
+    if (dusk::coop::isEnabled()) {
+        // Re-evaluate so ContactNoDamage sets suppress flag for this hit.
+        (void)dusk::coop::combat::filterAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(),
+                                                &coop_contact_only);
+        dusk::coop::combat::noteAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(), i_atObj);
+        if (dusk::coop::combat::consumeSuppressPlusDmg()) {
+            coop_contact_only = true;
+        }
+    }
+#endif
+
     bool chk_shield = ChkShield(i_atObj, i_tgObj, atObjInf, tgObjInf, i_hitPos);
 
     if (i_setAt) {
@@ -573,8 +590,13 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
         if (chk_shield) {
             tgObjInf->OnTgShieldHit();
         } else {
-            int atp = i_atObj->GetAtAtp();
-            i_tgStts->PlusDmg(atp);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            if (!coop_contact_only)
+#endif
+            {
+                int atp = i_atObj->GetAtAtp();
+                i_tgStts->PlusDmg(atp);
+            }
         }
 
         if (at_gstts->ChkNoActor()) {
@@ -605,6 +627,12 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
         ProcAtTgHitmark(i_setAt, i_setTg, i_atObj, i_tgObj, atObjInf, tgObjInf, i_atStts, i_tgStts,
                         at_gstts, tg_gstts, i_hitPos, chk_shield);
     }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::isEnabled()) {
+        dusk::coop::combat::popAttackCutType();
+    }
+#endif
 }
 
 bool dCcS::ChkCamera(cXyz& param_0, cXyz& param_1, f32 param_2, fopAc_ac_c* param_3,
@@ -895,6 +923,14 @@ bool dCcS::ChkNoHitGAtTg(cCcD_GObjInf const* i_atObjInf, cCcD_GObjInf const* i_t
 
     dCcD_GObjInf* atObjInf = (dCcD_GObjInf*)i_atObjInf;
     dCcD_GObjInf* tgObjInf = (dCcD_GObjInf*)i_tgObjInf;
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::isEnabled()) {
+        if (dusk::coop::combat::shouldBlockAtTgCompletely(atObjInf->GetAc(), tgObjInf->GetAc())) {
+            return true;  // FriendlyFireMode::Ignore
+        }
+    }
+#endif
 
     if (tgObjInf->ChkTgWolfSpNoDamage() && atObjInf->GetAtMtrl() == dCcD_MTRL_NONE &&
         atObjInf->GetAtType() &

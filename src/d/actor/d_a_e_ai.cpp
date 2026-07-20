@@ -9,6 +9,11 @@
 
 #include "f_op/f_op_actor_enemy.h"
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_enemy.h"
+#endif
+
 class daE_AI_HIO_c : public JORReflexible {
 public:
     daE_AI_HIO_c();
@@ -933,6 +938,13 @@ int e_ai_class::Create() {
         gravity = -10.0f;
 
         daE_AI_Execute(this);
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        // Gate G spawn choke: queue this vanilla Armos for co-op augmentation.
+        if (dusk::coop::isEnabled()) {
+            dusk::coop::enemy::noteEligibleSource(this);
+        }
+#endif
     }
 
     return phase_state;

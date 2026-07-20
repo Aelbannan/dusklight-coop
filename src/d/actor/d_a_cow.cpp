@@ -2643,7 +2643,7 @@ void daCow_c::action_thrown() {
 
 bool daCow_c::checkWolfBusters() {
     daPy_py_c* player = daPy_getPlayerActorClass();
-    if (!player->checkNowWolf()) {
+    if (!player->checkWolf()) {
         return false;
     }
 
@@ -2701,7 +2701,7 @@ void daCow_c::action_wolf() {
         TICK_TIMER(mTimer10);
 
         calcRunAnime(false);
-        if (!player->checkNowWolf() || checkOutOfGate(aru->current.pos)) {
+        if (!player->checkWolf() || checkOutOfGate(aru->current.pos)) {
             setProcess(&daCow_c::action_run, false);
             mWillGetAngry = true;
             return;

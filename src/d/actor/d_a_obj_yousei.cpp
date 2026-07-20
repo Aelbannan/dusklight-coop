@@ -587,7 +587,7 @@ bool daObjYOUSEI_c::WayBgCheck(f32 param_0, f32 param_1, s16 param_2) {
 
 void daObjYOUSEI_c::CareAction() {
     daPy_py_c* player = daPy_getPlayerActorClass();
-    if (player->checkNowWolf()) {
+    if (player->checkWolf()) {
         field_0x5e8 = 0.7f + yREG_F(18);
     } else {
         field_0x5e8 = 1.0f;

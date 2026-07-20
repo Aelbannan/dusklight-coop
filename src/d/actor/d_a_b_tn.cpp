@@ -4068,7 +4068,7 @@ void daB_TN_c::executeDamageL() {
             mTimer10 = 30;
         }
 
-        if (mTimer10 != 0 || player->checkNowWolf()) {
+        if (mTimer10 != 0 || player->checkWolf()) {
             field_0xa91 = true;
         }
     }

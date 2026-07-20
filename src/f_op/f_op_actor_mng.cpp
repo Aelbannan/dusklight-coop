@@ -29,6 +29,14 @@
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_drops.h"
+namespace {
+bool g_coopGateEnemyDrop = false;
+}
+#endif
+
 #define MAKE_ITEM_PARAMS(itemNo, itemBitNo, param_2, param_3)                                      \
     ((itemNo & 0xFF) << 0x0 | (itemBitNo & 0xFF) << 0x8 | (param_2 & 0xFF) << 0x10 | (param_3 & 0xF) << 0x18)
 
@@ -1481,7 +1489,6 @@ struct EnemyTable {
 fpc_ProcID fopAcM_createItemFromEnemyID(u8 i_enemyID, cXyz const* i_pos, int i_itemBitNo,
                                         int i_roomNo, csXyz const* i_angle, cXyz const* i_scale,
                                         f32* i_speedF, f32* i_speedY) {
-    int itemNo;
     int tableNo = 0xFF;
 
 #if TARGET_PC
@@ -1510,8 +1517,22 @@ fpc_ProcID fopAcM_createItemFromEnemyID(u8 i_enemyID, cXyz const* i_pos, int i_i
         table++;
     }
     
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Gate H Strategy A: mark the following createItemFromTable roll as an enemy drop.
+    struct CoopEnemyDropGate {
+        CoopEnemyDropGate() { g_coopGateEnemyDrop = true; }
+        ~CoopEnemyDropGate() { g_coopGateEnemyDrop = false; }
+    } enemyDropGate;
+#endif
+
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         tableNo = fopAcM_getItemNoFromTableNo(tableNo);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        if (dusk::coop::isEnabled() &&
+            !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(tableNo))) {
+            return fpcM_ERROR_PROCESS_ID_e;
+        }
+#endif
         void* actor =
             fopAcM_createItemForDirectGet(i_pos, tableNo, i_roomNo, NULL, NULL, 0.0f, 0.0f);
         return fopAcM_GetID(actor);
@@ -1549,6 +1570,13 @@ fpc_ProcID fopAcM_createItemFromTable(cXyz const* i_pos, int i_itemNo, int i_ite
     if (i_itemNo == dItemNo_NONE_e) {
         return fpcM_ERROR_PROCESS_ID_e;
     }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (g_coopGateEnemyDrop && dusk::coop::isEnabled() &&
+        !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(i_itemNo))) {
+        return fpcM_ERROR_PROCESS_ID_e;
+    }
+#endif
 
     void* create_actor;
     if (i_createDirect) {

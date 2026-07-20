@@ -38,6 +38,9 @@
 #include "d/actor/d_a_tag_lantern.h"
 #include "d/actor/d_a_horse.h"
 #include "m_Do/m_Do_controller_pad.h"
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop_forms.h"
+#endif
 #include "d/d_bomb.h"
 #include "d/d_meter2_info.h"
 #include "d/actor/d_a_kytag05.h"

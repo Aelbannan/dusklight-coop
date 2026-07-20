@@ -4,6 +4,10 @@
 
 #include "dusk/config_var.hpp"
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop_types.h"
+#endif
+
 namespace dusk {
 
 enum class ActionBinds {
@@ -47,5 +51,13 @@ bool getActionBindHold(ActionBinds action, u32 port);
 bool getActionBindHoldAnyPort(ActionBinds action);
 
 int getActionBindButton(ActionBinds action, u32 port);
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+// Player-ID aware wrappers — reject invalid / unjoined players.
+bool isActionBoundForPlayer(ActionBinds action, coop::PlayerId player);
+bool getActionBindTrigForPlayer(ActionBinds action, coop::PlayerId player);
+bool getActionBindHoldForPlayer(ActionBinds action, coop::PlayerId player);
+int getActionBindButtonForPlayer(ActionBinds action, coop::PlayerId player);
+#endif
 
 }

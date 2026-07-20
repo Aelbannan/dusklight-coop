@@ -987,7 +987,7 @@ static void action(e_rdb_class* i_this) {
 
         if ((iVar1 != 0 && player_way_check(i_this) != 0) ||
             ((i_this->mDistToPlayer < 500.0f && player_way_check(i_this) != 0 && bVar1) &&
-             (player->checkNowWolf() || (strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0) ||
+             (player->checkWolf() || (strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0) ||
               (i_this->field_0x6ec & cc_pl_cut_bit_get()) != 0)))
         {
             i_this->mAction = ACTION_DEFENCE;

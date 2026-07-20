@@ -20,6 +20,15 @@
 #include "dusk/frame_interpolation.h"
 #endif
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_combat.h"
+#include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_drops.h"
+#include "f_pc/f_pc_name.h"
+#endif
+
 static f32 Reflect(cXyz* i_vec, cBgS_PolyInfo const& i_polyinfo, f32 i_scale) {
     cM3dGPla plane;
 
@@ -111,16 +120,80 @@ static void itemGetCoCallBack(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coObjInfA,
     daItem_c* a_coActorA = (daItem_c*)i_coActorA;
 
     if (a_coActorA != NULL) {
-        if (a_coActorA->checkPlayerGet() && i_coActorB != NULL) {
-            if (fopAcM_GetName(i_coActorB) == fopAcM_GetName(dComIfGp_getLinkPlayer()) ||
-                fopAcM_GetName(i_coActorB) == fpcNm_NPC_P2_e ||
-                (fopAcM_GetName(i_coActorB) == fpcNm_CANOE_e &&
-                 daPy_getPlayerActorClass()->checkCanoeRide()) ||
-                (fopAcM_GetName(i_coActorB) == fpcNm_HORSE_e &&
-                 daPy_getPlayerActorClass()->checkHorseRide()))
-            {
-                a_coActorA->itemGetNextExecute();
+        if (a_coActorA->checkPlayerGet() && i_coActorB != nullptr) {
+            const s16 nameB = fopAcM_GetName(i_coActorB);
+            const bool isPlayerBody =
+                nameB == fopAcM_GetName(dComIfGp_getLinkPlayer()) || nameB == fpcNm_NPC_P2_e ||
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+                nameB == fpcNm_COOP_PROXY_e ||
+#endif
+                (nameB == fpcNm_CANOE_e && daPy_getPlayerActorClass()->checkCanoeRide()) ||
+                (nameB == fpcNm_HORSE_e && daPy_getPlayerActorClass()->checkHorseRide());
+
+            if (!isPlayerBody) {
+                return;
             }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            if (dusk::coop::isEnabled()) {
+                // Gate H free-for-all: full player leaves pickup; lower id wins ties.
+                std::optional<dusk::coop::PlayerId> collider =
+                    dusk::coop::combat::playerIdForActor(i_coActorB);
+                dusk::coop::PlayerId candidates[dusk::coop::MAX_LOCAL_PLAYERS];
+                u8 n = 0;
+                const u8 itemNo = a_coActorA->m_itemNo;
+                auto tryAdd = [&](dusk::coop::PlayerId id) {
+                    if (!dusk::coop::drops::playerCanAcceptItem(id, itemNo)) {
+                        return;
+                    }
+                    for (u8 i = 0; i < n; ++i) {
+                        if (candidates[i] == id) {
+                            return;
+                        }
+                    }
+                    candidates[n++] = id;
+                };
+                if (collider.has_value()) {
+                    tryAdd(*collider);
+                }
+                // Same-frame race: any other overlapping joined player who can accept.
+                for (dusk::coop::PlayerId id = 0; id < dusk::coop::MAX_LOCAL_PLAYERS; ++id) {
+                    if (!dusk::coop::isJoined(id)) {
+                        continue;
+                    }
+                    if (collider.has_value() && id == *collider) {
+                        continue;
+                    }
+                    fopAc_ac_c* other = dusk::coop::getPlayerActor(id);
+                    if (other == nullptr) {
+                        continue;
+                    }
+                    const f32 dx = other->current.pos.x - a_coActorA->current.pos.x;
+                    const f32 dz = other->current.pos.z - a_coActorA->current.pos.z;
+                    if (dx * dx + dz * dz > 150.0f * 150.0f) {
+                        continue;
+                    }
+                    tryAdd(id);
+                }
+
+                dusk::coop::PlayerId winner = 0;
+                if (!dusk::coop::drops::resolvePickupRace(
+                        candidates, n, dusk::coop::drops::classifyItem(itemNo), &winner)) {
+                    return;  // nobody can accept — leave for later
+                }
+                if (collider.has_value() && *collider != winner) {
+                    return;  // this collider lost the race
+                }
+                dusk::coop::ScopedContext ctx({winner, static_cast<dusk::coop::ViewId>(
+                                                          winner < dusk::coop::MAX_LOCAL_VIEWS
+                                                              ? winner
+                                                              : 0),
+                                              nullptr});
+                a_coActorA->itemGetNextExecute();
+                return;
+            }
+#endif
+            a_coActorA->itemGetNextExecute();
         }
     }
 }

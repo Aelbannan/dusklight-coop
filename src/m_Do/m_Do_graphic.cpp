@@ -58,6 +58,9 @@
 #include "dusk/imgui/ImGuiConsole.hpp"
 #include "dusk/logging.h"
 #include "dusk/settings.h"
+#if defined(ENABLE_LOCAL_COOP)
+#include "dusk/coop/coop_render.h"
+#endif
 #endif
 
 class mDoGph_HIO_c : public JORReflexible {
@@ -2256,11 +2259,32 @@ int mDoGph_Painter() {
     #endif
 
     if (dComIfGp_getWindowNum() != 0) {
-        dDlst_window_c* window_p = dComIfGp_getWindow(0);
-        int camera_id = window_p->getCameraID();
-        camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        // Gate A: consume the same draw lists once per tiled view without re-simulating.
+        dusk::coop::render::drawViews();
+        const u8 coopViewPasses = dusk::coop::render::worldDrawPassCount();
+#else
+        const u8 coopViewPasses = 1;
+#endif
+        for (u8 coopViewPass = 0; coopViewPass < coopViewPasses; ++coopViewPass) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            dusk::coop::render::ScopedWorldDrawPass scopedViewPass(coopViewPass);
+            dDlst_window_c* window_p = dusk::coop::render::resolveWindow(coopViewPass);
+            camera_process_class* camera_p = dusk::coop::render::resolveCamera(coopViewPass);
+            const int camera_id = window_p != NULL ? window_p->getCameraID() : 0;
+            const bool coopSkipIncompatible =
+                dusk::coop::render::isMultiViewActive() &&
+                dusk::coop::render::incompatibleEffectsDisabled();
+            const bool coopLastPass = (coopViewPass + 1 == coopViewPasses);
+#else
+            dDlst_window_c* window_p = dComIfGp_getWindow(0);
+            int camera_id = window_p->getCameraID();
+            camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
+            const bool coopSkipIncompatible = false;
+            const bool coopLastPass = true;
+#endif
 
-        if (camera_p != NULL) {
+        if (camera_p != NULL && window_p != NULL) {
             #if DEBUG
             fapGm_HIO_c::startCpuTimer();
             #endif
@@ -2277,6 +2301,11 @@ int mDoGph_Painter() {
             view_port_class* view_port = window_p->getViewPort();
 
             if (view_port->x_orig != 0.0f || view_port->y_orig != 0.0f) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+                // Multi-view uses intentional non-zero origins; do not expand to full FB.
+                if (!dusk::coop::render::isMultiViewActive())
+#endif
+                {
                 view_port_class new_port;
                 new_port.x_orig = 0.0f;
                 new_port.y_orig = 0.0f;
@@ -2287,6 +2316,7 @@ int mDoGph_Painter() {
                 new_port.scissor = view_port->scissor;
 
                 view_port = &new_port;
+                }
             }
 
             #if DEBUG
@@ -2298,13 +2328,22 @@ int mDoGph_Painter() {
             GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
                          view_port->height);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            f32 coopViewAspect = camera_p->view.aspect;
+            if (dusk::coop::render::isMultiViewActive() && view_port->height > 0.0f) {
+                coopViewAspect = view_port->width / view_port->height;
+            }
+#else
+            const f32 coopViewAspect = camera_p->view.aspect;
+#endif
+
 #ifdef TARGET_PC
             // FRAME INTERP NOTE: Call setViewMtx earlier so that it's interpolated in time for draw_info to use it
             j3dSys.setViewMtx(camera_p->view.viewMtx);
-            JPADrawInfo draw_info(j3dSys.getViewMtx(), camera_p->view.fovy, camera_p->view.aspect);
+            JPADrawInfo draw_info(j3dSys.getViewMtx(), camera_p->view.fovy, coopViewAspect);
             mDoGph_gInf_c::setWideZoomLightProjection(draw_info.mPrjMtx);
 #else
-            JPADrawInfo draw_info(camera_p->view.viewMtx, camera_p->view.fovy, camera_p->view.aspect);
+            JPADrawInfo draw_info(camera_p->view.viewMtx, camera_p->view.fovy, coopViewAspect);
 #endif
 
             #if 0 && WIDESCREEN_SUPPORT
@@ -2480,7 +2519,9 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                if (!coopSkipIncompatible) {
+                    GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                }
 
                 #if DEBUG
                 // "blur filter (Rendering)"
@@ -2489,7 +2530,9 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                if (!coopSkipIncompatible) {
+                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                }
                 GXInvalidateTexAll();
                 GXSetClipMode(GX_CLIP_ENABLE);
 
@@ -2573,7 +2616,9 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                if (!coopSkipIncompatible) {
+                    retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                }
 
                 #if DEBUG
                 // "Frame Buffer capture 2nd time (Rendering)"
@@ -2607,11 +2652,21 @@ int mDoGph_Painter() {
 
                 GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
+                if (!coopSkipIncompatible &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+                // Multi-view: submit 3D-last while viewport/scissor still own this tile.
+                if (dusk::coop::render::isMultiViewActive()) {
+                    GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+                }
+#endif
+
+                // Full-frame 2D-screen / bloom / fade: once after the last world view.
+                if (coopLastPass) {
                 GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
 
                 Mtx m2;
@@ -2643,7 +2698,8 @@ int mDoGph_Painter() {
 
                 j3dSys.reinitGX();
 
-                if ((g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
+                if (!coopSkipIncompatible &&
+                    (g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
                     GXColor color = *mDoGph_gInf_c::getBloom()->getMonoColor();
@@ -2660,7 +2716,9 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                if (!coopSkipIncompatible) {
+                    GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                }
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
 
@@ -2668,15 +2726,22 @@ int mDoGph_Painter() {
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {
                     dComIfGd_drawOpaListDark();
                     dComIfGd_drawXluListDark();
-                    retry_captue_frame(&camera_p->view, view_port,
-                                       dComIfGp_getCameraZoomForcus(camera_id));
+                    if (!coopSkipIncompatible) {
+                        retry_captue_frame(&camera_p->view, view_port,
+                                           dComIfGp_getCameraZoomForcus(camera_id));
+                    }
                     dComIfGd_drawOpaListInvisible();
                     dComIfGd_drawXluListInvisible();
                     dComIfGd_drawOpaListFilter();
                 }
                 #endif
 
-                GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+                if (!dusk::coop::render::isMultiViewActive())
+#endif
+                {
+                    GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+                }
 
                 #if DEBUG
                 // "saturation add filter (Rendering)"
@@ -2706,7 +2771,8 @@ int mDoGph_Painter() {
 
                 trimming(&camera_p->view, view_port);
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
+                if (!coopSkipIncompatible &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
                     (mDoGph_gInf_c::isFade() & 0x80) == 0)
                 {
                     mDoGph_gInf_c::calcFade();
@@ -2716,8 +2782,10 @@ int mDoGph_Painter() {
                 // "color fade draw (Rendering)"
                 fapGm_HIO_c::stopCpuTimer("カラーフェード描画（レンダリング）");
                 #endif
+                }  // coopLastPass
             }
         }
+        }  // coopViewPass
     }
 
     #if DEBUG
@@ -2725,7 +2793,12 @@ int mDoGph_Painter() {
     #endif
 
     #if TARGET_PC
-    if (dusk::getSettings().game.enableMirrorMode)
+    if (dusk::getSettings().game.enableMirrorMode
+#if defined(ENABLE_LOCAL_COOP)
+        && !dusk::coop::render::shouldSkipEffect(
+               dusk::coop::render::IncompatibleEffect::MirrorModeCopy)
+#endif
+       )
     #elif PLATFORM_WII
     if (data_8053a730)
     #endif

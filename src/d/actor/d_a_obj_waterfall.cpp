@@ -324,7 +324,7 @@ void daObjWaterFall_c::push_player() {
     f32 outMagnitude = 10.0f;
     #endif
 
-    if(player->checkNowWolf()) {
+    if(player->checkWolf()) {
         #if DEBUG
         outMagnitude = l_HIO.mPushStrengthWolf;
         #else

@@ -44,6 +44,10 @@
 #include <cstring>
 #include <sstream>
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#endif
+
 #include <filesystem>
 #include <system_error>
 #include <thread>
@@ -194,6 +198,9 @@ void main01(void) {
     mDoMch_Create();
     mDoGph_Create();
     mDoCPd_c::create();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    dusk::coop::init();
+#endif
 
     // Console Setup
     JUTConsole* console = JFWSystem::getSystemConsole();
@@ -288,6 +295,9 @@ void main01(void) {
                 for (int sim_tick = 0; sim_tick < pacing.sim_ticks_to_run; ++sim_tick) {
                     dusk::frame_interp::begin_sim_tick();
                     mDoCPd_c::read();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+                    dusk::coop::tick();
+#endif
                     dusk::mouse::read();
                     dusk::gyro::read(pacing.sim_pace);
                     fapGm_Execute();
@@ -311,6 +321,9 @@ void main01(void) {
 
             // Game Inputs
             mDoCPd_c::read();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            dusk::coop::tick();
+#endif
             dusk::mouse::read();
             dusk::gyro::read(pacing.presentation_dt_seconds);
 

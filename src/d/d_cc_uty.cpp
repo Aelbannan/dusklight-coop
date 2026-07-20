@@ -18,6 +18,11 @@
 #include "dusk/settings.h"
 #include "d/actor/d_a_alink.h"
 #endif
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_combat.h"
+#include "f_pc/f_pc_name.h"
+#endif
 
 static int plCutLRC[58] = {
     0,  //
@@ -91,33 +96,39 @@ int pl_cut_LRC(int index) {
 u16 cc_pl_cut_bit_get() {
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Prefer attributed attacking cut type over always-P0 when co-op is active.
+    const u8 cut =
+        dusk::coop::isEnabled() ? static_cast<u8>(dusk::coop::combat::resolvedCutType())
+                                : player_p->getCutType();
+#else
+    const u8 cut = player_p->getCutType();
+#endif
+
     u16 bit = 0;
-    if (player_p->getCutType() == daPy_py_c::CUT_TYPE_NM_VERTICAL) {
+    if (cut == daPy_py_c::CUT_TYPE_NM_VERTICAL) {
         bit = 0x1;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_NM_STAB) {
+    } else if (cut == daPy_py_c::CUT_TYPE_NM_STAB) {
         bit = 0x2;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_COMBO_STAB) {
+    } else if (cut == daPy_py_c::CUT_TYPE_COMBO_STAB) {
         bit = 0x200;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_NM_RIGHT) {
+    } else if (cut == daPy_py_c::CUT_TYPE_NM_RIGHT) {
         bit = 0x4;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_NM_LEFT) {
+    } else if (cut == daPy_py_c::CUT_TYPE_NM_LEFT) {
         bit = 0x8;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_FINISH_LEFT) {
+    } else if (cut == daPy_py_c::CUT_TYPE_FINISH_LEFT) {
         bit = 0x20;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_FINISH_VERTICAL) {
+    } else if (cut == daPy_py_c::CUT_TYPE_FINISH_VERTICAL) {
         bit = 0x40;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
-               player_p->getCutType() == daPy_py_c::CUT_TYPE_UNK_9 || player_p->getCutType() == daPy_py_c::CUT_TYPE_HORSE_TURN ||
-               player_p->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT)
+    } else if (cut == daPy_py_c::CUT_TYPE_TURN_RIGHT || cut == daPy_py_c::CUT_TYPE_UNK_9 ||
+               cut == daPy_py_c::CUT_TYPE_HORSE_TURN || cut == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT)
     {
         bit = 0x80;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_TURN_LEFT ||
-               player_p->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT)
-    {
+    } else if (cut == daPy_py_c::CUT_TYPE_TURN_LEFT || cut == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT) {
         bit = 0x800;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_JUMP) {
+    } else if (cut == daPy_py_c::CUT_TYPE_JUMP) {
         bit = 0x100;
-    } else if (player_p->getCutType() == daPy_py_c::CUT_TYPE_UNK_28 || player_p->getCutType() == daPy_py_c::CUT_TYPE_GUARD_ATTACK) {
+    } else if (cut == daPy_py_c::CUT_TYPE_UNK_28 || cut == daPy_py_c::CUT_TYPE_GUARD_ATTACK) {
         bit = 0x400;
     }
 
@@ -325,7 +336,11 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
         i_AtInfo->mAttackPower = at_power_get(i_AtInfo);
 
         s16 ac_name = fopAcM_GetName(i_AtInfo->mpActor);
-        if (ac_name == fpcNm_ALINK_e || ac_name == fpcNm_ALINK_e) {
+        if (ac_name == fpcNm_ALINK_e
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            || ac_name == fpcNm_COOP_PROXY_e
+#endif
+        ) {
             if (i_AtInfo->mpCollider->ChkAtType(AT_TYPE_8000) ||
                 i_AtInfo->mpCollider->ChkAtType(AT_TYPE_IRON_BALL))
             {
@@ -357,7 +372,11 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
         i_AtInfo->mHitBit = 0x1000;
     } else {
         s16 ac_name = fopAcM_GetName(i_AtInfo->mpActor);
-        if (ac_name == fpcNm_ALINK_e || ac_name == fpcNm_ALINK_e) {
+        if (ac_name == fpcNm_ALINK_e
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            || ac_name == fpcNm_COOP_PROXY_e
+#endif
+        ) {
             if (dCcD_GetGObjInf(i_AtInfo->mpCollider)->GetAtSpl() == 1) {
                 i_AtInfo->mHitStatus = 1;
             }
@@ -372,6 +391,14 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
 fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
     i_AtInfo->mpActor = at_power_check(i_AtInfo);
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Attribute cut type from the actual attacking actor when co-op is on.
+    if (dusk::coop::isEnabled() && i_AtInfo->mpActor != nullptr) {
+        const u16 cut = dusk::coop::combat::cutTypeForActor(i_AtInfo->mpActor);
+        dusk::coop::combat::pushAttackCutType(cut);
+    }
+#endif
 
     f32 x_diff;
     f32 z_diff;
@@ -516,6 +543,12 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
             dScnPly_c::setPauseTimer(pause_time);
         }
     }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::isEnabled()) {
+        dusk::coop::combat::popAttackCutType();
+    }
+#endif
 
     return i_AtInfo->mpActor;
 }

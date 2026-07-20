@@ -1427,6 +1427,24 @@ set(DUSK_FILES
         src/dusk/autosave.cpp
         src/dusk/config.cpp
         src/dusk/config.hpp
+        src/dusk/coop/coop.cpp
+        src/dusk/coop/coop_accessors.cpp
+        src/dusk/coop/coop_bottles.cpp
+        src/dusk/coop/coop_camera.cpp
+        src/dusk/coop/coop_combat.cpp
+        src/dusk/coop/coop_context.cpp
+        src/dusk/coop/coop_debug.cpp
+        src/dusk/coop/coop_difficulty.cpp
+        src/dusk/coop/coop_drops.cpp
+        src/dusk/coop/coop_enemy.cpp
+        src/dusk/coop/coop_forms.cpp
+        src/dusk/coop/coop_gate_h_selfcheck.cpp
+        src/dusk/coop/coop_horses.cpp
+        src/dusk/coop/coop_input.cpp
+        src/dusk/coop/coop_inventory.cpp
+        src/dusk/coop/coop_player.cpp
+        src/dusk/coop/coop_render.cpp
+        src/dusk/coop/coop_save.cpp
         src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp
         src/dusk/data.cpp

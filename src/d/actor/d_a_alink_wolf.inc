@@ -218,7 +218,13 @@ void daAlink_c::changeWolf() {
 
     mDoExt_setCurrentHeap(current_heap);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Save write only here; sidecar current updates after FLG1_IS_WOLF (below).
+    dusk::coop::forms::writeTransformSaveIfAuthority(
+        dusk::coop::forms::playerIdForLink(this), dusk::coop::PlayerForm::Wolf);
+#else
     dComIfGs_setTransformStatus(1);
+#endif
     mpLinkModel->setUserArea((uintptr_t)this);
     changeModelDataDirectWolf(0);
     mEyeHL1.entry(field_0x064C, "wl_eye_Hilight");
@@ -229,6 +235,9 @@ void daAlink_c::changeWolf() {
 
     changeCommon();
     onNoResetFlg1(FLG1_IS_WOLF);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    dusk::coop::forms::onTransformComplete(dusk::coop::forms::playerIdForLink(this));
+#endif
     deleteEquipItem(FALSE, FALSE);
     field_0x2e44.init(this, l_wolfJntColData, mpLinkModel, 18);
     offNoResetFlg1(FLG1_UNK_800000);
@@ -416,7 +425,12 @@ void daAlink_c::changeLink(int param_0) {
 
     mDoExt_setCurrentHeap(current_heap);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    dusk::coop::forms::writeTransformSaveIfAuthority(
+        dusk::coop::forms::playerIdForLink(this), dusk::coop::PlayerForm::Human);
+#else
     dComIfGs_setTransformStatus(0);
+#endif
     mpLinkModel->setUserArea((uintptr_t)this);
     mpLinkHatModel->setUserArea((uintptr_t)this);
     changeModelDataDirect(param_0);
@@ -519,6 +533,10 @@ void daAlink_c::changeLink(int param_0) {
     } else {
         changeCommon();
         offNoResetFlg1(FLG1_IS_WOLF);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        dusk::coop::forms::onTransformComplete(dusk::coop::forms::playerIdForLink(this));
+        dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), false);
+#endif
         field_0x2e44.init(this, l_jntColData, mpLinkModel, 18);
         field_0x3088 = 0;
         field_0x302c[7] = -0x3800;
@@ -597,6 +615,9 @@ void daAlink_c::onWolfEyeUp() {
         mZ2Link.setWolfEyeOpen(true);
         mWolfEyeUp = mpHIO->mWolf.m.mSensesLingerTime;
         field_0x2fd2 = 20;
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), true);
+#endif
     }
 }
 
@@ -605,6 +626,9 @@ void daAlink_c::offWolfEyeUp() {
         mWolfEyeUp = 0;
         field_0x2fd2 = 20;
         mZ2Link.setWolfEyeOpen(false);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), false);
+#endif
     }
 }
 

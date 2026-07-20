@@ -42,7 +42,7 @@ static int daObjDigholl_Delete(daObjDigholl_c* i_this) {
 
 int daObjDigholl_c::execute() {
     daPy_py_c* player = daPy_getLinkPlayerActorClass();
-    if (player->checkNowWolf() &&
+    if (player->checkWolf() &&
         (field_0x56a == 0xff || fopAcM_isSwitch(this, field_0x56a)) &&
         (f32)fabsf(current.pos.y - player->current.pos.y) < 40.0f)
     {

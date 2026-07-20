@@ -27,6 +27,12 @@
 #include "dusk/settings.h"
 #include "dusk/speedrun.h"
 #include "dusk/version.hpp"
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_combat.h"
+#include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_inventory.h"
+#endif
 
 BOOL daAlink_c::checkEventRun() const {
     return dComIfGp_event_runCheck() || checkPlayerDemoMode();
@@ -1245,6 +1251,16 @@ BOOL daAlink_c::checkRestartDead(int i_dmgAmount, BOOL i_checkZoraMag) {
     if (mProcID != PROC_DEAD && i_dmgAmount >= dComIfGs_getLife() && !checkMagicArmorNoDamage() &&
         !dComIfGs_checkBottle(dItemNo_FAIRY_e))
     {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        if (dusk::coop::isEnabled() &&
+            dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
+        {
+            dusk::coop::combat::markPlayerDowned(dusk::coop::currentPlayer());
+            dusk::coop::combat::triggerGameOverIfNeeded();
+            // Suppress vanilla forced game-over while teammates remain alive.
+            return FALSE;
+        }
+#endif
         onNoResetFlg2(FLG2_FORCE_GAMEOVER);
         procCoDeadInit(0);
         return TRUE;
@@ -1266,6 +1282,25 @@ void daAlink_c::setDeadRideSyncPos() {
 }
 
 BOOL daAlink_c::checkDeadHP() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::isEnabled() &&
+        dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
+    {
+        // Teammates alive: zero HP does not count as global dead for game-over.
+        if (dComIfGs_getLife() == 0 && !checkResetFlg0(RFLG0_UNK_400) &&
+            !dComIfGs_checkBottle(dItemNo_FAIRY_e))
+        {
+            dusk::coop::combat::markPlayerDowned(dusk::coop::currentPlayer());
+            return FALSE;
+        }
+        // Still honor explicit force-gameover / oxygen only when all downed.
+        if (checkNoResetFlg2(FLG2_FORCE_GAMEOVER) &&
+            !dusk::coop::combat::allPlayersDowned())
+        {
+            offNoResetFlg2(FLG2_FORCE_GAMEOVER);
+        }
+    }
+#endif
     return ((dComIfGs_getLife() == 0 && !checkResetFlg0(RFLG0_UNK_400)) && !dComIfGs_checkBottle(dItemNo_FAIRY_e)) ||
            checkNoResetFlg2(FLG2_FORCE_GAMEOVER) ||
            (dComIfGp_getOxygenShowFlag() && dComIfGp_getNowOxygen() == 0);
@@ -1273,7 +1308,25 @@ BOOL daAlink_c::checkDeadHP() {
 
 BOOL daAlink_c::checkDeadAction(int param_0) {
     if (!checkEventRun()) {
-        if (checkDeadHP() && mProcID != PROC_HORSE_RIDE && mProcID != PROC_HORSE_GETOFF && mProcID != PROC_LARGE_DAMAGE && mProcID != PROC_LARGE_DAMAGE_WALL && (param_0 || (mProcID != PROC_LARGE_DAMAGE_UP && mProcID != PROC_WOLF_LARGE_DAMAGE_UP))) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        // Per-player fairy via Gate E bottles when co-op is on.
+        if (dusk::coop::isEnabled() && dComIfGs_getLife() == 0 &&
+            !checkResetFlg0(RFLG0_UNK_400))
+        {
+            const dusk::coop::PlayerId id = dusk::coop::currentPlayer();
+            if (dusk::coop::combat::tryConsumeFairy(id)) {
+                makeFairy(&current.pos, 0);
+                // Restore life after fairy (sidecar / P0 via inventory).
+                dusk::coop::inventory::setLife(
+                    id, dusk::coop::inventory::resources(id).maxLife);
+                if (auto* rt = dusk::coop::playerRuntime(id)) {
+                    rt->lifeState = dusk::coop::PlayerLifeState::Alive;
+                }
+                return 0;
+            }
+        }
+#endif
+        if (checkDeadHP() && mProcID != PROC_HORSE_RIDE && mProcID != PROC_HORSE_GETOFF && mProcID != PROC_LARGE_DAMAGE && mProcID != PROC_LARGE_DAMAGE_WALL && (param_0 || (mProcID != PROC_LARGE_DAMAGE_UP && mProcID != PROC_WOLF_LARGE_DAMAGE_UP))) { 
             if (mLinkAcch.ChkGroundHit() || checkModeFlg(0x40000) || checkBoarRide() || (checkHorseRide() && !dComIfGp_getHorseActor()->checkJump())) { 
                 return procCoDeadInit(1);
             }

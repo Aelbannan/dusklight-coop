@@ -1646,7 +1646,7 @@ void daDoor20_c::makeEventId() {
     int i;
     switch (field_0x691) {
     case 1:
-        if (player != NULL && player->checkNowWolf()) {
+        if (player != NULL && player->checkWolf()) {
             int j = 0;
             for (i = 4; i < 8; i++, j++) {
                 field_0x692[i] =
@@ -1661,7 +1661,7 @@ void daDoor20_c::makeEventId() {
         }
         break;
     case 3:
-        if (player != NULL && player->checkNowWolf()) {
+        if (player != NULL && player->checkWolf()) {
             int j = 0;
             for (i = 4; i < 8; i++, j++) {
                 field_0x692[i] =
@@ -1676,7 +1676,7 @@ void daDoor20_c::makeEventId() {
         }
         break;
     case 2:
-        if (player != NULL && player->checkNowWolf()) {
+        if (player != NULL && player->checkWolf()) {
             int j = 0;
             for (i = 4; i < 8; i++, j++) {
                 field_0x692[i] =
@@ -1699,7 +1699,7 @@ void daDoor20_c::makeEventId() {
         }
         break;
     case 5:
-        if (player != NULL && player->checkNowWolf()) {
+        if (player != NULL && player->checkWolf()) {
             int j = 0;
             for (i = 4; i < 8; i++, j++) {
                 field_0x692[i] =
@@ -1714,7 +1714,7 @@ void daDoor20_c::makeEventId() {
         }
         break;
     case 6:
-        if (player != NULL && player->checkNowWolf()) {
+        if (player != NULL && player->checkWolf()) {
             int j = 0;
             for (i = 4; i < 8; i++, j++) {
                 field_0x692[i] =

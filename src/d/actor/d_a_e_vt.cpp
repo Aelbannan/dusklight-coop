@@ -1615,7 +1615,7 @@ void daE_VA_c::executeDemoOp() {
             mWeponEfMode = 1;
             mDemoModeTimer = 130;
 
-            if (!player->checkNowWolf()) {
+            if (!player->checkWolf()) {
                 player->changeDemoMode(0x17, 0, 0, 0);
             }
 
@@ -2554,7 +2554,7 @@ void daE_VA_c::executeOpaciChase() {
         field_0x1388 = 1;
         mSound.startCreatureVoiceLevel(Z2SE_EN_VA_V_ROTATE, -1);
 
-        if (mDownTimer == 0 && !player->checkNowWolf()) {
+        if (mDownTimer == 0 && !player->checkWolf()) {
             mBodyCyls[0].OnTgSetBit();
             mBodyCyls[1].OnTgSetBit();
         }
@@ -2620,7 +2620,7 @@ void daE_VA_c::executeOpaciChase() {
     case 12:
         mSound.startCreatureVoiceLevel(Z2SE_EN_VA_V_ROTATE, -1);
 
-        if (!player->checkNowWolf()) {
+        if (!player->checkWolf()) {
             mBodyCyls[0].OnTgSetBit();
             mBodyCyls[1].OnTgSetBit();
         }
@@ -2640,7 +2640,7 @@ void daE_VA_c::executeOpaciChase() {
     case 13:
         mSound.startCreatureVoiceLevel(Z2SE_EN_VA_V_ROTATE, -1);
 
-        if (!player->checkNowWolf()) {
+        if (!player->checkWolf()) {
             mBodyCyls[0].OnTgSetBit();
             mBodyCyls[1].OnTgSetBit();
         }

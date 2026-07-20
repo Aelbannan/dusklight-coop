@@ -875,7 +875,7 @@ void daMidna_c::setMatrix() {
         mDoMtx_stack_c::ZXYrotM(shape_angle);
         mDoMtx_stack_c::transM(0.0f, -98.0f, 17.0f);
         mpShadowModel->setBaseTRMtx(mDoMtx_stack_c::get());
-    } else if (!checkStateFlg0(FLG0_WOLF_NO_POS) && (!daPy_py_c::checkNowWolf() || checkShadowModelDrawSmode())) {
+    } else if (!checkStateFlg0(FLG0_WOLF_NO_POS) && (!daPy_py_c::checkNowWolfAuthority() || checkShadowModelDrawSmode())) {
         if (field_0x84e != 4) {
             f32 sin_link_y = cM_ssin(link->shape_angle.y);
             f32 cos_link_y = cM_scos(link->shape_angle.y);
@@ -1188,7 +1188,7 @@ void daMidna_c::setBodyPartPos() {
 
     if (field_0x84e == 1 || (checkSetAnime(0, ANM_S_APPEAR) && mpMorf->getFrame() < 3.0f)) {
         daAlink_c* link = daAlink_getAlinkActorClass();
-        f32 fvar1 = daPy_py_c::checkNowWolf() ? 250.0f : 50.0f;
+        f32 fvar1 = daPy_py_c::checkNowWolfAuthority() ? 250.0f : 50.0f;
         attention_info.position.set(
             link->current.pos.x + fvar1 * cM_ssin(link->shape_angle.y),
             link->current.pos.y - 30.0f,
@@ -1212,7 +1212,7 @@ void daMidna_c::setBodyPartPos() {
 
 BOOL daMidna_c::checkAppear() {
     if (
-        daPy_py_c::checkNowWolf() && daPy_py_c::checkFirstMidnaDemo() &&
+        daPy_py_c::checkNowWolfAuthority() && daPy_py_c::checkFirstMidnaDemo() &&
         (
             !daAlink_getAlinkActorClass()->checkMidnaDisappearMode() ||
             checkStateFlg0(FLG0_WOLF_NO_POS) ||
@@ -1339,7 +1339,7 @@ void daMidna_c::checkMidnaPosState() {
     }
 
     if (mDemoMode == 12) {
-        if (daPy_py_c::checkNowWolf()) {
+        if (daPy_py_c::checkNowWolfAuthority()) {
             onStateFlg0(FLG0_WOLF_NO_POS);
             Vec vec1 = {0.0f, mpHIO->m.y_pos, mpHIO->m.z_pos};
             cXyz vec2;
@@ -2190,7 +2190,7 @@ void daMidna_c::setAnm() {
         }
 
         if (anm == ANM_WARPIN) {
-            if (daPy_py_c::checkNowWolf()) {
+            if (daPy_py_c::checkNowWolfAuthority()) {
                 u32 sound_id;
                 if (checkStateFlg1(FLG1_SIDE_WARP)) {
                     sound_id = Z2SE_MDN_WARP_IN_YOKO;
@@ -2287,7 +2287,7 @@ void daMidna_c::setAnm() {
                 setBckAnime(bck, J3DFrameCtrl::EMode_NONE, 0.0f);
             }
         } else if (
-            daPy_py_c::checkNowWolf() && !bVar1 &&
+            daPy_py_c::checkNowWolfAuthority() && !bVar1 &&
             ((mNeckAngle.y == 0 && mNeckAngle.x == 0 && anm != ANM_LEADWAIT && cM_rnd() < 0.01f) ||
             (anm == ANM_LEADWAIT && !checkStateFlg0(FLG0_NO_HAIR_LEAD) && cM_rnd() < 0.0125f))
         ) {
@@ -3205,7 +3205,7 @@ void daMidna_c::setSound() {
 int daMidna_c::execute() {
     daAlink_c* link = daAlink_getAlinkActorClass();
     if (!link->checkMetamorphose()) {
-        if (daPy_py_c::checkNowWolf()) {
+        if (daPy_py_c::checkNowWolfAuthority()) {
             onStateFlg0(FLG0_UNK_40000000);
         } else {
             offStateFlg0(FLG0_UNK_40000000);
@@ -3277,7 +3277,7 @@ int daMidna_c::execute() {
         field_0x84e = 0;
     }
 
-    if (checkSetAnime(0, ANM_LEADTOWAITA) && mpMorf->checkFrame(2.0f) && daPy_py_c::checkNowWolf()
+    if (checkSetAnime(0, ANM_LEADTOWAITA) && mpMorf->checkFrame(2.0f) && daPy_py_c::checkNowWolfAuthority()
                                      && mpKago == NULL) {
         dComIfGp_getVibration().StartShock(2, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
     }

@@ -20,6 +20,11 @@
 #include <cmath>
 #include <cstring>
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_horses.h"
+#endif
+
 #if TARGET_PC
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
@@ -487,10 +492,20 @@ static void daHorse_coHitCallbackAll(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coO
 }
 
 static void* daHorse_searchEnemy(fopAc_ac_c* i_actor, void* i_data) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    auto* ctx = static_cast<dusk::coop::horses::HorseSearchContext*>(i_data);
+    daHorse_c* horse_p = ctx != nullptr ? ctx->horse : nullptr;
+    f32 search_dist = ctx != nullptr ? ctx->maximumDistance : 0.0f;
+    if (horse_p == nullptr) {
+        return NULL;
+    }
+#else
     daHorse_c* horse_p = dComIfGp_getHorseActor();
     f32 search_dist = *(f32*)i_data;
+#endif
 
-    if (fopAcM_GetGroup(i_actor) == fopAc_ENEMY_e && fopAcM_GetName(i_actor) != fpcNm_E_WS_e && horse_p->current.pos.abs2XZ(i_actor->current.pos) < search_dist * search_dist) {
+    if (fopAcM_GetGroup(i_actor) == fopAc_ENEMY_e && fopAcM_GetName(i_actor) != fpcNm_E_WS_e &&
+        horse_p->current.pos.abs2XZ(i_actor->current.pos) < search_dist * search_dist) {
         return i_actor;
     }
 
@@ -681,6 +696,13 @@ extern int g_horsePosInit;
 int daHorse_c::create() {
     fopAcM_ct(this, daHorse_c);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    const dusk::coop::PlayerId coopOwner = dusk::coop::horses::peekPendingCreateOwner();
+    const bool coopSecondary = dusk::coop::horses::shouldBypassSingleton(coopOwner);
+#else
+    const bool coopSecondary = false;
+#endif
+
     if (checkEnding()) {
         onStateFlg0(FLG0_UNK_8000);
     }
@@ -696,6 +718,11 @@ int daHorse_c::create() {
            /* General use - When on (while changing scenes) stage name is not shown */
         || dComIfGs_isTmpBit(dSv_event_tmp_flag_c::NO_TELOP)))
     {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        if (coopSecondary) {
+            dusk::coop::horses::onCreateFailed(coopOwner);
+        }
+#endif
         return cPhs_ERROR_e;
     }
 
@@ -705,9 +732,20 @@ int daHorse_c::create() {
             return cPhs_INIT_e;
         }
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        if (coopSecondary) {
+            if (dusk::coop::horses::resolveOwned(coopOwner) != NULL) {
+                dusk::coop::horses::onCreateFailed(coopOwner);
+                return cPhs_ERROR_e;
+            }
+        } else if (dusk::coop::horses::getGlobalHorseActor() != NULL) {
+            return cPhs_ERROR_e;
+        }
+#else
         if (dComIfGp_getHorseActor() != NULL) {
             return cPhs_ERROR_e;
         }
+#endif
 
         int room_no;
         if (((fopAcM_GetParam(this) >> 8) & 0xF) == 1) {
@@ -724,6 +762,12 @@ int daHorse_c::create() {
         m_onRideFlg = &daHorse_c::onRideFlgSubstance;
         m_offRideFlg = &daHorse_c::offRideFlgSubstance;
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        // Secondary owned horses keep the spawn pose from fopAcM_create — skip P0 restart.
+        if (coopSecondary) {
+            // no restart reposition
+        } else
+#endif
         if (daAlink_getAlinkActorClass()->checkHorseStart() || checkStateFlg0(FLG0_UNK_8000) ||
             (DEBUG && g_horsePosInit) ||
             strcmp(dComIfGs_getHorseRestartStageName(), "") == 0
@@ -751,6 +795,11 @@ int daHorse_c::create() {
         }
 
         if (!fopAcM_entrySolidHeap(this, daHorse_createHeap, 0x6E60)) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            if (coopSecondary) {
+                dusk::coop::horses::onCreateFailed(coopOwner);
+            }
+#endif
             return cPhs_ERROR_e;
         }
 
@@ -864,7 +913,14 @@ int daHorse_c::create() {
         m_acch.CrrPos(dComIfG_Bgsp());
         setRoomInfo(1);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        if (dusk::coop::horses::shouldRegisterGlobally(coopOwner)) {
+            dComIfGp_setHorseActor(this);
+        }
+        dusk::coop::horses::onCreateSuccess(coopOwner, this, fopAcM_GetID(this));
+#else
         dComIfGp_setHorseActor(this);
+#endif
         field_0x16e8 = shape_angle.y;
 
         cXyz* sp2C;
@@ -3476,6 +3532,14 @@ void daHorse_c::setBoarHit(fopAc_ac_c* param_0, int param_1) {
 
 void daHorse_c::savePos() {
     if (this->model != NULL && !checkStateFlg0(FLG0_UNK_8000) && !checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        const dusk::coop::PlayerId owner = dusk::coop::horses::ownerOf(this);
+        if (owner > 0) {
+            dusk::coop::horses::setRestart(owner, dComIfGp_getStartStageName(), current.pos,
+                                           shape_angle.y, fopAcM_GetRoomNo(this));
+            return;
+        }
+#endif
         dComIfGs_setHorseRestart(dComIfGp_getStartStageName(), current.pos, shape_angle.y, fopAcM_GetRoomNo(this));
     }
 }
@@ -3664,7 +3728,16 @@ int daHorse_c::procWait() {
     }
 
     f32 enemy_search_range = m_hio->m.enemy_search_range;
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    dusk::coop::horses::HorseSearchContext search_ctx;
+    search_ctx.horse = this;
+    search_ctx.owner = dusk::coop::horses::ownerOf(this);
+    search_ctx.maximumDistance = enemy_search_range;
+    if ((!checkInputOnR() || !checkStateFlg0(FLG0_UNK_1)) &&
+        fopAcIt_Judge((fopAcIt_JudgeFunc)daHorse_searchEnemy, &search_ctx) != NULL) {
+#else
     if ((!checkInputOnR() || !checkStateFlg0(FLG0_UNK_1)) && fopAcIt_Judge((fopAcIt_JudgeFunc)daHorse_searchEnemy, &enemy_search_range) != NULL) {
+#endif
         onResetStateFlg0(RFLG0_ENEMY_SEARCH);
 
         if (field_0x170c == 0 && !checkStateFlg0(daHorse_FLG0(FLG0_UNK_200000 | FLG0_UNK_100000)) && !dComIfGp_event_runCheck() && !player->checkHorseRideReady() && !player->checkHorseLieAnime() && !checkStateFlg0(FLG0_PLAYER_BACK_RIDE_LASH) && !checkStateFlg0(FLG0_UNK_1)) {
@@ -4431,14 +4504,25 @@ void daHorse_c::searchSceneChangeArea(fopAc_ac_c* i_scnChg) {
 }
 
 static void* daHorse_searchSceneChangeArea(fopAc_ac_c* i_actor, void* i_data) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    daHorse_c* horse_p = static_cast<daHorse_c*>(i_data);
+    if (horse_p != nullptr) {
+        horse_p->searchSceneChangeArea(i_actor);
+    }
+#else
     UNUSED(i_data);
     dComIfGp_getHorseActor()->searchSceneChangeArea(i_actor);
+#endif
     return NULL;
 }
 
 int daHorse_c::execute() {
     m_scnChg_num = 0;
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, this);
+#else
     fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, NULL);
+#endif
     m_zeldaActorKeep.setActor();
 
     if (checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
@@ -4739,9 +4823,16 @@ daHorse_c::~daHorse_c() {
     m_sound.deleteObject();
     dComIfG_resDelete(&m_phase, l_arcName);
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::horses::getGlobalHorseActor() == this) {
+        dComIfGp_setHorseActor(NULL);
+    }
+    dusk::coop::horses::onHorseDestroyed(this);
+#else
     if (dComIfGp_getHorseActor() == this) {
         dComIfGp_setHorseActor(NULL);
     }
+#endif
 }
 
 static int daHorse_Delete(daHorse_c* i_this) {

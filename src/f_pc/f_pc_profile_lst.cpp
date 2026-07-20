@@ -1604,6 +1604,9 @@ DUSK_GAME_DATA process_profile_definition DUSK_CONST* DUSK_CONST g_fpcPfLst_Prof
     &g_profile_TIMER.base.base,
     &g_profile_METER2.base.base,
     &g_profile_GAMEOVER.base.base,
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    &g_profile_COOP_PROXY.base.base,
+#endif
     NULL,
 };
 #endif

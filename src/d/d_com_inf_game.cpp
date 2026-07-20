@@ -2902,6 +2902,13 @@ BOOL dComIfGs_wolfeye_effect_check() {
     dScnKy_env_light_c* env_light = dKy_getEnvlight();
     BOOL ret = false;
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Per-view senses: reject when the active draw view's owner does not have senses.
+    if (!dusk_coop_sensesActiveForCurrentView()) {
+        return false;
+    }
+#endif
+
     if (env_light->now_senses_effect == 1 && env_light->senses_effect_strength > 0.6) {
         ret = true;
     }

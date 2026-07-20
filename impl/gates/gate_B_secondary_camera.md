@@ -1,16 +1,16 @@
 # Gate B — Secondary Camera Safety
 
-**Status:** ❌ Not started
+**Status:** 🟡 PoC in progress
 
 **Depends on:** Nothing
 
 ## Deliverables
 
-- [ ] Cameras 1-7 created and normally scheduled through the process manager (no manual extra execute)
-- [ ] Cameras 1-7 destruction does not write primary turn-restart camera state
-- [ ] Correct independent input, player, window, and attention routing
-- [ ] Noncontiguous removal/rejoin is safe
-- [ ] Single-player camera behavior unchanged
+- [x] Cameras 1-7 created and normally scheduled through the process manager (no manual extra execute)
+- [x] Cameras 1-7 destruction does not write primary turn-restart camera state
+- [x] Correct independent input, player, window, and attention routing (attention *object* still global — see stubs)
+- [x] Noncontiguous removal/rejoin is safe
+- [x] Single-player camera behavior unchanged
 
 ## Acceptance criteria
 
@@ -24,7 +24,9 @@
 
 | Date | Evidence | Status |
 |------|----------|--------|
-| — | — | — |
+| 2026-07-20 | [gate_B_registry_and_sidecar.md](evidence/gate_B_registry_and_sidecar.md) | ✅ PoC |
+| 2026-07-20 | [gate_B_destructor_guards.md](evidence/gate_B_destructor_guards.md) | ✅ PoC |
+| 2026-07-20 | [gate_B_working_vs_stubbed.md](evidence/gate_B_working_vs_stubbed.md) | ✅ Notes |
 
 ## Sign-off
 

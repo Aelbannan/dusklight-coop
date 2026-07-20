@@ -27,6 +27,16 @@
 #endif
 #endif
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop_camera_bridge.h"
+#endif
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#include "dusk/coop/coop_resource_bridge.h"
+#include "dusk/coop/coop_forms_bridge.h"
+#include "dusk/coop/coop_horse_bridge.h"
+#endif
+
 enum dComIfG_ButtonStatus {
     /* 0x00 */ BUTTON_STATUS_NONE,
     /* 0x01 */ BUTTON_STATUS_LET_GO,
@@ -1293,18 +1303,40 @@ inline void dComIfGs_setMaxLife(u8 i_maxLife) {
 }
 
 inline u16 dComIfGs_getLife() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getLife();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getLife();
 }
 
 inline void dComIfGs_setLife(u16 i_life) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setLife(i_life);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setLife(i_life);
 }
 
 inline u16 dComIfGs_getRupee() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getRupee();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getRupee();
 }
 
 inline void dComIfGs_setRupee(u16 i_rupees) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setRupee(i_rupees);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setRupee(i_rupees);
 }
 
@@ -1317,10 +1349,21 @@ inline void dComIfGs_setMaxOil(u16 i_maxOil) {
 }
 
 inline u16 dComIfGs_getOil() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getOil();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getOil();
 }
 
 inline void dComIfGs_setOil(u16 i_oil) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setOil(i_oil);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setOil(i_oil);
 }
 
@@ -1369,18 +1412,36 @@ inline void dComIfGs_setMaxMagic(u8 i_maxMagic) {
 }
 
 inline u8 dComIfGs_getMagic() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getMagic();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getMagic();
 }
 
 inline void dComIfGs_setMagic(u8 i_magic) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setMagic(i_magic);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setMagic(i_magic);
 }
 
 inline u8 dComIfGs_getTransformStatus() {
+    // GLOBAL_UNLOCK / stage-start: always the original save (Player 0 authority).
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getTransformStatus();
 }
 
 inline void dComIfGs_setTransformStatus(u8 i_status) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Secondary players update sidecar only; Player 0 writes the global save.
+    if (dusk_coop_trySetTransformStatus(i_status)) {
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setTransformStatus(i_status);
 }
 
@@ -1544,10 +1605,22 @@ inline void dComIfGs_resetLastWarpAcceptStage() {
 }
 
 inline void dComIfGs_setItem(int i_slotNo, u8 i_itemNo) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Bottle slots are per-player; permanent item slots remain global in original save.
+    if (dusk_coop_useResourceSidecar() && i_slotNo >= SLOT_11 && i_slotNo <= SLOT_14) {
+        dusk_coop_setBottleItem(static_cast<u8>(i_slotNo - SLOT_11), i_itemNo);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setItem(i_slotNo, i_itemNo);
 }
 
 inline u8 dComIfGs_getItem(int i_slotNo, bool i_checkCombo) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar() && i_slotNo >= SLOT_11 && i_slotNo <= SLOT_14) {
+        return dusk_coop_getBottleItem(static_cast<u8>(i_slotNo - SLOT_11));
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItem().getItem(i_slotNo, i_checkCombo);
 }
 
@@ -1641,18 +1714,40 @@ inline int dComIfGs_isItemFirstBit(u8 i_no) {
 }
 
 inline u8 dComIfGs_getArrowNum() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getArrowNum();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItemRecord().getArrowNum();
 }
 
 inline void dComIfGs_setArrowNum(u8 i_arrowNum) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setArrowNum(i_arrowNum);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setArrowNum(i_arrowNum);
 }
 
 inline u8 dComIfGs_getPachinkoNum() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getPachinkoNum();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItemRecord().getPachinkoNum();
 }
 
 inline void dComIfGs_setPachinkoNum(u8 i_num) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setPachinkoNum(i_num);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setPachinkoNum(i_num);
 }
 
@@ -1661,26 +1756,62 @@ inline u8 dComIfGs_getPachinkoMax() {
 }
 
 inline void dComIfGs_setBombNum(u8 i_num) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setBombNum(0, i_num);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setBombNum(0, i_num);
 }
 
 inline void dComIfGs_setBombNum(u8 i_bagIdx, u8 i_bombNum) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setBombNum(i_bagIdx, i_bombNum);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setBombNum(i_bagIdx, i_bombNum);
 }
 
 inline u8 dComIfGs_getBombNum(u8 i_bagIdx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getBombNum(i_bagIdx);
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItemRecord().getBombNum(i_bagIdx);
 }
 
 inline void dComIfGs_setBottleNum(u8 i_bottleIdx, u8 i_bottleNum) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        dusk_coop_setBottleNum(i_bottleIdx, i_bottleNum);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setBottleNum(i_bottleIdx, i_bottleNum);
 }
 
 inline void dComIfGs_addBottleNum(u8 i_bottleIdx, s16 i_num) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        const u8 cur = dusk_coop_getBottleNum(i_bottleIdx);
+        const s32 next = static_cast<s32>(cur) + i_num;
+        dusk_coop_setBottleNum(i_bottleIdx, static_cast<u8>(next < 0 ? 0 : (next > 255 ? 255 : next)));
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItemRecord().addBottleNum(i_bottleIdx, i_num);
 }
 
 inline u8 dComIfGs_getBottleNum(u8 i_bottleIdx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk_coop_useResourceSidecar()) {
+        return dusk_coop_getBottleNum(i_bottleIdx);
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItemRecord().getBottleNum(i_bottleIdx);
 }
 
@@ -3467,95 +3598,217 @@ inline void dComIfGp_onStatus(u16 i_status) {
 }
 
 inline dDlst_window_c* dComIfGp_getWindow(int i) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarWindow(i)) {
+        return dusk::coop::camera::sidecarGetWindow(i);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getWindow(i);
 }
 
 inline void dComIfGp_setWindow(u8 i, f32 param_1, f32 param_2, f32 param_3, f32 param_4,
                                f32 param_5, f32 param_6, int camID, int mode) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarWindow(i)) {
+        dusk::coop::camera::sidecarSetWindow(i, param_1, param_2, param_3, param_4, param_5,
+                                             param_6, camID, mode);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setWindow(i, param_1, param_2, param_3, param_4, param_5, param_6,
                                       camID, mode);
 }
 
 inline camera_process_class* dComIfGp_getCamera(int idx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(idx)) {
+        return (camera_process_class*)dusk::coop::camera::sidecarGetCamera(idx);
+    }
+#endif
     return (camera_process_class*)g_dComIfG_gameInfo.play.getCamera(idx);
 }
 
 inline void dComIfGp_setCamera(int i, camera_class* cam) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarSetCamera(i, cam);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setCamera(i, cam);
 }
 
 inline int dComIfGp_getCameraWinID(int idx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(idx)) {
+        return dusk::coop::camera::sidecarGetCameraWinID(idx);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraWinID(idx);
 }
 
 inline int dComIfGp_getCameraPlayer1ID(int idx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(idx)) {
+        return dusk::coop::camera::sidecarGetCameraPlayer1ID(idx);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraPlayer1ID(idx);
 }
 
 inline int dComIfGp_getCameraPlayer2ID(int idx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(idx)) {
+        return dusk::coop::camera::sidecarGetCameraPlayer2ID(idx);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraPlayer2ID(idx);
 }
 
 inline u32 dComIfGp_getCameraAttentionStatus(int i_no) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i_no)) {
+        return dusk::coop::camera::sidecarGetCameraAttentionStatus(i_no);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraAttentionStatus(i_no);
 }
 
 inline BOOL dComIfGp_checkCameraAttentionStatus(int i, u32 flag) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        return dusk::coop::camera::sidecarCheckCameraAttentionStatus(i, flag);
+    }
+#endif
     return g_dComIfG_gameInfo.play.checkCameraAttentionStatus(i, flag);
 }
 
 inline void dComIfGp_onCameraAttentionStatus(int i, u32 flag) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarOnCameraAttentionStatus(i, flag);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.onCameraAttentionStatus(i, flag);
 }
 
 inline void dComIfGp_offCameraAttentionStatus(int i, u32 flag) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarOffCameraAttentionStatus(i, flag);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.offCameraAttentionStatus(i, flag);
 }
 
 inline void dComIfGp_setCameraInfo(int camIdx, camera_class* p_cam, int param_2, int param_3,
                                    int param_4) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(camIdx)) {
+        dusk::coop::camera::sidecarSetCameraInfo(camIdx, p_cam, param_2, param_3, param_4);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setCameraInfo(camIdx, p_cam, param_2, param_3, param_4);
 }
 
 inline f32 dComIfGp_getCameraZoomScale(int i_no) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i_no)) {
+        return dusk::coop::camera::sidecarGetCameraZoomScale(i_no);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraZoomScale(i_no);
 }
 
 inline void dComIfGp_setCameraZoomScale(int i_no, f32 i_scale) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i_no)) {
+        dusk::coop::camera::sidecarSetCameraZoomScale(i_no, i_scale);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setCameraZoomScale(i_no, i_scale);
 }
 
 inline f32 dComIfGp_getCameraZoomForcus(int i_no) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i_no)) {
+        return dusk::coop::camera::sidecarGetCameraZoomForcus(i_no);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraZoomForcus(i_no);
 }
 
 inline void dComIfGp_setCameraZoomForcus(int i_no, f32 i_focus) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i_no)) {
+        dusk::coop::camera::sidecarSetCameraZoomForcus(i_no, i_focus);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setCameraZoomForcus(i_no, i_focus);
 }
 
 inline const char* dComIfGp_getCameraParamFileName(int i) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        return dusk::coop::camera::sidecarGetCameraParamFileName(i);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getCameraParamFileName(i);
 }
 
 inline void dComIfGp_setCameraParamFileName(int i, char* name) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarSetCameraParamFileName(i, name);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setCameraParamFileName(i, name);
 }
 
 inline void dComIfGp_saveCameraPosition(int i, cXyz* i_pos, cXyz* i_target, f32 i_fovy,
                                         s16 i_bank) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarSaveCameraPosition(i, i_pos, i_target, i_fovy, i_bank);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.saveCameraPosition(i, i_pos, i_target, i_fovy, i_bank);
 }
 
 inline void dComIfGp_loadCameraPosition(int i, cXyz* o_pos, cXyz* o_target, f32* o_fovy,
                                         s16* o_bank) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarCamera(i)) {
+        dusk::coop::camera::sidecarLoadCameraPosition(i, o_pos, o_target, o_fovy, o_bank);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.loadCameraPosition(i, o_pos, o_target, o_fovy, o_bank);
 }
 
 inline fopAc_ac_c* dComIfGp_getPlayer(int idx) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarPlayer(idx)) {
+        return dusk::coop::camera::sidecarGetPlayer(idx);
+    }
+#endif
     return g_dComIfG_gameInfo.play.getPlayer(idx);
 }
 
 inline void dComIfGp_setPlayer(int i, fopAc_ac_c* player) {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::camera::useSidecarPlayer(i)) {
+        dusk::coop::camera::sidecarSetPlayer(i, player);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setPlayer(i, player);
 }
 
@@ -3572,6 +3825,11 @@ inline daPy_py_c* dComIfGp_getLinkPlayer() {
 }
 
 inline daHorse_c* dComIfGp_getHorseActor() {
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (dusk::coop::horses::useCompatResolver()) {
+        return dusk::coop::horses::resolveForContextBridge();
+    }
+#endif
     return (daHorse_c*)g_dComIfG_gameInfo.play.getPlayerPtr(HORSE_PTR);
 }
 

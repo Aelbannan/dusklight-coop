@@ -1418,7 +1418,7 @@ int daTbox_c::actionOpenWait() {
     if (eventInfo.checkCommandDoor()) {
         dComIfGp_event_onEventFlag(4);
 
-        if (getShapeType() != SHAPE_SMALL && player->checkNowWolf() &&
+        if (getShapeType() != SHAPE_SMALL && player->checkWolf() &&
                                              !midna->checkMetamorphoseEnable()) {
             setAction(&daTbox_c::actionNotOpenDemo);
             mStaffId = dComIfGp_evmng_getMyStaffId(l_staff_name, NULL, 0);
@@ -1436,7 +1436,7 @@ int daTbox_c::actionOpenWait() {
         eventInfo.onCondition(4);
         if (getShapeType() == SHAPE_SMALL) {
             eventInfo.setEventName("DEFAULT_TREASURE_SIMPLE");
-        } else if (player->checkNowWolf() && !midna->checkMetamorphoseEnable()) {
+        } else if (player->checkWolf() && !midna->checkMetamorphoseEnable()) {
             eventInfo.setEventName("DEFAULT_TREASURE_NOTOPEN");
         } else if (getShapeType() == SHAPE_BOSSKEY) {
             eventInfo.setEventId(field_0x984);

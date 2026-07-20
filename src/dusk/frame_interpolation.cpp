@@ -281,6 +281,7 @@ bool lookup_concat_replacement(const void* lhs, const void* rhs, Mtx out) {
 }
 
 void record_camera(::camera_process_class* cam, int camera_id) {
+    // Camera-0 only: Gate A multi-view replays share this interpolated snapshot.
     if (!g_enabled || camera_id != 0 || cam == nullptr) {
         return;
     }

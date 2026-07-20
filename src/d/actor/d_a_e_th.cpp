@@ -486,7 +486,7 @@ static void e_th_start(e_th_class* i_this) {
         }
         break;
     case 1:
-        if (!dComIfGp_checkPlayerStatus1(0, 0x2000000) && !dComIfGp_checkPlayerStatus1(0, 0x10000) && !daPy_getPlayerActorClass()->checkHookshotShootReturnMode() && player->current.pos.z < -1200.0f && !player->checkNowWolf()) {
+        if (!dComIfGp_checkPlayerStatus1(0, 0x2000000) && !dComIfGp_checkPlayerStatus1(0, 0x10000) && !daPy_getPlayerActorClass()->checkHookshotShootReturnMode() && player->current.pos.z < -1200.0f && !player->checkWolf()) {
             fpcM_Search(s_md_sub1, i_this);
             Z2GetAudioMgr()->subBgmStart(Z2BGM_IB_MBOSS_D01);
             i_this->mDemoCamMode = 1;
@@ -868,7 +868,7 @@ static void demo_camera(e_th_class* i_this) {
         ball_p->speedF = 0.0f;
         daPy_getPlayerActorClass()->changeOriginalDemo();
 
-        if (player->checkNowWolf()) {
+        if (player->checkWolf()) {
             daPy_getPlayerActorClass()->changeDemoMode(0x3A, 0, 0, 0);
             i_this->field_0x567 = 1;
         } else {

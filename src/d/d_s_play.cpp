@@ -43,6 +43,10 @@
 #include "dusk/autosave.h"
 #include "dusk/memory.h"
 #include "dusk/ui/ui.hpp"
+#if defined(ENABLE_LOCAL_COOP)
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_render.h"
+#endif
 #endif
 
 #if DEBUG
@@ -544,6 +548,11 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
         0, 0, 17, 2, 2, 1, 3, 1, 4, 4, 5, 5, 6, 7, 0, 0, 2, 2, 2, 2, 2, 8, 8,
     };
 
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Gate A: one simulation / draw-prep pass; multi-view replay happens in mDoGph_Painter.
+    dusk::coop::render::beginFrame();
+#endif
+
     #if DEBUG
     fapGm_HIO_c::startCpuTimer();
     fpc_ProcID id = fpcM_GetID(i_this);
@@ -611,6 +620,9 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
         dComIfGp_particle_calc3D();
         dComIfGp_particle_calc2D();
         cCt_execCounter();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+        dusk::coop::render::noteSimulationTick();
+#endif
     } else {
         dPa_control_c::onStatus(1);
 
@@ -653,6 +665,7 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
     fapGm_HIO_c::printCpuTimer("");
     #endif
 
+    // Actor draw callbacks populate draw lists once. Do not re-run per view (Gate A).
     for (create_tag_class* i = fopDwIt_Begin(); i != NULL; i = fopDwIt_Next(i)) {
         void* process = i->mpTagData;
         fpcM_Draw(process);
@@ -691,6 +704,11 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
     fapGm_HIO_c::printCpuTimer("");
     fapGm_HIO_c::stopCpuTimer("ゲーム管理（描画処理）");
     #endif
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    dusk::coop::render::drawViews();
+    dusk::coop::render::endFrame();
+#endif
 
     return 1;
 }
@@ -835,6 +853,11 @@ static int dScnPly_IsDelete(dScnPly_c i_this) {
 
 static int dScnPly_Delete(dScnPly_c* i_this) {
     UNUSED(i_this);
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Gate D/B: tear down secondary proxies/cameras before stage resources go away.
+    dusk::coop::onRoomUnload();
+#endif
 
     #if VERSION == VERSION_SHIELD_DEBUG
     for (int i = 0; i < 32; i++) {
