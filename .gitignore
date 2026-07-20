@@ -47,6 +47,7 @@ compile_commands.json
 
 # ISOs
 *.iso
+*.rvz
 
 *.ini
 *.controller
