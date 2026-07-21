@@ -251,7 +251,8 @@ void syncViewportSidecars() {
             fullFramePasses ? ViewportRect{} : viewportFor(v, count, mode);
         dDlst_window_c* window = (v == 0) ? dComIfGp_getWindow(0) : &g_windowSidecar[v];
         applyViewportToWindow(window, rect, fbW, fbH);
-        if (fullFramePasses) {
+        if (fullFramePasses || g_forcedViewCount > 1) {
+            // Multi-view tiled: each viewport uses its own camera.
             window->setCameraID(static_cast<int>(v));
         } else {
             // Same-camera PoC: every sidecar points at camera slot 0 (never index >0).

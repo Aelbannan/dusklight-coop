@@ -89,13 +89,70 @@ static void syncCamerasForJoined() {
     if (span < 2) {
         return;
     }
+
+    render::setIncompatibleEffectsDisabled(true);
+
+    // ── Multi-view tiled mode for 3+ players ──
+    if (span > 2) {
+        // Already set up — nothing to do each frame.
+        if (render::forcedViewCount() == span && runtime().activeViewCount == span) {
+            return;
+        }
+
+        bool secondaryPlayerReady = false;
+        for (PlayerId i = 1; i < span; ++i) {
+            if (isJoined(i) && getPlayerActor(i) != nullptr) {
+                secondaryPlayerReady = true;
+                break;
+            }
+        }
+        if (!secondaryPlayerReady) {
+            runtime().activeViewCount = 1;
+            static bool sLoggedWait = false;
+            if (!sLoggedWait) {
+                debug::logInfo(
+                    "Co-op join: multi-view waiting for proxy actors before ensureCameras");
+                sLoggedWait = true;
+            }
+            return;
+        }
+
+        if (!camera::ensureCameras(span)) {
+            debug::logError("Co-op join: ensureCameras(%u) failed for multi-view", span);
+            runtime().activeViewCount = 1;
+            for (PlayerId i = 1; i < span; ++i) {
+                if (auto* slot = playerSlot(i)) {
+                    slot->view = 0;
+                }
+            }
+            return;
+        }
+
+        for (PlayerId i = 1; i < span; ++i) {
+            if (!isJoined(i)) {
+                continue;
+            }
+            camera::assignTrackedPlayer(i, i);
+            camera::assignInputOwner(i, i);
+            camera::assignAttentionOwner(i, i);
+            if (auto* slot = playerSlot(i)) {
+                slot->view = i;
+            }
+        }
+
+        runtime().activeViewCount = span;
+        render::setForcedViewCount(span);
+        debug::logInfo("Co-op join: multi-view tiled mode with %u cameras", span);
+        return;
+    }
+
+    // ── 2-player dual-camera composite path ──
     // Docs (Task 02/03, Gate A→B): sim once; cameras via scheduler; painter binds
     // matrices. ISSUE: calling ensureCameras before the proxy is in the player sidecar
     // leaves cam1 stuck in init_phase2; creating too early also hit Z2 audio OOB on
     // first draw. Same-camera L/R blit until dualCameraCompositeReady().
     render::setForcedViewCount(0);
     render::setDualCameraCompositeEnabled(true);
-    render::setIncompatibleEffectsDisabled(true);
 
     // Already past Gate B handoff — nothing to do.
     if (render::dualCameraCompositeReady()) {

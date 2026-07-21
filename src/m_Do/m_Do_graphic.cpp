@@ -2816,9 +2816,14 @@ int mDoGph_Painter() {
     }
 
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    // Gate B: dual full-frame captures → L/R composite. Falls back to Gate A same-camera blit.
-    if (!dusk::coop::render::dualCameraCompositeReady() ||
-        !dusk::coop::render::presentDualCameraSplit()) {
+    // Gate B: dual full-frame captures → L/R composite.
+    // Gate A: same-camera L/R blit fallback.
+    // Multi-view tiled: EFB already has tiled viewports; neither present is needed.
+    if (dusk::coop::render::dualCameraCompositeReady()) {
+        if (!dusk::coop::render::presentDualCameraSplit()) {
+            dusk::coop::render::presentSameCameraSplit();
+        }
+    } else if (dusk::coop::render::sameCameraSplitEnabled()) {
         dusk::coop::render::presentSameCameraSplit();
     }
 #endif
