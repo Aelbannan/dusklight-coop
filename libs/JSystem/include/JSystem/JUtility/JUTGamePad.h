@@ -121,7 +121,7 @@ public:
     void stopMotorHard() { CRumble::stopMotorHard(mPortNum); }
 
     static s8 getPortStatus(EPadPort port) {
-        JUT_ASSERT(360, 0 <= port && port < 4);
+        JUT_ASSERT(360, 0 <= port && port < PAD_CHANMAX);
         return mPadStatus[port].err;
     }
 
@@ -187,8 +187,8 @@ public:
     struct CRumble {
         CRumble(JUTGamePad* pad) { clear(pad); }
 
-        static DUSK_GAME_DATA u32 sChannelMask[4];
-        static DUSK_GAME_DATA u8 mStatus[4];
+        static DUSK_GAME_DATA u32 sChannelMask[PAD_CHANMAX];
+        static DUSK_GAME_DATA u8 mStatus[PAD_CHANMAX];
         static DUSK_GAME_DATA u32 mEnabled;
 
         enum ERumble {
@@ -222,7 +222,7 @@ public:
         }
 
         static bool isEnabledPort(int port) {
-            JUT_ASSERT(250, 0 <= port && port < 4);
+            JUT_ASSERT(250, 0 <= port && port < PAD_CHANMAX);
             return isEnabled(sChannelMask[port]);
         }
 
@@ -239,13 +239,13 @@ public:
 
     static DUSK_GAME_DATA JSUList<JUTGamePad> mPadList;
     static DUSK_GAME_DATA bool mListInitialized;
-    static DUSK_GAME_DATA PADStatus mPadStatus[4];
-    static DUSK_GAME_DATA CButton mPadButton[4];
-    static DUSK_GAME_DATA CStick mPadMStick[4];
-    static DUSK_GAME_DATA CStick mPadSStick[4];
+    static DUSK_GAME_DATA PADStatus mPadStatus[PAD_CHANMAX];
+    static DUSK_GAME_DATA CButton mPadButton[PAD_CHANMAX];
+    static DUSK_GAME_DATA CStick mPadMStick[PAD_CHANMAX];
+    static DUSK_GAME_DATA CStick mPadSStick[PAD_CHANMAX];
     static DUSK_GAME_DATA EStickMode sStickMode;
     static DUSK_GAME_DATA int sClampMode;
-    static DUSK_GAME_DATA u8 mPadAssign[4];
+    static DUSK_GAME_DATA u8 mPadAssign[PAD_CHANMAX];
     static DUSK_GAME_DATA u32 sSuppressPadReset;
     static DUSK_GAME_DATA s32 sAnalogMode;
     static DUSK_GAME_DATA u32 sRumbleSupported;

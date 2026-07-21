@@ -18,10 +18,10 @@
 #include "dusk/ui/touch_controls.hpp"
 #endif
 
-DUSK_GAME_DATA JUTGamePad* mDoCPd_c::m_gamePad[4];
+DUSK_GAME_DATA JUTGamePad* mDoCPd_c::m_gamePad[PAD_CHANMAX];
 
-DUSK_GAME_DATA interface_of_controller_pad mDoCPd_c::m_cpadInfo[4];
-DUSK_GAME_DATA interface_of_controller_pad mDoCPd_c::m_debugCpadInfo[4];
+DUSK_GAME_DATA interface_of_controller_pad mDoCPd_c::m_cpadInfo[PAD_CHANMAX];
+DUSK_GAME_DATA interface_of_controller_pad mDoCPd_c::m_debugCpadInfo[PAD_CHANMAX];
 
 #if TARGET_PC
 s16 mDoCPd_c::getStickAngle3D(u32 pad) {
@@ -40,38 +40,12 @@ f32 mDoCPd_c::getSubStickX3D(u32 pad) {
 #endif
 
 void mDoCPd_c::create() {
-    #if PLATFORM_GCN || PLATFORM_SHIELD
-    m_gamePad[0] = JKR_NEW JUTGamePad(JUTGamePad::EPort1);
-    #endif
-
-    if (DEBUG || mDoMain::developmentMode != 0) {
-        #if PLATFORM_WII
-        m_gamePad[0] = JKR_NEW JUTGamePad(JUTGamePad::EPort1);
-        #endif
-
-        m_gamePad[1] = JKR_NEW JUTGamePad(JUTGamePad::EPort2);
-        m_gamePad[2] = JKR_NEW JUTGamePad(JUTGamePad::EPort3);
-        m_gamePad[3] = JKR_NEW JUTGamePad(JUTGamePad::EPort4);
-    } else {
-        #if PLATFORM_WII
-        m_gamePad[0] = NULL;
-        #endif
-
-        m_gamePad[1] = NULL;
-        m_gamePad[2] = NULL;
-        m_gamePad[3] = NULL;
+    for (u32 i = 0; i < PAD_CHANMAX; i++) {
+        m_gamePad[i] = JKR_NEW JUTGamePad(static_cast<JUTGamePad::EPadPort>(i));
     }
-
-    #if PLATFORM_GCN || PLATFORM_SHIELD
-    if (!mDoRst::isReset()) {
-        JUTGamePad::clearResetOccurred();
-        JUTGamePad::setResetCallback(mDoRst_resetCallBack, NULL);
-    }
-    #endif
-    JUTGamePad::setAnalogMode(3);
 
     interface_of_controller_pad* cpad = &m_cpadInfo[0];
-    for (int i = 0; i < 4; i++) {
+    for (u32 i = 0; i < PAD_CHANMAX; i++) {
         cpad->mHoldLockL = cpad->mTrigLockL = false;
         cpad->mHoldLockR = cpad->mTrigLockR = false;
         cpad++;
@@ -108,7 +82,7 @@ void mDoCPd_c::read() {
     }
 #endif
 
-    for (u32 i = 0; i < 4; i++) {
+    for (u32 i = 0; i < PAD_CHANMAX; i++) {
         if (*pad == NULL) {
             cLib_memSet(interface, 0, sizeof(interface_of_controller_pad));
         } else {
@@ -179,5 +153,6 @@ void mDoCPd_c::LRlockCheck(interface_of_controller_pad* interface) {
 
 void mDoCPd_c::recalibrate(void) {
     JUTGamePad::clearForReset();
-    JUTGamePad::CRumble::setEnabled(PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
+    JUTGamePad::CRumble::setEnabled(PAD_CHAN7_BIT | PAD_CHAN6_BIT | PAD_CHAN5_BIT | PAD_CHAN4_BIT |
+                                    PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
 }

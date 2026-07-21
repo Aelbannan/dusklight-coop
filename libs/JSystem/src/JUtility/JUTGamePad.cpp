@@ -8,20 +8,27 @@
 #include "dusk/action_bindings.h"
 #endif
 
-DUSK_GAME_DATA u32 JUTGamePad::CRumble::sChannelMask[4] = {
+DUSK_GAME_DATA u32 JUTGamePad::CRumble::sChannelMask[PAD_CHANMAX] = {
     PAD_CHAN0_BIT,
     PAD_CHAN1_BIT,
     PAD_CHAN2_BIT,
     PAD_CHAN3_BIT,
+    PAD_CHAN4_BIT,
+    PAD_CHAN5_BIT,
+    PAD_CHAN6_BIT,
+    PAD_CHAN7_BIT,
 };
 
-static u32 channel_mask[4] = {PAD_CHAN0_BIT, PAD_CHAN1_BIT, PAD_CHAN2_BIT, PAD_CHAN3_BIT};
+static u32 channel_mask[PAD_CHANMAX] = {
+    PAD_CHAN0_BIT, PAD_CHAN1_BIT, PAD_CHAN2_BIT, PAD_CHAN3_BIT,
+    PAD_CHAN4_BIT, PAD_CHAN5_BIT, PAD_CHAN6_BIT, PAD_CHAN7_BIT,
+};
 
 DUSK_GAME_DATA JSUList<JUTGamePad> JUTGamePad::mPadList(false);
 
 DUSK_GAME_DATA bool JUTGamePad::mListInitialized;
 
-DUSK_GAME_DATA u8 JUTGamePad::mPadAssign[4];
+DUSK_GAME_DATA u8 JUTGamePad::mPadAssign[PAD_CHANMAX];
 
 JUTGamePad::JUTGamePad(EPadPort port) : mRumble(this), mLink(this) {
     mPortNum = port;
@@ -73,13 +80,13 @@ void JUTGamePad::clear() {
 #endif
 }
 
-DUSK_GAME_DATA PADStatus JUTGamePad::mPadStatus[4];
+DUSK_GAME_DATA PADStatus JUTGamePad::mPadStatus[PAD_CHANMAX];
 
-DUSK_GAME_DATA JUTGamePad::CButton JUTGamePad::mPadButton[4];
+DUSK_GAME_DATA JUTGamePad::CButton JUTGamePad::mPadButton[PAD_CHANMAX];
 
-DUSK_GAME_DATA JUTGamePad::CStick JUTGamePad::mPadMStick[4];
+DUSK_GAME_DATA JUTGamePad::CStick JUTGamePad::mPadMStick[PAD_CHANMAX];
 
-DUSK_GAME_DATA JUTGamePad::CStick JUTGamePad::mPadSStick[4];
+DUSK_GAME_DATA JUTGamePad::CStick JUTGamePad::mPadSStick[PAD_CHANMAX];
 
 DUSK_GAME_DATA JUTGamePad::EStickMode JUTGamePad::sStickMode = EStickMode1;
 
@@ -104,7 +111,7 @@ u32 JUTGamePad::read() {
 
     u32 bittest;
     u32 reset_mask = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < PAD_CHANMAX; i++) {
         bittest = PAD_CHAN0_BIT >> i;
 
         if (mPadStatus[i].err == 0) {
@@ -170,7 +177,7 @@ u32 JUTGamePad::read() {
 }
 
 void JUTGamePad::assign() {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < PAD_CHANMAX; i++) {
         if (mPadStatus[i].err == 0 && mPadAssign[i] == 0) {
             mPortNum = i;
             mPadAssign[i] = 1;
@@ -181,7 +188,7 @@ void JUTGamePad::assign() {
     }
 }
 
-DUSK_GAME_DATA u8 JUTGamePad::CRumble::mStatus[4];
+DUSK_GAME_DATA u8 JUTGamePad::CRumble::mStatus[PAD_CHANMAX];
 
 DUSK_GAME_DATA u32 JUTGamePad::CRumble::mEnabled;
 
@@ -218,7 +225,7 @@ DUSK_GAME_DATA u32 JUTGamePad::C3ButtonReset::sResetMaskPattern = 0x0000FFFF;
 
 void JUTGamePad::update() {
     if (mPortNum != EPortInvalid) {
-        if (mPortNum >= 0 && mPortNum < 4) {
+        if (mPortNum >= 0 && mPortNum < PAD_CHANMAX) {
             mButton = mPadButton[mPortNum];
             mMainStick = mPadMStick[mPortNum];
             mSubStick = mPadSStick[mPortNum];
@@ -247,7 +254,7 @@ void JUTGamePad::update() {
 
         for (JSUListIterator<JUTGamePadLongPress> pad(JUTGamePadLongPress::sPatternList.getFirst()); pad != JUTGamePadLongPress::sPatternList.getEnd(); ++pad) {
             if (pad->isValid()) {
-                if (mPortNum >= 0 && mPortNum < 4) {
+                if (mPortNum >= 0 && mPortNum < PAD_CHANMAX) {
                     if ((mButton.mButton & pad->getMaskPattern()) == pad->getPattern()) {
                         if (pad->mLongPressStatus[mPortNum] == true) {
                             OSTime hold_time = OSGetTime() - pad->mStartHoldTime[mPortNum];
@@ -263,7 +270,7 @@ void JUTGamePad::update() {
             }
         }
 
-        if (mPortNum >= 0 && mPortNum < 4) {
+        if (mPortNum >= 0 && mPortNum < PAD_CHANMAX) {
             mRumble.update(mPortNum);
         }
     }
@@ -292,7 +299,8 @@ void JUTGamePad::checkResetSwitch() {
 
 void JUTGamePad::clearForReset() {
     CRumble::setEnabled(0);
-    recalibrate(PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
+    recalibrate(PAD_CHAN7_BIT | PAD_CHAN6_BIT | PAD_CHAN5_BIT | PAD_CHAN4_BIT |
+                PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
 }
 
 void JUTGamePad::CButton::clear() {
@@ -441,11 +449,12 @@ void JUTGamePad::CRumble::clear() {
     mPattern = NULL;
     mFrameCount = 0;
     field_0x10 = 0;
-    mEnabled = (PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
+    mEnabled = (PAD_CHAN7_BIT | PAD_CHAN6_BIT | PAD_CHAN5_BIT | PAD_CHAN4_BIT |
+                PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT);
 }
 
 void JUTGamePad::CRumble::clear(JUTGamePad* pad) {
-    if (pad->getPortNum() >= 0 && pad->getPortNum() < 4) {
+    if (pad->getPortNum() >= 0 && pad->getPortNum() < PAD_CHANMAX) {
         mStatus[pad->getPortNum()] = false;
         pad->stopMotorHard();
     }
@@ -547,7 +556,7 @@ void JUTGamePad::CRumble::startPatternedRumble(void* data, JUTGamePad::CRumble::
 }
 
 void JUTGamePad::CRumble::stopPatternedRumble(s16 port) {
-    JUT_ASSERT(1341, 0 <= port && port < 4);
+    JUT_ASSERT(1341, 0 <= port && port < PAD_CHANMAX);
     mLength = 0;
     stopMotorHard(port);
 }
@@ -576,8 +585,9 @@ JUTGamePad* JUTGamePad::getGamePad(int port) {
 }
 
 void JUTGamePad::CRumble::setEnabled(u32 mask) {
-    mask = (mask & (PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT));
-    for (int i = 0; i < 4; i++) {
+    mask = (mask & (PAD_CHAN7_BIT | PAD_CHAN6_BIT | PAD_CHAN5_BIT | PAD_CHAN4_BIT |
+                    PAD_CHAN3_BIT | PAD_CHAN2_BIT | PAD_CHAN1_BIT | PAD_CHAN0_BIT));
+    for (int i = 0; i < PAD_CHANMAX; i++) {
         if ((mEnabled & channel_mask[i]) == 0) {
             if (mStatus[i]) {
                 stopMotor(i);
@@ -609,7 +619,7 @@ void JUTGamePad::setButtonRepeat(u32 mask, u32 delay, u32 rate) {
 }
 
 bool JUTGamePad::recalibrate(u32 mask) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < PAD_CHANMAX; i++) {
         if (sSuppressPadReset & channel_mask[i]) {
             mask &= channel_mask[i] ^ 0xFFFFFFFF;
         }
@@ -624,7 +634,7 @@ void JUTGamePadLongPress::checkCallback(int port, u32 hold_time) {
         return;
     }
 
-    JUT_ASSERT(1673, 0 <= port && port < 4);
+    JUT_ASSERT(1673, 0 <= port && port < PAD_CHANMAX);
 
     if (hold_time < mThreshold) {
         return;

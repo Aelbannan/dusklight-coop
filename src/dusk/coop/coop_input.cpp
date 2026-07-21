@@ -29,7 +29,7 @@ struct DeviceIdentity {
 };
 
 std::array<DeviceIdentity, MAX_LOCAL_PLAYERS> g_identities{};
-std::unordered_map<s32, u16> g_prevUnboundButtons{};
+std::unordered_map<s32, bool> g_prevUnboundStart{};
 std::optional<PlayerId> g_keyboardPlayer{};
 
 constexpr u16 kClassicPadMask = static_cast<u16>(PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT | PAD_BUTTON_DOWN |
@@ -119,42 +119,22 @@ void sampleFromLegacyPad(PlayerId id) {
     snap.rightTrigger = pad.mTriggerRight;
     applyEdgeButtons(snap, static_cast<u16>(pad.mButtonFlags & kClassicPadMask));
 
-    if (aurora::input::get_controller_for_player(port) != nullptr) {
+    // Only track formally assigned devices. Auto-claiming the pad on player-index 0 onto
+    // keyboard-driven P0 made Press-Start treat that pad as already owned and ignore join.
+    auto* slot = playerSlot(id);
+    if (slot && slot->device.has_value()) {
+        snap.deviceId = *slot->device;
+        g_identities[id] = identityForDevice(*slot->device);
+    } else if (id == 0 && portHasKeyboard(0)) {
+        snap.deviceId.reset();
+    } else if (aurora::input::get_controller_for_player(port) != nullptr) {
         const Sint32 instance = aurora::input::get_instance_for_player(port);
         snap.deviceId = instance;
-        if (auto* slot = playerSlot(id)) {
+        if (slot != nullptr) {
             slot->device = instance;
         }
         g_identities[id] = identityForDevice(instance);
     }
-}
-
-void sampleFromAuroraDevice(PlayerId id) {
-    auto& snap = g_snapshots[id];
-    if (!snap.deviceId.has_value()) {
-        if (snap.reserved) {
-            snap.connected = false;
-            clearAnalog(snap);
-        }
-        return;
-    }
-
-    aurora::input::NormalizedControllerState state{};
-    if (!aurora::input::read_controller(*snap.deviceId, &state) || !state.connected) {
-        // Device missing — disconnect path owns reservation.
-        snap.connected = false;
-        clearAnalog(snap);
-        return;
-    }
-
-    snap.connected = true;
-    snap.leftStick.x = state.leftStickX;
-    snap.leftStick.y = state.leftStickY;
-    snap.rightStick.x = state.rightStickX;
-    snap.rightStick.y = state.rightStickY;
-    snap.leftTrigger = state.leftTrigger;
-    snap.rightTrigger = state.rightTrigger;
-    applyEdgeButtons(snap, static_cast<u16>(state.buttons & kClassicPadMask));
 }
 
 void samplePlayer(PlayerId id) {
@@ -166,14 +146,7 @@ void samplePlayer(PlayerId id) {
         return;
     }
 
-    // Players 0-3 prefer the legacy PAD bridge (includes keyboard + remaps).
-    if (snap.legacyPadPort.has_value()) {
-        sampleFromLegacyPad(id);
-        return;
-    }
-
-    // Players 4-7: snapshots only — no legacy PAD port.
-    sampleFromAuroraDevice(id);
+    sampleFromLegacyPad(id);
 }
 
 PlayerId findFreeJoinSlot() {
@@ -187,13 +160,6 @@ PlayerId findFreeJoinSlot() {
 }
 
 bool claimLegacyPort(PlayerId id, s32 deviceId) {
-    if (id >= PAD_CHANMAX) {
-        // Keep Aurora player index unset so ports 0-3 stay undisturbed.
-        aurora::input::set_player_index(static_cast<Uint32>(deviceId), -1);
-        return true;
-    }
-
-    // Mirror Players 0-3 into legacy PAD ports 0-3.
     const u32 count = PADCount();
     for (u32 index = 0; index < count; ++index) {
         SDL_Gamepad* pad = PADGetSDLGamepadForIndex(index);
@@ -241,29 +207,44 @@ void init() {
     g_snapshots = {};
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
     g_identities = {};
-    g_prevUnboundButtons.clear();
+    g_prevUnboundStart.clear();
     g_keyboardPlayer.reset();
 #endif
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         g_snapshots[i].player = i;
-        if (i < 4) {
-            g_snapshots[i].legacyPadPort = static_cast<uint8_t>(i);
-            if (auto* slot = playerSlot(i)) {
-                slot->legacyPadPort = static_cast<uint8_t>(i);
-            }
+        g_snapshots[i].legacyPadPort = static_cast<uint8_t>(i);
+        if (auto* slot = playerSlot(i)) {
+            slot->legacyPadPort = static_cast<uint8_t>(i);
         }
     }
     g_snapshots[0].connected = true;
     g_snapshots[0].reserved = true;
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
     enforceKeyboardPolicy();
-    if (aurora::input::get_controller_for_player(0) != nullptr) {
+    // If keyboard already drives port 0, leave the first gamepad unbound so Press-Start
+    // can claim it as Player 1. Otherwise bind the pad on player-index 0 to P0.
+    if (portHasKeyboard(0)) {
+        if (auto* slot = playerSlot(0)) {
+            slot->joined = true;
+            slot->enabled = true;
+            g_snapshots[0].connected = true;
+            g_snapshots[0].reserved = true;
+        }
+        debug::logInfo("P0 using keyboard; gamepads stay free for Press-Start join");
+    } else if (aurora::input::get_controller_for_player(0) != nullptr) {
         assignDevice(0, aurora::input::get_instance_for_player(0));
+        debug::logInfo("P0 bound to gamepad device %d; press Start on a second unbound pad to join",
+                       aurora::input::get_instance_for_player(0));
     } else if (auto* slot = playerSlot(0)) {
         slot->joined = true;
         slot->enabled = true;
         g_snapshots[0].connected = true;
         g_snapshots[0].reserved = true;
+        debug::logInfo("P0 joined with no gamepad yet");
+    }
+    {
+        const auto pads = aurora::input::controller_instances();
+        debug::logInfo("co-op input ready: %zu gamepad(s) visible", pads.size());
     }
 #endif
 }
@@ -305,30 +286,35 @@ bool tryJoinFromStartPress() {
         return false;
     }
 
-    bool joinedAny = false;
-    for (const SDL_JoystickID instance : aurora::input::controller_instances()) {
-        if (isDeviceAssigned(instance)) {
-            g_prevUnboundButtons.erase(instance);
-            continue;
+    auto tryJoinDevice = [&](s32 instance, const char* source) -> bool {
+        if (instance < 0) {
+            return false;
         }
 
-        aurora::input::NormalizedControllerState state{};
-        if (!aurora::input::read_controller(instance, &state)) {
-            continue;
-        }
-
-        const u16 held = static_cast<u16>(state.buttons & kClassicPadMask);
-        const u16 prev = g_prevUnboundButtons[instance];
-        g_prevUnboundButtons[instance] = held;
-        const u16 pressed = static_cast<u16>(held & ~prev);
-        if ((pressed & PAD_BUTTON_START) == 0) {
-            continue;
+        // Start on P0's pad: if keyboard can drive P0, hand the pad to a new join slot.
+        if (const auto owner = playerForDevice(instance); owner.has_value()) {
+            if (*owner == 0 && portHasKeyboard(0)) {
+                clearDevice(0);
+                debug::logInfo("Start on P0 pad: releasing gamepad for co-op join (P0 keeps keyboard)");
+            } else if (*owner == 0) {
+                static s32 s_lastWarnedDevice = -1;
+                if (s_lastWarnedDevice != instance) {
+                    debug::logWarn(
+                        "Start on device %d ignored — that pad is Player 0. Connect a second "
+                        "gamepad and press Start on it (or use keyboard for P0)",
+                        instance);
+                    s_lastWarnedDevice = instance;
+                }
+                return false;
+            } else {
+                return false;  // Already owned by another joined player.
+            }
         }
 
         const PlayerId slot = findFreeJoinSlot();
         if (slot >= MAX_LOCAL_PLAYERS) {
-            debug::logWarn("Start pressed on device %d but no free co-op slots", instance);
-            continue;
+            debug::logWarn("Start on device %d (%s): no free co-op slots", instance, source);
+            return false;
         }
 
         if (!isEnabled()) {
@@ -336,25 +322,83 @@ bool tryJoinFromStartPress() {
         }
 
         if (!assignDevice(slot, instance)) {
+            debug::logWarn("Start on device %d (%s): assignDevice(P%u) failed", instance, source,
+                           slot);
+            return false;
+        }
+
+        if (slot != 0) {
+            const bool ok = player::onPlayerJoined(slot);
+            debug::logInfo("Player %u joined via Start (device %d, %s, spawn=%d)", slot, instance,
+                           source, ok ? 1 : 0);
+        } else {
+            debug::logInfo("Player 0 claimed device %d via Start (%s)", instance, source);
+        }
+        return true;
+    };
+
+    auto joinPressed = [](bool held, bool prev) -> bool { return held && !prev; };
+
+    bool joinedAny = false;
+    static std::unordered_map<s32, bool> s_prevBack;
+
+    // Path A: all Aurora-owned gamepads (Start or Select/Back edge).
+    for (const SDL_JoystickID instance : aurora::input::controller_instances()) {
+        aurora::input::GameController* ctrl = aurora::input::get_controller(instance);
+        if (ctrl == nullptr || ctrl->m_controller == nullptr) {
+            g_prevUnboundStart.erase(instance);
+            s_prevBack.erase(instance);
             continue;
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        // Gate D: spawn proxy + camera follow for secondary joiners.
-        if (slot != 0) {
-            player::onPlayerJoined(slot);
-        }
-#endif
+        const bool startHeld = SDL_GetGamepadButton(ctrl->m_controller, SDL_GAMEPAD_BUTTON_START);
+        const bool prevStart = g_prevUnboundStart[instance];
+        g_prevUnboundStart[instance] = startHeld;
+        const bool startEdge = joinPressed(startHeld, prevStart);
 
-        debug::logInfo("Player %u joined via Start (device %d%s)", slot, instance,
-                       slot >= PAD_CHANMAX ? ", snapshot-only" : "");
-        joinedAny = true;
+        const bool backHeld = SDL_GetGamepadButton(ctrl->m_controller, SDL_GAMEPAD_BUTTON_BACK);
+        const bool prevBack = s_prevBack[instance];
+        s_prevBack[instance] = backHeld;
+        const bool backEdge = joinPressed(backHeld, prevBack);
+
+        if (!startEdge && !backEdge) {
+            continue;
+        }
+
+        const char* source = backEdge && !startEdge ? "pad-back" : "pad-start";
+        if (tryJoinDevice(static_cast<s32>(instance), source)) {
+            joinedAny = true;
+        }
+    }
+
+    // Path B: legacy PAD ports 1-3 (second pad often lands on player-index 1).
+    for (u32 port = 1; port < PAD_CHANMAX; ++port) {
+        if (!mDoCPd_c::isConnect(port)) {
+            continue;
+        }
+        if (!mDoCPd_c::getTrigStart(port)) {
+            continue;
+        }
+        if (aurora::input::get_controller_for_player(port) == nullptr) {
+            continue;
+        }
+        const s32 instance = aurora::input::get_instance_for_player(port);
+        if (tryJoinDevice(instance, "pad-port")) {
+            joinedAny = true;
+        }
     }
 
     // Drop stale unbound tracking for removed devices.
-    for (auto it = g_prevUnboundButtons.begin(); it != g_prevUnboundButtons.end();) {
+    for (auto it = g_prevUnboundStart.begin(); it != g_prevUnboundStart.end();) {
         if (!aurora::input::controller_connected(it->first)) {
-            it = g_prevUnboundButtons.erase(it);
+            it = g_prevUnboundStart.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = s_prevBack.begin(); it != s_prevBack.end();) {
+        if (!aurora::input::controller_connected(it->first)) {
+            it = s_prevBack.erase(it);
         } else {
             ++it;
         }
@@ -408,13 +452,8 @@ bool assignDevice(PlayerId id, s32 deviceId) {
     slot->id = id;
     slot->joined = true;
     slot->enabled = true;
-    if (id < PAD_CHANMAX) {
-        slot->legacyPadPort = static_cast<uint8_t>(id);
-        g_snapshots[id].legacyPadPort = static_cast<uint8_t>(id);
-    } else {
-        slot->legacyPadPort.reset();
-        g_snapshots[id].legacyPadPort.reset();
-    }
+    slot->legacyPadPort = static_cast<uint8_t>(id);
+    g_snapshots[id].legacyPadPort = static_cast<uint8_t>(id);
 
     g_snapshots[id].deviceId = deviceId;
     g_snapshots[id].connected = true;
@@ -447,7 +486,12 @@ bool clearDevice(PlayerId id) {
 #endif
     slot->device.reset();
     g_snapshots[id].deviceId.reset();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Keyboard-only P0 stays connected after releasing a gamepad for Press-Start join.
+    g_snapshots[id].connected = (id == 0 && portHasKeyboard(0));
+#else
     g_snapshots[id].connected = false;
+#endif
     // Keep reserved on disconnect — clearDevice is used for intentional unbind too.
     if (id == 0) {
         g_snapshots[id].reserved = true;
@@ -536,12 +580,7 @@ bool isDeviceAssigned(s32 deviceId) {
     (void)deviceId;
     return false;
 #else
-    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (g_snapshots[i].connected && g_snapshots[i].deviceId == deviceId) {
-            return true;
-        }
-    }
-    return false;
+    return playerForDevice(deviceId).has_value();
 #endif
 }
 
@@ -551,7 +590,7 @@ std::optional<PlayerId> playerForDevice(s32 deviceId) {
     return std::nullopt;
 #else
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (g_snapshots[i].deviceId == deviceId) {
+        if (auto* slot = playerSlot(i); slot && slot->device.has_value() && *slot->device == deviceId) {
             return i;
         }
     }
