@@ -2271,17 +2271,23 @@ int mDoGph_Painter() {
             dusk::coop::render::ScopedWorldDrawPass scopedViewPass(coopViewPass);
             dDlst_window_c* window_p = dusk::coop::render::resolveWindow(coopViewPass);
             camera_process_class* camera_p = dusk::coop::render::resolveCamera(coopViewPass);
+            // Design (tasks 02/03, Gate B): bind this pass's viewMtx from its tracked
+            // player before any list rasterization — do not rely on frame-interp/cam0.
+            dusk::coop::render::bindPainterCameraView(coopViewPass, camera_p);
             const int camera_id = window_p != NULL ? window_p->getCameraID() : 0;
             const bool coopSkipIncompatible =
-                dusk::coop::render::isMultiViewActive() &&
-                dusk::coop::render::incompatibleEffectsDisabled();
+                (dusk::coop::render::isMultiViewActive() &&
+                 dusk::coop::render::incompatibleEffectsDisabled()) ||
+                dusk::coop::render::dualCameraCompositeReady();
             const bool coopLastPass = (coopViewPass + 1 == coopViewPasses);
+            const bool coopDualComposite = dusk::coop::render::dualCameraCompositeReady();
 #else
             dDlst_window_c* window_p = dComIfGp_getWindow(0);
             int camera_id = window_p->getCameraID();
             camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
             const bool coopSkipIncompatible = false;
             const bool coopLastPass = true;
+            const bool coopDualComposite = false;
 #endif
 
         if (camera_p != NULL && window_p != NULL) {
@@ -2330,8 +2336,20 @@ int mDoGph_Painter() {
 
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
             f32 coopViewAspect = camera_p->view.aspect;
-            if (dusk::coop::render::isMultiViewActive() && view_port->height > 0.0f) {
+            Mtx44 coopProjMtx;
+            const Mtx44* coopProj = &camera_p->view.projMtx;
+            // Dual/same-camera split captures full-frame then L/R blits — projection must
+            // match the half-width *pane* aspect, not the full framebuffer viewport.
+            if (dusk::coop::render::usesHorizontalSplitPresent()) {
+                coopViewAspect = dusk::coop::render::presentationPaneAspect();
+                C_MTXPerspective(coopProjMtx, camera_p->view.fovy, coopViewAspect,
+                                 camera_p->view.near_, camera_p->view.far_);
+                coopProj = &coopProjMtx;
+            } else if (dusk::coop::render::isMultiViewActive() && view_port->height > 0.0f) {
                 coopViewAspect = view_port->width / view_port->height;
+                C_MTXPerspective(coopProjMtx, camera_p->view.fovy, coopViewAspect,
+                                 camera_p->view.near_, camera_p->view.far_);
+                coopProj = &coopProjMtx;
             }
 #else
             const f32 coopViewAspect = camera_p->view.aspect;
@@ -2374,7 +2392,11 @@ int mDoGph_Painter() {
             dComIfGp_setCurrentWindow(window_p);
             dComIfGp_setCurrentView(&camera_p->view);
             dComIfGp_setCurrentViewport(view_port);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            GXSetProjection(*coopProj, GX_PERSPECTIVE);
+#else
             GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+#endif
 
             #if DEBUG
             captureScreenSetProjection(camera_p->view.projMtx);
@@ -2659,14 +2681,19 @@ int mDoGph_Painter() {
                 }
 
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-                // Multi-view: submit 3D-last while viewport/scissor still own this tile.
+                // Multi-view / dual composite: submit 3D-last while viewport still owns this pass.
                 if (dusk::coop::render::isMultiViewActive()) {
                     GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+                }
+                // Gate B: capture full-frame EFB for this camera before fullscreen HUD/bloom.
+                if (coopDualComposite) {
+                    dusk::coop::render::captureViewToSlot(static_cast<int>(coopViewPass));
                 }
 #endif
 
                 // Full-frame 2D-screen / bloom / fade: once after the last world view.
-                if (coopLastPass) {
+                // Dual composite overwrites the EFB on present — skip these on dual passes.
+                if (coopLastPass && !coopDualComposite) {
                 GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
 
                 Mtx m2;
@@ -2787,6 +2814,14 @@ int mDoGph_Painter() {
         }
         }  // coopViewPass
     }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Gate B: dual full-frame captures → L/R composite. Falls back to Gate A same-camera blit.
+    if (!dusk::coop::render::dualCameraCompositeReady() ||
+        !dusk::coop::render::presentDualCameraSplit()) {
+        dusk::coop::render::presentSameCameraSplit();
+    }
+#endif
 
     #if DEBUG
     fapGm_HIO_c::startCpuTimer();

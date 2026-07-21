@@ -38,6 +38,8 @@
 #include "imgui.h"
 #if defined(ENABLE_LOCAL_COOP)
 #include "dusk/coop/coop_camera.h"
+#include "dusk/coop/coop_render.h"
+#include "f_pc/f_pc_name.h"
 #endif
 #endif
 
@@ -1066,6 +1068,56 @@ bool dCamera_c::Run() {
         mFrameCounter++;
         mTicks++;
         return true;
+    }
+#endif
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // ISSUE: Gate D proxy is not daAlink_c. Vanilla chase casts mpPlayerActor to
+    // daAlink_c* and will crash / follow P0. Until a second Alink exists, secondaries
+    // use this simple third-person follow (C-stick orbit via this camera's pad owner).
+    if (mCameraID != 0) {
+        fopAc_ac_c* tracked =
+            dComIfGp_getPlayer(dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)));
+        if (tracked != nullptr) {
+            mpPlayerActor = tracked;
+        }
+        if (mpPlayerActor == nullptr || fopAcM_GetName(mpPlayerActor) != fpcNm_ALINK_e) {
+            if (mpPlayerActor != nullptr) {
+                updatePad();
+                mCamSetup.mCStick.Shift(mPadID);
+
+                const cXyz center = attentionPos(mpPlayerActor);
+                cSAngle yaw = mDirection.U();
+                cSAngle pitch = mDirection.V();
+                f32 radius = mDirection.R();
+                if (radius < 1.0f) {
+                    yaw.Val(directionOf(mpPlayerActor).Inv());
+                    pitch.Val(static_cast<s16>(0x0E00));  // mild downward look
+                    radius = 280.0f;
+                }
+
+                // C-stick orbit (same pad ownership as this camera's inputOwner).
+                yaw += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosX * -0x180));
+                pitch += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosY * -0x100));
+                if (pitch.Val() > 0x3000) {
+                    pitch.Val(static_cast<s16>(0x3000));
+                } else if (pitch.Val() < -0x1000) {
+                    pitch.Val(static_cast<s16>(-0x1000));
+                }
+
+                cSGlobe dir(radius, pitch, yaw);
+                mCenter = mViewCache.mCenter = center;
+                mDirection = mViewCache.mDirection = dir;
+                mEye = mViewCache.mEye = mCenter + mDirection.Xyz();
+                mFovy = mViewCache.mFovy = (mFovy > 1.0f) ? mFovy : 45.0f;
+                mUp.set(0.0f, 1.0f, 0.0f);
+                mControlledYaw.Val(yaw.Inv());
+            }
+            checkGroundInfo();
+            mFrameCounter++;
+            mTicks++;
+            return true;
+        }
     }
 #endif
 
@@ -3434,6 +3486,13 @@ f32 dCamera_c::getWaterSurfaceHeight(cXyz* param_0) {
 
 void dCamera_c::checkGroundInfo() {
     daAlink_c* player = (daAlink_c*)mpPlayerActor;
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Proxy / non-Link actors lack daAlink_c vtable methods used below.
+    const bool playerIsAlink =
+        mpPlayerActor != NULL && fopAcM_GetName(mpPlayerActor) == fpcNm_ALINK_e;
+#else
+    const bool playerIsAlink = mpPlayerActor != NULL;
+#endif
     cXyz gnd_chk_pos = positionOf(mpPlayerActor);
     if (check_owner_action(mPadID, 0x8000000)) {
         gnd_chk_pos = eyePos(mpPlayerActor);
@@ -3476,13 +3535,14 @@ void dCamera_c::checkGroundInfo() {
     {
         setComStat(0x800);
         mBG.field_0xc0.field_0x44 = 1;
-    } else if (player->checkRide() || player->checkRoofSwitchHang() || player->checkWolfRope()) {
+    } else if (playerIsAlink &&
+               (player->checkRide() || player->checkRoofSwitchHang() || player->checkWolfRope())) {
         mBG.field_0xc0.field_0x44 = 1;
     } else if (check_owner_action1(mPadID, 0x2110000)) {
         mBG.field_0xc0.field_0x44 = 1;
-    } else if (player->checkSpinnerRide()) {
+    } else if (playerIsAlink && player->checkSpinnerRide()) {
         mBG.field_0xc0.field_0x44 = 1;
-    } else if (player->checkMagneBootsOn()) {
+    } else if (playerIsAlink && player->checkMagneBootsOn()) {
         Vec* bootsTopVec = player->getMagneBootsTopVec();
         if (!cBgW_CheckBWall(bootsTopVec->y)) {
             mBG.field_0xc0.field_0x44 = 1;
@@ -11142,6 +11202,9 @@ static void preparation(camera_process_class* i_this) {
     int camera_id = get_camera_id(a_this);
     dDlst_window_c* window = get_window(camera_id);
     view_port_class* viewport = window->getViewPort();
+    // ISSUE: writing half-pane aspect into camera->view.aspect on join snaps cam0
+    // chase yaw (~180°) so P0 left/right stick appears inverted. Keep full-frame
+    // aspect in sim; painter applies presentationPaneAspect() to projMtx only.
     f32 aspect = mDoGph_gInf_c::getAspect();
 
     camera->SetWindow(viewport->width, viewport->height);
@@ -11417,9 +11480,12 @@ static int camera_execute(camera_process_class* i_this) {
 
     // record new camera for our sim frame
     dusk::frame_interp::record_camera(i_this, get_camera_id(i_this));
-    // interpolate the view now so that this sim frame's view matrix matches what
-    // we'll be rendering with later
-    dusk::frame_interp::interp_view(&i_this->view);
+    // ISSUE: frame_interp stores a single cam0 snapshot. Applying interp_view to
+    // cam1+ copied P0 lookat onto every secondary → both split panes followed Link 1.
+    // Gate B stub: interpolate camera 0 only (see record_camera early-out).
+    if (get_camera_id(i_this) == 0) {
+        dusk::frame_interp::interp_view(&i_this->view);
+    }
 #endif
 
     view_setup(i_this);
@@ -11496,31 +11562,43 @@ static int camera_draw(camera_process_class* i_this) {
     j3dSys.setViewMtx(process->view.viewMtx);
     cMtx_inverse(process->view.viewMtx, process->view.invViewMtx);
 
-    Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye, process->view.lookat.center,
-                                    process->view.fovy, process->view.aspect, getComStat(0x80), camera_id,
-                                    false);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // ISSUE (P2 Start crash, 2026-07-21): setAudioCamera(..., camera_id) indexes
+    // Z2Audience::mAudioCamera[camID] / mSpotMic — both sized [1], mNumPlayers==1.
+    // camID>=1 → OOB → SIGSEGV in Z2SpotMic::setMicState. Also skip map/polygon
+    // audio updates so secondaries cannot stomp the shared listener. Task 19.
+    const bool coopOwnAudio = (camera_id == 0);
+#else
+    const bool coopOwnAudio = true;
+#endif
 
-    dBgS_GndChk gndchk;
-    gndchk.OnWaterGrp();
-    gndchk.SetPos(&process->view.lookat.eye);
+    if (coopOwnAudio) {
+        Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye,
+                                        process->view.lookat.center, process->view.fovy,
+                                        process->view.aspect, getComStat(0x80), camera_id, false);
 
-    f32 cross = dComIfG_Bgsp().GroundCross(&gndchk);
-    if (cross != -G_CM3D_F_INF) {
-        if (dComIfG_Bgsp().ChkGrpInf(gndchk, 0x100)) {
-            mDoAud_getCameraMapInfo(6);
+        dBgS_GndChk gndchk;
+        gndchk.OnWaterGrp();
+        gndchk.SetPos(&process->view.lookat.eye);
+
+        f32 cross = dComIfG_Bgsp().GroundCross(&gndchk);
+        if (cross != -G_CM3D_F_INF) {
+            if (dComIfG_Bgsp().ChkGrpInf(gndchk, 0x100)) {
+                mDoAud_getCameraMapInfo(6);
+            } else {
+                mDoAud_getCameraMapInfo(dComIfG_Bgsp().GetMtrlSndId(gndchk));
+            }
+
+            mDoAud_setCameraGroupInfo(dComIfG_Bgsp().GetGrpSoundId(gndchk));
+            Vec spDC;
+            spDC.x = process->view.lookat.eye.x;
+            spDC.y = cross;
+            spDC.z = process->view.lookat.eye.z;
+
+            Z2AudioMgr::getInterface()->setCameraPolygonPos(&spDC);
         } else {
-            mDoAud_getCameraMapInfo(dComIfG_Bgsp().GetMtrlSndId(gndchk));
+            Z2AudioMgr::getInterface()->setCameraPolygonPos(NULL);
         }
-
-        mDoAud_setCameraGroupInfo(dComIfG_Bgsp().GetGrpSoundId(gndchk));
-        Vec spDC;
-        spDC.x = process->view.lookat.eye.x;
-        spDC.y = cross;
-        spDC.z = process->view.lookat.eye.z;
-
-        Z2AudioMgr::getInterface()->setCameraPolygonPos(&spDC);
-    } else {
-        Z2AudioMgr::getInterface()->setCameraPolygonPos(NULL);
     }
 
     MTXCopy(process->view.viewMtx, process->view.viewMtxNoTrans);
@@ -11541,7 +11619,14 @@ static int init_phase1(camera_class* i_this) {
     fopCamM_SetPrm1(i_this, dComIfGp_getCameraWinID(camera_id));
     fopCamM_SetPrm2(i_this, dComIfGp_getCameraPlayer1ID(camera_id));
     fopCamM_SetPrm3(i_this, dComIfGp_getCameraPlayer2ID(camera_id));
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Secondary cameras must not clear the global window count during create.
+    if (camera_id == 0) {
+        dComIfGp_setWindowNum(0);
+    }
+#else
     dComIfGp_setWindowNum(0);
+#endif
 
     i_this->field_0x238 = 0;
     i_this->field_0x22f = 71;
@@ -11582,7 +11667,13 @@ static int init_phase2(camera_class* i_this) {
     }
 
     fopAcM_setStageLayer(player);
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    if (camera_id == 0) {
+        dComIfGp_setWindowNum(1);
+    }
+#else
     dComIfGp_setWindowNum(1);
+#endif
 
     JKR_NEW_ARGS (body) dCamera_c(i_this);
 

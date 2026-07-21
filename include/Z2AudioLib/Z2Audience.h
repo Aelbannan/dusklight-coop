@@ -244,6 +244,9 @@ struct Z2Audience : public JAIAudience, public JASGlobalInstance<Z2Audience> {
     /* 0x004 */ f32 field_0x4;
     /* 0x008 */ u8 field_0x8;
     /* 0x00C */ Z2Audience3DSetting mSetting;
+    // COOP NOTE: arrays are size 1 and mNumPlayers starts at 1. camera_draw must not
+    // call setAudioCamera with camID >= 1 — that OOBs into Z2SpotMic::setMicState
+    // (SIGSEGV on P2 join). Shared listener stays Camera 0 until Task 19 expands this.
     /* 0x134 */ Z2AudioCamera mAudioCamera[1];
     /* 0x1A8 */ Z2SpotMic mSpotMic[1];
     /* 0x1D0 */ Z2SpotMic* mLinkMic;

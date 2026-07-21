@@ -3634,6 +3634,10 @@ inline void dComIfGp_setCamera(int i, camera_class* cam) {
         dusk::coop::camera::sidecarSetCamera(i, cam);
         return;
     }
+    // Original mCameraInfo is one-slot; never index it with i != 0.
+    if (i != 0) {
+        return;
+    }
 #endif
     g_dComIfG_gameInfo.play.setCamera(i, cam);
 }

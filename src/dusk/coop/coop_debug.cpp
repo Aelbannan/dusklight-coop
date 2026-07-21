@@ -3,6 +3,7 @@
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_input.h"
+#include "dusk/logging.h"
 
 #include "d/d_com_inf_game.h"
 
@@ -10,6 +11,26 @@
 #include <cstdio>
 
 namespace dusk::coop::debug {
+namespace {
+
+void logToDusk(AuroraLogLevel level, const char* prefix, const char* fmt, va_list args) {
+    char body[512];
+    std::vsnprintf(body, sizeof(body), fmt, args);
+    switch (level) {
+    case LOG_WARNING:
+        DuskLog.warn("{}{}", prefix, body);
+        break;
+    case LOG_ERROR:
+    case LOG_FATAL:
+        DuskLog.error("{}{}", prefix, body);
+        break;
+    default:
+        DuskLog.info("{}{}", prefix, body);
+        break;
+    }
+}
+
+}  // namespace
 
 void init() {}
 void reset() {}
@@ -42,30 +63,24 @@ void drawOverlay() {
 }
 
 void logInfo(const char* fmt, ...) {
-    std::fputs("[coop] ", stdout);
     va_list args;
     va_start(args, fmt);
-    std::vfprintf(stdout, fmt, args);
+    logToDusk(LOG_INFO, "[coop] ", fmt, args);
     va_end(args);
-    std::fputc('\n', stdout);
 }
 
 void logWarn(const char* fmt, ...) {
-    std::fputs("[coop:warn] ", stderr);
     va_list args;
     va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
+    logToDusk(LOG_WARNING, "[coop] ", fmt, args);
     va_end(args);
-    std::fputc('\n', stderr);
 }
 
 void logError(const char* fmt, ...) {
-    std::fputs("[coop:error] ", stderr);
     va_list args;
     va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
+    logToDusk(LOG_ERROR, "[coop] ", fmt, args);
     va_end(args);
-    std::fputc('\n', stderr);
 }
 
 }  // namespace dusk::coop::debug

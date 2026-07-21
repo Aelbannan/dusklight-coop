@@ -27,6 +27,7 @@
 | 2026-07-20 | [gate_B_registry_and_sidecar.md](evidence/gate_B_registry_and_sidecar.md) | ✅ PoC |
 | 2026-07-20 | [gate_B_destructor_guards.md](evidence/gate_B_destructor_guards.md) | ✅ PoC |
 | 2026-07-20 | [gate_B_working_vs_stubbed.md](evidence/gate_B_working_vs_stubbed.md) | ✅ Notes |
+| 2026-07-21 | Dual composite + proxy follow; audio OOB / interp / aspect issues documented in working_vs_stubbed | ✅ Playtested |
 
 ## Sign-off
 

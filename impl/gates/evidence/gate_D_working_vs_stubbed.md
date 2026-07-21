@@ -11,9 +11,17 @@
 | Press-Start join → proxy | `input::tryJoinFromStartPress` → `player::onPlayerJoined` |
 | Snapshot-driven move | Left stick via `input::snapshot(id)`; not raw `mDoCPd` for the proxy |
 | Soft separate + tether | Design distances (45 / 800 / 1500); P0 immovable under soft sep |
-| Camera 1 tracks proxy | Sidecar `getPlayer(1)` → proxy; `ensureCameras` + tracked player assign |
+| Camera 1 tracks proxy | Sidecar `getPlayer(1)` → proxy; `ensureCameras` after actor resolves; simple follow in `dCamera_c::Run` |
 | Global player 0 preserved | `setPlayerActor` for id>0 only touches `PlayerSlot` / sidecar |
 | Build | RelWithDebInfo `ninja dusklight` links with co-op ON |
+
+## Known coupling with Gate B
+
+| Issue | Note |
+|-------|------|
+| `ensureCameras` before proxy in sidecar | `init_phase2` blocks on `get_player_actor` — join defers create until `getPlayerActor(P1+)` |
+| Proxy ≠ `daAlink_c` | Cam1 must not run Alink chase; see `dCamera_c::Run` co-op early-out |
+| Shared audio listener | Cam1 must not call `setAudioCamera` — see Gate B evidence known issues |
 
 ## Stubbed / deferred
 

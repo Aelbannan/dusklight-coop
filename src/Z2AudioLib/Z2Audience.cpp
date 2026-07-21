@@ -516,6 +516,8 @@ void Z2Audience::setAudioCamera(f32 (*param_0)[4], Vec& pos, Vec& param_2, f32 p
                                 f32 param_4, bool param_5, int camID, bool param_7) {
     JUT_ASSERT(687, camID >= 0);
     JUT_ASSERT(688, camID < mNumPlayers);
+    // RelWithDebInfo builds strip JUT_ASSERT — callers (d_camera::camera_draw) must
+    // still keep camID < mNumPlayers. Co-op secondaries skip this path entirely.
     mAudioCamera[camID].setCameraState(param_0, pos, param_2, param_3, param_4, param_5, param_7);
     mLinkMic->setMicState(&mAudioCamera[camID], camID);
 }

@@ -1429,6 +1429,7 @@ set(DUSK_FILES
         src/dusk/config.hpp
         src/dusk/coop/coop.cpp
         src/dusk/coop/coop_accessors.cpp
+        src/dusk/coop/coop_alink.cpp
         src/dusk/coop/coop_bottles.cpp
         src/dusk/coop/coop_camera.cpp
         src/dusk/coop/coop_combat.cpp

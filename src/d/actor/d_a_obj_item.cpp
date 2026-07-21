@@ -124,9 +124,6 @@ static void itemGetCoCallBack(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coObjInfA,
             const s16 nameB = fopAcM_GetName(i_coActorB);
             const bool isPlayerBody =
                 nameB == fopAcM_GetName(dComIfGp_getLinkPlayer()) || nameB == fpcNm_NPC_P2_e ||
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-                nameB == fpcNm_COOP_PROXY_e ||
-#endif
                 (nameB == fpcNm_CANOE_e && daPy_getPlayerActorClass()->checkCanoeRide()) ||
                 (nameB == fpcNm_HORSE_e && daPy_getPlayerActorClass()->checkHorseRide());
 

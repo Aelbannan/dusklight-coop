@@ -336,11 +336,7 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
         i_AtInfo->mAttackPower = at_power_get(i_AtInfo);
 
         s16 ac_name = fopAcM_GetName(i_AtInfo->mpActor);
-        if (ac_name == fpcNm_ALINK_e
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-            || ac_name == fpcNm_COOP_PROXY_e
-#endif
-        ) {
+        if (ac_name == fpcNm_ALINK_e) {
             if (i_AtInfo->mpCollider->ChkAtType(AT_TYPE_8000) ||
                 i_AtInfo->mpCollider->ChkAtType(AT_TYPE_IRON_BALL))
             {
@@ -372,11 +368,7 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
         i_AtInfo->mHitBit = 0x1000;
     } else {
         s16 ac_name = fopAcM_GetName(i_AtInfo->mpActor);
-        if (ac_name == fpcNm_ALINK_e
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-            || ac_name == fpcNm_COOP_PROXY_e
-#endif
-        ) {
+        if (ac_name == fpcNm_ALINK_e) {
             if (dCcD_GetGObjInf(i_AtInfo->mpCollider)->GetAtSpl() == 1) {
                 i_AtInfo->mHitStatus = 1;
             }

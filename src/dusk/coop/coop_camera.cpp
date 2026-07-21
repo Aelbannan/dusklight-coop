@@ -119,8 +119,11 @@ bool requestSecondaryCreate(ViewId id) {
         return false;
     }
     std::memset(params, 0, sizeof(*params));
-    // Process param becomes get_camera_id() — must equal the sparse view index.
-    params->base.parameters = id;
+    // fopCam_Create does `fpcM_SetParam(a_this, *append)` with a raw u32* read of the
+    // append blob — it does NOT go through BE(u32). Writing via params->base.parameters
+    // (BE) stores a byteswapped value, so camera_id becomes 0x01000000 for id==1 and
+    // init_phase1 then OOB-writes the one-slot mCameraInfo[]. Store host-endian instead.
+    *reinterpret_cast<u32*>(params) = id;
 
     const fpc_ProcID pid = fopCamM_Create(static_cast<int>(id), fpcNm_CAMERA_e, params);
     if (pid == fpcM_ERROR_PROCESS_ID_e) {
@@ -188,6 +191,21 @@ void tick() {
             resolveProcessPointer(i);
         }
     }
+
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+    // Gate A→B handoff: dualCameraCompositeReady requires field_0xb0c (not just pid).
+    // Clearing same-camera too early shows two identical P0 panes or crashes audio.
+    static bool sLoggedDualReady = false;
+    if (render::dualCameraCompositeReady()) {
+        if (render::sameCameraSplitEnabled()) {
+            render::setSameCameraSplitEnabled(false);
+        }
+        if (!sLoggedDualReady) {
+            debug::logInfo("Gate B: cam1 initialized — dual-camera composite active");
+            sLoggedDualReady = true;
+        }
+    }
+#endif
 }
 
 bool ensureCameras(uint8_t count) {
@@ -388,6 +406,7 @@ bool isSecondaryCameraBody(const void* dCameraBody) {
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
 
 bool useSidecarCamera(int cameraIndex) {
+    // Any nonzero index must use the sidecar — never the one-slot original array.
     return cameraIndex != 0 && validIndex(cameraIndex);
 }
 

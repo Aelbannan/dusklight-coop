@@ -8,22 +8,21 @@ void init();
 void reset();
 void tick();
 
-// Gate D: proxy secondary player before full daAlink_c dual spawn.
-bool spawnProxy(PlayerId id, const cXyz& pos, s16 yaw);
-bool spawnProxyNearAuthority(PlayerId id);
-void destroyProxy(PlayerId id);
-void destroyAllProxies();
+// Phase 6: secondary daAlink_c (Gate D proxy path retired for join).
+bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw);
+bool spawnSecondaryLinkNearAuthority(PlayerId id);
+void destroySecondaryLink(PlayerId id);
+void destroyAllSecondaryLinks();
 
 bool softSeparate(PlayerId a, PlayerId b);
 bool tetherTeleportIfNeeded(PlayerId follower, PlayerId authority);
 
 void onRoomUnload();
 
-// True when a proxy body exists (or spawn is pending after room unload).
-bool hasProxy(PlayerId id);
-fopAc_ac_c* getProxyActor(PlayerId id);
-
 // Called from Press-Start join after the slot is claimed.
 bool onPlayerJoined(PlayerId id);
+
+// Called when secondary daAlink_c create completes.
+void onSecondaryLinkReady(PlayerId id);
 
 }  // namespace dusk::coop::player

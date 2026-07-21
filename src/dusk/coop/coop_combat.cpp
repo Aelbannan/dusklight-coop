@@ -262,7 +262,7 @@ bool isPlayerFactionActor(fopAc_ac_c* actor) {
         return false;
     }
     const s16 name = fopAcM_GetName(actor);
-    if (name == fpcNm_ALINK_e || name == fpcNm_COOP_PROXY_e) {
+    if (name == fpcNm_ALINK_e) {
         return true;
     }
     if (playerIdForActor(actor).has_value()) {

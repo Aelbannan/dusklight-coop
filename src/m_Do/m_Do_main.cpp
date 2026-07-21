@@ -46,6 +46,7 @@
 
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
 #include "dusk/coop/coop.h"
+#include "dusk/coop/coop_render.h"
 #endif
 
 #include <filesystem>
@@ -309,11 +310,29 @@ void main01(void) {
             dusk::frame_interp::begin_frame(dusk::getSettings().game.enableFrameInterpolation, false,
                                             dusk::game_clock::sample_interpolation_step());
             dusk::frame_interp::interpolate();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            // ISSUE: begin_presentation_camera is cam0-only and rebuilds matrices/audio
+            // for that view. During L/R split present it fights dual-composite pass binding
+            // — skip while same-camera or dual split present is active.
+            const bool coopSkipPresentationInterp =
+                dusk::coop::render::usesHorizontalSplitPresent();
+            if (!coopSkipPresentationInterp) {
+                dusk::frame_interp::begin_presentation_camera();
+            }
+#else
+            const bool coopSkipPresentationInterp = false;
             dusk::frame_interp::begin_presentation_camera();
+#endif
             // run draw functions for anything specially marked to handle interp
             fpcM_DrawIterater((fpcM_DrawIteraterFunc)fpcM_Draw);
             cAPIGph_Painter();
+#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            if (!coopSkipPresentationInterp) {
+                dusk::frame_interp::end_presentation_camera();
+            }
+#else
             dusk::frame_interp::end_presentation_camera();
+#endif
             dusk::frame_interp::set_ui_tick_pending(false);
         } else {
             dusk::frame_interp::begin_frame(dusk::FrameInterpMode::Off, true, 0.0f);

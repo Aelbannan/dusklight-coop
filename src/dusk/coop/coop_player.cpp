@@ -2,6 +2,7 @@
 
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_camera.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_debug.h"
@@ -15,20 +16,14 @@
 #include <cstring>
 
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-#include "SSystem/SComponent/c_m3d.h"
 #include "SSystem/SComponent/c_math.h"
 #include "d/actor/d_a_alink.h"
-#include "d/d_bg_s_acch.h"
 #include "d/d_com_inf_game.h"
-#include "d/d_drawlist.h"
-#include "d/d_kankyo.h"
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 #include "f_pc/f_pc_manager.h"
 #include "f_pc/f_pc_name.h"
 #include "f_pc/f_pc_node.h"
-#include "m_Do/m_Do_controller_pad.h"
-#include "m_Do/m_Do_ext.h"
 #include "m_Do/m_Do_mtx.h"
 #endif
 
@@ -40,11 +35,9 @@ namespace {
 
 constexpr f32 kSoftSepRadius = 45.0f;
 constexpr f32 kSoftSepPush = 0.25f;
+constexpr f32 kSoftSepAuthorityMultiplier = 2.0f;
 constexpr f32 kTetherWarnDist = 800.0f;
 constexpr f32 kTetherTeleportDist = 1500.0f;
-constexpr f32 kProxyMoveSpeed = 28.0f;
-constexpr f32 kProxyEyeHeight = 150.0f;
-constexpr f32 kStickDeadzone = 0.15f;
 constexpr f32 kSpawnOffset = 80.0f;
 
 struct ProxyMeta {
@@ -55,25 +48,7 @@ struct ProxyMeta {
 
 std::array<ProxyMeta, MAX_LOCAL_PLAYERS> g_meta{};
 
-}  // namespace
-
-// Process-manager actor — must be outside anonymous namespace so g_profile_COOP_PROXY can size it.
-class daCoopProxy_c : public fopAc_ac_c {
-public:
-    PlayerId owner = 0;
-    dBgS_AcchCir mAcchCir;
-    dBgS_ObjAcch mAcch;
-    u32 mShadowId = 0;
-
-    int create();
-    int execute();
-    int draw();
-    int do_delete();
-};
-
-namespace {
-
-static bool isProxyAlive(PlayerId id) {
+static bool isPlayerAlive(PlayerId id) {
     if (!isValidPlayer(id) || id == 0) {
         return false;
     }
@@ -85,7 +60,7 @@ static bool isProxyAlive(PlayerId id) {
         fopAc_ac_c* byId = fopAcM_SearchByID(g_meta[id].processId);
         return byId == actor;
     }
-    return fopAcM_GetName(actor) == fpcNm_COOP_PROXY_e;
+    return fopAcM_GetName(actor) == fpcNm_ALINK_e;
 }
 
 static void clearMeta(PlayerId id, bool keepPending) {
@@ -97,273 +72,7 @@ static void clearMeta(PlayerId id, bool keepPending) {
     g_meta[id].pendingRecreate = pending;
 }
 
-static s16 cameraYawForPlayer(PlayerId id) {
-    ViewId view = id;
-    if (auto* slot = playerSlot(id); slot && slot->view.has_value()) {
-        view = *slot->view;
-    }
-    camera_class* cam = getCameraProcess(view);
-    if (cam == nullptr) {
-        cam = getCameraProcess(0);
-    }
-    if (cam == nullptr) {
-        return 0;
-    }
-    return fopCamM_GetAngleY(cam);
-}
-
-static void syncAttention(fopAc_ac_c* actor) {
-    if (actor == nullptr) {
-        return;
-    }
-    actor->eyePos = actor->current.pos;
-    actor->eyePos.y += kProxyEyeHeight;
-    actor->attention_info.position = actor->eyePos;
-}
-
-static void applyGroundAndWall(daCoopProxy_c* proxy) {
-    proxy->old.pos = proxy->current.pos;
-    proxy->mAcch.CrrPos(dComIfG_Bgsp());
-    if (proxy->mAcch.ChkGroundHit()) {
-        proxy->current.pos.y = proxy->mAcch.GetGroundH();
-    }
-    syncAttention(proxy);
-}
-
-static int authorityRoom() {
-    fopAc_ac_c* p0 = getPlayerActor(0);
-    if (p0 == nullptr) {
-        return 0;
-    }
-    return fopAcM_GetRoomNo(p0);
-}
-
-static bool tryPlaceNearAuthority(cXyz* outPos, s16* outYaw) {
-    fopAc_ac_c* p0 = getPlayerActor(0);
-    if (p0 == nullptr || outPos == nullptr || outYaw == nullptr) {
-        return false;
-    }
-
-    static const cXyz kOffsets[] = {
-        {kSpawnOffset, 0.0f, 0.0f},  {-kSpawnOffset, 0.0f, 0.0f},
-        {0.0f, 0.0f, kSpawnOffset},  {0.0f, 0.0f, -kSpawnOffset},
-        {kSpawnOffset, 0.0f, kSpawnOffset}, {-kSpawnOffset, 0.0f, -kSpawnOffset},
-    };
-
-    const s16 yaw = p0->shape_angle.y;
-    for (const cXyz& local : kOffsets) {
-        cXyz world = local;
-        mDoMtx_stack_c::YrotS(yaw);
-        mDoMtx_stack_c::multVec(&world, &world);
-        world += p0->current.pos;
-        world.y += 50.0f;
-
-        if (!fopAcM_gc_c::gndCheck(&world)) {
-            continue;
-        }
-        const f32 groundY = fopAcM_gc_c::getGroundY();
-        if (groundY <= -G_CM3D_F_INF) {
-            continue;
-        }
-        world.y = groundY;
-        *outPos = world;
-        *outYaw = yaw;
-        return true;
-    }
-
-    *outPos = p0->current.pos;
-    outPos->x += kSpawnOffset;
-    *outYaw = yaw;
-    return true;
-}
-
 }  // namespace
-
-int daCoopProxy_c::create() {
-    fopAcM_ct(this, daCoopProxy_c);
-
-    owner = static_cast<PlayerId>(fopAcM_GetParam(this) & 0xFF);
-    if (!isValidPlayer(owner) || owner == 0) {
-        return cPhs_ERROR_e;
-    }
-
-    mAcchCir.SetWall(30.0f, 50.0f);
-    mAcch.Set(fopAcM_GetPosition_p(this), fopAcM_GetOldPosition_p(this), this, 1, &mAcchCir,
-              fopAcM_GetSpeed_p(this), nullptr, nullptr);
-    mAcch.CrrPos(dComIfG_Bgsp());
-
-    gravity = -5.0f;
-    maxFallSpeed = -80.0f;
-    scale.set(1.0f, 1.0f, 1.0f);
-    fopAcM_SetMtx(this, NULL);
-    fopAcM_SetMin(this, -40.0f, 0.0f, -40.0f);
-    fopAcM_SetMax(this, 40.0f, 180.0f, 40.0f);
-
-    syncAttention(this);
-    setPlayerActor(owner, this);
-    combat::registerPlayerActor(owner, this);
-
-    if (auto* slot = playerSlot(owner)) {
-        slot->actor = this;
-        slot->joined = true;
-        slot->enabled = true;
-        slot->id = owner;
-        slot->view = static_cast<ViewId>(owner);
-    }
-
-    g_meta[owner].processId = fopAcM_GetID(this);
-    g_meta[owner].createRequested = false;
-    g_meta[owner].pendingRecreate = false;
-
-    debug::logInfo("Proxy P%u created at (%.1f, %.1f, %.1f)", owner, current.pos.x, current.pos.y,
-                   current.pos.z);
-    return cPhs_COMPLEATE_e;
-}
-
-int daCoopProxy_c::execute() {
-    if (!isEnabled() || !isJoined(owner)) {
-        return 1;
-    }
-
-    // Confirm sidecar registration without touching original one-slot player array.
-    if (getPlayerActor(owner) != this) {
-        setPlayerActor(owner, this);
-    }
-
-    const auto& snap = input::snapshot(owner);
-    f32 stickX = snap.leftStick.x;
-    f32 stickY = snap.leftStick.y;
-    const f32 mag = std::sqrt(stickX * stickX + stickY * stickY);
-
-    if (!snap.connected || mag < kStickDeadzone) {
-        speedF = 0.0f;
-        speed.set(0.0f, speed.y, 0.0f);
-    } else {
-        const f32 inv = 1.0f / mag;
-        stickX *= inv;
-        stickY *= inv;
-        const f32 speedScale = std::min(mag, 1.0f) * kProxyMoveSpeed;
-        const s16 camYaw = cameraYawForPlayer(owner);
-        // Stick Y forward / X right relative to camera.
-        const s16 moveYaw = camYaw + cM_atan2s(stickX, stickY);
-        shape_angle.y = moveYaw;
-        current.angle.y = moveYaw;
-        speedF = speedScale;
-        speed.x = speedScale * cM_ssin(moveYaw);
-        speed.z = speedScale * cM_scos(moveYaw);
-    }
-
-    // Gravity + integrate.
-    speed.y += gravity;
-    if (speed.y < maxFallSpeed) {
-        speed.y = maxFallSpeed;
-    }
-    current.pos.x += speed.x;
-    current.pos.y += speed.y;
-    current.pos.z += speed.z;
-
-    applyGroundAndWall(this);
-    if (mAcch.ChkGroundHit()) {
-        speed.y = 0.0f;
-    }
-
-    // Gate I PoC: X toggles sidecar form (no changeWolf on proxy); Y toggles senses flag.
-    if ((snap.buttonsPressed & PAD_BUTTON_X) != 0) {
-        const PlayerForm next =
-            forms::isWolf(owner) ? PlayerForm::Human : PlayerForm::Wolf;
-        forms::beginTransform(owner, next);
-    }
-    if ((snap.buttonsPressed & PAD_BUTTON_Y) != 0 && forms::isWolf(owner)) {
-        forms::setSenses(owner, !forms::state(owner).sensesActive);
-        debug::logInfo("forms: P%u senses -> %s", owner,
-                       forms::state(owner).sensesActive ? "on" : "off");
-    }
-
-    return 1;
-}
-
-int daCoopProxy_c::draw() {
-    // PoC visual: draw a second instance of Player 0's Link model at the proxy pose.
-    daAlink_c* link = static_cast<daAlink_c*>(dComIfGp_getPlayer(0));
-    if (link == nullptr || link->mpLinkModel == nullptr) {
-        return 1;
-    }
-
-    J3DModel* model = link->mpLinkModel;
-    Mtx saved;
-    cMtx_copy(model->getBaseTRMtx(), saved);
-
-    mDoMtx_stack_c::transS(current.pos.x, current.pos.y, current.pos.z);
-    mDoMtx_stack_c::YrotM(shape_angle.y);
-    model->setBaseTRMtx(mDoMtx_stack_c::get());
-
-    g_env_light.settingTevStruct(0, &current.pos, &tevStr);
-    g_env_light.setLightTevColorType_MAJI(model, &tevStr);
-    mDoExt_modelUpdateDL(model);
-
-    model->setBaseTRMtx(saved);
-
-    cXyz shadowPos = current.pos;
-    shadowPos.y += 50.0f;
-    mShadowId = dComIfGd_setShadow(mShadowId, 1, model, &shadowPos, 400.0f, 0.0f, current.pos.y,
-                                   mAcch.GetGroundH(), mAcch.m_gnd, &tevStr, 0, 1.0f,
-                                   dDlst_shadowControl_c::getSimpleTex());
-    return 1;
-}
-
-int daCoopProxy_c::do_delete() {
-    if (isValidPlayer(owner) && getPlayerActor(owner) == this) {
-        combat::unregisterPlayerActor(owner);
-        setPlayerActor(owner, nullptr);
-        if (auto* slot = playerSlot(owner)) {
-            slot->actor = nullptr;
-        }
-    }
-    if (isValidPlayer(owner)) {
-        g_meta[owner].processId = fpcM_ERROR_PROCESS_ID_e;
-        g_meta[owner].createRequested = false;
-    }
-    return 1;
-}
-
-namespace {
-
-static int daCoopProxy_Create(fopAc_ac_c* i_this) {
-    return static_cast<daCoopProxy_c*>(i_this)->create();
-}
-
-static int daCoopProxy_Delete(daCoopProxy_c* i_this) {
-    return i_this->do_delete();
-}
-
-static int daCoopProxy_Execute(daCoopProxy_c* i_this) {
-    return i_this->execute();
-}
-
-static int daCoopProxy_Draw(daCoopProxy_c* i_this) {
-    return i_this->draw();
-}
-
-static int daCoopProxy_IsDelete(daCoopProxy_c* /*i_this*/) {
-    return 1;
-}
-
-// File-local method table; exposed via coopProxyMethodClass() for the global profile.
-DUSK_CONST actor_method_class l_daCoopProxy_Method = {
-    (process_method_func)daCoopProxy_Create,
-    (process_method_func)daCoopProxy_Delete,
-    (process_method_func)daCoopProxy_Execute,
-    (process_method_func)daCoopProxy_IsDelete,
-    (process_method_func)daCoopProxy_Draw,
-};
-
-}  // namespace
-
-const actor_method_class* coopProxyMethodClass() {
-    return &l_daCoopProxy_Method;
-}
-
-namespace {
 
 static uint8_t computeJoinedViewSpan() {
     uint8_t span = 1;
@@ -380,20 +89,73 @@ static void syncCamerasForJoined() {
     if (span < 2) {
         return;
     }
-    camera::ensureCameras(span);
+    // Docs (Task 02/03, Gate A→B): sim once; cameras via scheduler; painter binds
+    // matrices. ISSUE: calling ensureCameras before the proxy is in the player sidecar
+    // leaves cam1 stuck in init_phase2; creating too early also hit Z2 audio OOB on
+    // first draw. Same-camera L/R blit until dualCameraCompositeReady().
+    render::setForcedViewCount(0);
+    render::setDualCameraCompositeEnabled(true);
+    render::setIncompatibleEffectsDisabled(true);
+
+    // Already past Gate B handoff — nothing to do.
+    if (render::dualCameraCompositeReady()) {
+        return;
+    }
+
+    bool secondaryPlayerReady = false;
+    for (PlayerId i = 1; i < span; ++i) {
+        if (isJoined(i) && getPlayerActor(i) != nullptr) {
+            secondaryPlayerReady = true;
+            break;
+        }
+    }
+    if (!secondaryPlayerReady) {
+        render::setSameCameraSplitEnabled(true);
+        runtime().activeViewCount = 1;
+        static bool sLoggedWait = false;
+        if (!sLoggedWait) {
+            debug::logInfo(
+                "Co-op join: waiting for proxy actor before ensureCameras — same-camera fallback");
+            sLoggedWait = true;
+        }
+        return;
+    }
+
+    // Camera process may exist but still be in init_phase2 — keep fallback present.
+    if (camera::isCameraActive(1) && getCameraProcess(1) != nullptr) {
+        render::setSameCameraSplitEnabled(true);
+        return;
+    }
+
+    if (!camera::ensureCameras(span)) {
+        debug::logError("Co-op join: ensureCameras(%u) failed — same-camera split fallback",
+                        span);
+        render::setSameCameraSplitEnabled(true);
+        runtime().activeViewCount = 1;
+        for (PlayerId i = 1; i < span; ++i) {
+            if (auto* slot = playerSlot(i)) {
+                slot->view = 0;
+            }
+        }
+        return;
+    }
+
     for (PlayerId i = 1; i < span; ++i) {
         if (!isJoined(i)) {
             continue;
         }
-        camera::assignTrackedPlayer(static_cast<ViewId>(i), i);
-        camera::assignInputOwner(static_cast<ViewId>(i), i);
-        camera::assignAttentionOwner(static_cast<ViewId>(i), i);
+        camera::assignTrackedPlayer(i, i);
+        camera::assignInputOwner(i, i);
+        camera::assignAttentionOwner(i, i);
         if (auto* slot = playerSlot(i)) {
-            slot->view = static_cast<ViewId>(i);
+            slot->view = i;
         }
     }
-    // Keep Gate A multi-view painter in sync with active cameras.
-    render::setForcedViewCount(span);
+
+    // Keep same-camera until cam1's dCamera body is constructed (see camerasReadyForDual).
+    render::setSameCameraSplitEnabled(true);
+    debug::logInfo(
+        "Co-op join: dual-camera requested (same-camera present until cam1 init completes)");
 }
 
 static void resolvePendingCreates() {
@@ -420,11 +182,11 @@ static void recreatePendingProxies() {
         if (!g_meta[id].pendingRecreate || !isJoined(id)) {
             continue;
         }
-        if (isProxyAlive(id) || g_meta[id].createRequested) {
+        if (isPlayerAlive(id) || g_meta[id].createRequested) {
             g_meta[id].pendingRecreate = false;
             continue;
         }
-        if (spawnProxyNearAuthority(id)) {
+        if (spawnSecondaryLinkNearAuthority(id)) {
             g_meta[id].pendingRecreate = false;
         }
     }
@@ -442,7 +204,7 @@ void init() {
 
 void reset() {
 #if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    destroyAllProxies();
+    destroyAllSecondaryLinks();
     g_meta = {};
 #endif
 }
@@ -458,15 +220,20 @@ void tick() {
     resolvePendingCreates();
     recreatePendingProxies();
 
+    // Cameras need the proxy in the player sidecar (init_phase2). Retry wiring after resolve.
+    if (runtime().joinedPlayerCount >= 2) {
+        syncCamerasForJoined();
+    }
+
     // Soft separation + tether after proxy execute (same frame is fine; next frame settles).
     for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
-        if (!isJoined(id) || !isProxyAlive(id)) {
+        if (!isJoined(id) || !isPlayerAlive(id)) {
             continue;
         }
         softSeparate(0, id);
         tetherTeleportIfNeeded(id, 0);
         for (PlayerId other = id + 1; other < MAX_LOCAL_PLAYERS; ++other) {
-            if (isJoined(other) && isProxyAlive(other)) {
+            if (isJoined(other) && isPlayerAlive(other)) {
                 softSeparate(id, other);
             }
         }
@@ -474,7 +241,7 @@ void tick() {
 #endif
 }
 
-bool spawnProxy(PlayerId id, const cXyz& pos, s16 yaw) {
+bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw) {
 #if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
     (void)id;
     (void)pos;
@@ -484,7 +251,7 @@ bool spawnProxy(PlayerId id, const cXyz& pos, s16 yaw) {
     if (!isEnabled() || id == 0 || !isValidPlayer(id)) {
         return false;
     }
-    if (isProxyAlive(id) || g_meta[id].createRequested) {
+    if (isPlayerAlive(id) || g_meta[id].createRequested) {
         return true;
     }
 
@@ -501,23 +268,25 @@ bool spawnProxy(PlayerId id, const cXyz& pos, s16 yaw) {
     csXyz angle(0, yaw, 0);
     const int roomNo = authorityRoom();
 
-    // Layer must be the play scene so the proxy survives room actor sweeps correctly.
+    // Layer must be the play scene so the actor survives room actor sweeps correctly.
     layer_class* savedLayer = fpcLy_CurrentLayer();
     base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
     if (playScene != nullptr) {
         fpcLy_SetCurrentLayer(&reinterpret_cast<process_node_class*>(playScene)->layer);
     }
 
+    // Phase 6: real daAlink_c. Ownership via pending registry (not Link params).
+    alink::registerPendingSpawn(id);
     const fpc_ProcID pid =
-        fopAcM_create(fpcNm_COOP_PROXY_e, 0xFFFF, static_cast<u32>(id), &pos, roomNo, &angle,
-                      nullptr, -1, nullptr);
+        fopAcM_create(fpcNm_ALINK_e, 0xFFFF, 0, &pos, roomNo, &angle, nullptr, -1, nullptr);
 
     if (playScene != nullptr) {
         fpcLy_SetCurrentLayer(savedLayer);
     }
 
     if (pid == fpcM_ERROR_PROCESS_ID_e) {
-        debug::logError("spawnProxy: fopAcM_create failed for P%u", id);
+        alink::clearPendingSpawn();
+        debug::logError("spawnSecondaryLink: fopAcM_create(ALINK) failed for P%u", id);
         return false;
     }
 
@@ -527,18 +296,20 @@ bool spawnProxy(PlayerId id, const cXyz& pos, s16 yaw) {
 
     // Resolve immediately when the scheduler already completed create.
     if (fopAc_ac_c* actor = fopAcM_SearchByID(pid)) {
-        setPlayerActor(id, actor);
-        g_meta[id].createRequested = false;
-        combat::registerPlayerActor(id, actor);
+        if (fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+            setPlayerActor(id, actor);
+            g_meta[id].createRequested = false;
+            combat::registerPlayerActor(id, actor);
+        }
     }
 
     syncCamerasForJoined();
-    debug::logInfo("Proxy P%u spawn requested (pid=%u)", id, static_cast<unsigned>(pid));
+    debug::logInfo("Secondary Link P%u spawn requested (pid=%u)", id, static_cast<unsigned>(pid));
     return true;
 #endif
 }
 
-bool spawnProxyNearAuthority(PlayerId id) {
+bool spawnSecondaryLinkNearAuthority(PlayerId id) {
 #if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
     (void)id;
     return false;
@@ -546,7 +317,7 @@ bool spawnProxyNearAuthority(PlayerId id) {
     cXyz pos;
     s16 yaw = 0;
     if (!tryPlaceNearAuthority(&pos, &yaw)) {
-        debug::logWarn("spawnProxyNearAuthority: no authority player yet for P%u", id);
+        debug::logWarn("spawnSecondaryLinkNearAuthority: no authority player yet for P%u", id);
         if (auto* slot = playerSlot(id)) {
             slot->joined = true;
             slot->enabled = true;
@@ -555,11 +326,11 @@ bool spawnProxyNearAuthority(PlayerId id) {
         g_meta[id].pendingRecreate = true;
         return false;
     }
-    return spawnProxy(id, pos, yaw);
+    return spawnSecondaryLink(id, pos, yaw);
 #endif
 }
 
-void destroyProxy(PlayerId id) {
+void destroySecondaryLink(PlayerId id) {
 #if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
     (void)id;
     return;
@@ -575,11 +346,11 @@ void destroyProxy(PlayerId id) {
     }
 
     if (actor != nullptr) {
-        // Clear registration first so delete callback does not double-clear oddly.
-        setPlayerActor(id, nullptr);
+        // Leave sidecar until Alink destructor clears it (needs owner lookup).
         fopAcM_delete(actor);
     } else {
         setPlayerActor(id, nullptr);
+        combat::unregisterPlayerActor(id);
     }
 
     if (auto* slot = playerSlot(id)) {
@@ -589,15 +360,15 @@ void destroyProxy(PlayerId id) {
         slot->view.reset();
     }
     clearMeta(id, /*keepPending=*/false);
+    if (alink::peekPendingOwner() == id) {
+        alink::clearPendingSpawn();
+    }
 #endif
 }
 
-void destroyAllProxies() {
+void destroyAllSecondaryLinks() {
     for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
-        destroyProxy(i);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        g_meta[i].pendingRecreate = false;
-#endif
+        destroySecondaryLink(i);
     }
 }
 
@@ -629,10 +400,10 @@ bool softSeparate(PlayerId a, PlayerId b) {
     const f32 push = (kSoftSepRadius - distance) * kSoftSepPush;
     // Authority (player 0) is immovable; secondary proxies take the full push.
     if (a == 0) {
-        actorB->current.pos += delta * (push * 2.0f);
+        actorB->current.pos += delta * (push * kSoftSepAuthorityMultiplier);
         syncAttention(actorB);
     } else if (b == 0) {
-        actorA->current.pos -= delta * (push * 2.0f);
+        actorA->current.pos -= delta * (push * kSoftSepAuthorityMultiplier);
         syncAttention(actorA);
     } else {
         actorA->current.pos -= delta * push;
@@ -702,7 +473,7 @@ void onRoomUnload() {
 #else
     // Destroy bodies but remember which joined players need a recreate after the next room loads.
     for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
-        const bool wasJoined = isJoined(id) || isProxyAlive(id) || g_meta[id].pendingRecreate;
+        const bool wasJoined = isJoined(id) || isPlayerAlive(id) || g_meta[id].pendingRecreate;
         if (!wasJoined) {
             continue;
         }
@@ -713,13 +484,14 @@ void onRoomUnload() {
             actor = fopAcM_SearchByID(pid);
         }
         if (actor != nullptr) {
-            setPlayerActor(id, nullptr);
+            // Keep sidecar through fopAcM_delete so Alink destructor can resolve owner.
             fopAcM_delete(actor);
-        } else {
-            setPlayerActor(id, nullptr);
         }
         if (auto* slot = playerSlot(id)) {
-            slot->actor = nullptr;
+            // Destructor clears actor; force-clear if delete was a no-op.
+            if (slot->actor == actor) {
+                slot->actor = nullptr;
+            }
             // Keep joined so Press-Start slot + input identity survive the transition.
             slot->joined = true;
             slot->enabled = true;
@@ -729,22 +501,6 @@ void onRoomUnload() {
         g_meta[id].pendingRecreate = true;
     }
 #endif
-}
-
-bool hasProxy(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
-    (void)id;
-    return false;
-#else
-    return isProxyAlive(id) || (isValidPlayer(id) && g_meta[id].pendingRecreate);
-#endif
-}
-
-fopAc_ac_c* getProxyActor(PlayerId id) {
-    if (id == 0) {
-        return nullptr;
-    }
-    return getPlayerActor(id);
 }
 
 bool onPlayerJoined(PlayerId id) {
@@ -758,37 +514,28 @@ bool onPlayerJoined(PlayerId id) {
     if (!isEnabled()) {
         setEnabled(true);
     }
-    const bool spawned = spawnProxyNearAuthority(id);
+    const bool spawned = spawnSecondaryLinkNearAuthority(id);
     syncCamerasForJoined();
-    // Gate J: request an owned secondary horse near the new player (may no-op if stage
-    // story bits reject horse create — still marks summoned for later retry).
-    dusk::coop::horses::spawnOwnedHorseNearPlayer(id);
     return spawned || g_meta[id].pendingRecreate;
 #endif
 }
 
+void onSecondaryLinkReady(PlayerId id) {
+#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+    (void)id;
+    return;
+#else
+    if (!isValidPlayer(id) || id == 0) {
+        return;
+    }
+    g_meta[id].createRequested = false;
+    g_meta[id].pendingRecreate = false;
+    if (fopAc_ac_c* actor = getPlayerActor(id)) {
+        g_meta[id].processId = fopAcM_GetID(actor);
+    }
+    syncCamerasForJoined();
+    debug::logInfo("Secondary Link P%u ready", id);
+#endif
+}
+
 }  // namespace dusk::coop::player
-
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-
-// Must be a global symbol — referenced by g_fpcPfLst_ProfileList.
-DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_COOP_PROXY = {
-    fpcLy_CURRENT_e,
-    5,
-    fpcPi_CURRENT_e,
-    fpcNm_COOP_PROXY_e,
-    &g_fpcLf_Method.base,
-    sizeof(dusk::coop::player::daCoopProxy_c),
-    0,
-    0,
-    &g_fopAc_Method.base,
-    fpcDwPi_ALINK_e,
-    // l_daCoopProxy_Method lives in dusk::coop::player's anonymous namespace — not linkable here.
-    // Use a file-scope trampoline defined next to the class methods via a getter.
-    dusk::coop::player::coopProxyMethodClass(),
-    fopAcStts_UNK_0x40000_e | fopAcStts_CULL_e,
-    fopAc_ACTOR_e,
-    fopAc_CULLBOX_0_e,
-};
-
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC

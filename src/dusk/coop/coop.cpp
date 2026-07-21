@@ -146,7 +146,7 @@ void onRoomUnload() {
 }
 
 void onCoopDisable() {
-    player::destroyAllProxies();
+    player::destroyAllSecondaryLinks();
     horses::destroySecondaryHorses();
     camera::destroySecondaryCameras();
     enemy::onRoomUnload();

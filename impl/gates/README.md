@@ -9,7 +9,7 @@ Gates are mandatory checkpoints. Implementation does not advance past a gate unt
 | **A** | Render replay boundary | 🟡 PoC implemented | — |
 | **B** | Secondary camera safety | 🟡 PoC implemented | — |
 | **C** | Input abstraction | 🟡 PoC implemented | — |
-| **D** | Proxy player | 🟡 PoC implemented | A, B, C |
+| **D** | Proxy player → Phase 6 Link | 🟡 Phase 6 secondary Alink | A, B, C |
 | **E** | Resource adapter | 🟡 PoC implemented | — |
 | **F** | Combat attribution | 🟡 PoC implemented | D, E |
 | **G** | One enemy adapter | 🟡 PoC implemented | D, F |

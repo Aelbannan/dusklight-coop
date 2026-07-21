@@ -1,5 +1,6 @@
 #include "dusk/frame_interpolation.h"
 
+#include "d/d_com_inf_game.h"
 #include "f_op/f_op_camera_mng.h"
 #include "m_Do/m_Do_graphic.h"
 #include "mtx.h"
@@ -281,7 +282,9 @@ bool lookup_concat_replacement(const void* lhs, const void* rhs, Mtx out) {
 }
 
 void record_camera(::camera_process_class* cam, int camera_id) {
-    // Camera-0 only: Gate A multi-view replays share this interpolated snapshot.
+    // ISSUE / Gate B stub: single snapshot namespace. Recording or interpolating
+    // cameras 1–7 is not implemented — callers must not apply this snapshot to them
+    // (that made both split panes follow P0).
     if (!g_enabled || camera_id != 0 || cam == nullptr) {
         return;
     }
@@ -372,10 +375,14 @@ void begin_presentation_camera() {
         return;
     }
 
-    view_class* const view = dComIfGd_getView();
-    if (view == nullptr) {
+    // ISSUE: previously used dComIfGd_getView(), which after cam1 execute pointed at
+    // the secondary — writing the cam0 interp snapshot there made both panes show P0.
+    // Always target camera 0's view explicitly.
+    camera_process_class* const cam0 = dComIfGp_getCamera(0);
+    if (cam0 == nullptr) {
         return;
     }
+    view_class* const view = &cam0->view;
 
     std::memcpy(&s_presentation_view_backup, view, sizeof(view_class));
     interp_view(view);
@@ -452,9 +459,10 @@ void end_presentation_camera() {
         return;
     }
 
-    view_class* const view = dComIfGd_getView();
-    if (view != nullptr) {
-        std::memcpy(view, &s_presentation_view_backup, sizeof(view_class));
+    // Must restore into cam0 — same target as begin_presentation_camera().
+    camera_process_class* const cam0 = dComIfGp_getCamera(0);
+    if (cam0 != nullptr) {
+        std::memcpy(&cam0->view, &s_presentation_view_backup, sizeof(view_class));
     }
 }
 }  // namespace dusk::frame_interp
