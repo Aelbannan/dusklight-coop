@@ -176,7 +176,6 @@ static void syncCamerasForJoined() {
     // stay on dual-composite / same-camera (full-frame passes + L/R blit).
     if (span > 2) {
         render::setDualCameraCompositeEnabled(false);
-        render::setSameCameraSplitEnabled(false);
 
         if (render::forcedViewCount() == span && runtime().activeViewCount == span) {
             return;
@@ -228,9 +227,8 @@ static void syncCamerasForJoined() {
     }
 
     // ── 2-player dual-camera composite path ──
-    // Full-frame cam0 + cam1 renders, then L/R blit. Same-camera fallback until cam1
-    // finishes dCamera init (field_0xb0c). Do not use setForcedViewCount — that path
-    // blacks Metal's world draw while leaving the HUD visible.
+    // Full-frame cam0 + cam1 renders, then L/R blit.
+    // Do not use setForcedViewCount — that path blacks Metal's world draw.
     render::setForcedViewCount(0);
     render::setDualCameraCompositeEnabled(true);
 
@@ -246,26 +244,23 @@ static void syncCamerasForJoined() {
         }
     }
     if (!secondaryPlayerReady) {
-        render::setSameCameraSplitEnabled(true);
         runtime().activeViewCount = 1;
         static bool sLoggedWait = false;
         if (!sLoggedWait) {
             debug::logInfo(
-                "Co-op join: waiting for secondary Link before ensureCameras — same-camera fallback");
+                "Co-op join: waiting for secondary Link before ensureCameras");
             sLoggedWait = true;
         }
         return;
     }
 
-    // Camera process may exist but still be in init_phase2 — keep fallback present.
+    // Camera process may exist but still be in init_phase2 — wait.
     if (camera::isCameraActive(1) && getCameraProcess(1) != nullptr) {
-        render::setSameCameraSplitEnabled(true);
         return;
     }
 
     if (!camera::ensureCameras(span)) {
-        debug::logError("Co-op join: ensureCameras(%u) failed — same-camera split fallback", span);
-        render::setSameCameraSplitEnabled(true);
+        debug::logError("Co-op join: ensureCameras(%u) failed", span);
         runtime().activeViewCount = 1;
         for (PlayerId i = 1; i < span; ++i) {
             if (auto* slot = playerSlot(i)) {
@@ -287,9 +282,8 @@ static void syncCamerasForJoined() {
         }
     }
 
-    render::setSameCameraSplitEnabled(true);
     debug::logInfo(
-        "Co-op join: dual-camera requested (same-camera present until cam1 init completes)");
+        "Co-op join: dual-camera requested");
 }
 
 static void resolvePendingCreates() {

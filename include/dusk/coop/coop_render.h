@@ -90,21 +90,12 @@ void setIncompatibleEffectsDisabled(bool disabled);
 bool incompatibleEffectsDisabled();
 bool shouldSkipEffect(IncompatibleEffect effect);
 
-// PoC helper: force N same-camera tiled views while co-op is enabled (does not create cameras).
-// NOTE: multi-pass draw-list replay currently blacks the Metal world path — prefer
-// setSameCameraSplitEnabled() which renders once and presents into two panes.
+// PoC helper: force N tiled views while co-op is enabled (does not create cameras).
 void setForcedViewCount(uint8_t count);
 uint8_t forcedViewCount();
 
-// Same-camera horizontal split: one world render, then blit the EFB into L/R panes.
-void setSameCameraSplitEnabled(bool enabled);
-bool sameCameraSplitEnabled();
-void presentSameCameraSplit();
-
 // Gate B dual-camera composite: two full-frame world renders (cam0 + cam1), then L/R blit.
-// Does NOT use tiled scissors (those black the Metal path). Falls back to same-camera
-// split until camera 1's dCamera body finishes init_phase2 (field_0xb0c), not merely when
-// the process pointer exists.
+// Does NOT use tiled scissors (those black the Metal path).
 void setDualCameraCompositeEnabled(bool enabled);
 bool dualCameraCompositeEnabled();
 bool dualCameraCompositeReady();
@@ -112,7 +103,7 @@ void captureViewToSlot(int slot);
 // Returns true when both view captures were composited to L/R.
 bool presentDualCameraSplit();
 
-// True when the final present is L/R half-width panes (dual composite or same-camera split).
+// True when the final present is L/R half-width panes (dual composite).
 // Capture/render stays full-frame; projection aspect must use the *pane*, not the FB.
 bool usesHorizontalSplitPresent();
 f32 presentationPaneAspect();

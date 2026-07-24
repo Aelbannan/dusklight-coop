@@ -30,10 +30,6 @@ namespace {
 // Reference to the vanilla HUD draw object (found once after it's created).
 dMeter2Draw_c* g_hudDraw = nullptr;
 
-// Full framebuffer dimensions used for layout calculations.
-constexpr f32 FB_W = 608.0f;
-constexpr f32 FB_H = 456.0f;
-
 }  // namespace
 
 void init() {
@@ -50,18 +46,16 @@ void tick() {
     return;
 #else
     // Always use the per-view HUD path for all views (single and multi).
-    // The single-view case is just a full-FB viewport with uniform scale 1.0.
     g_perViewHudActive = true;
 
-    // Locate the vanilla HUD draw object once.
-    if (g_hudDraw == nullptr) {
-        dMeter2_c* meter = dMeter2Info_getMeterClass();
-        if (meter != nullptr) {
-            g_hudDraw = meter->getMeterDrawPtr();
-        }
+    // Refresh the HUD draw pointer every frame — the dMeter2_c process can get
+    // destroyed and recreated during scene transitions / camera init when a new
+    // player joins.  The old pointer would dangle and calling draw() on it is UB.
+    dMeter2_c* meter = dMeter2Info_getMeterClass();
+    if (meter != nullptr) {
+        g_hudDraw = meter->getMeterDrawPtr();
     }
 
-    // If the HUD object isn't available yet, don't suppress the global draw.
     if (g_hudDraw == nullptr) {
         g_perViewHudActive = false;
     }
@@ -73,50 +67,55 @@ void drawView(ViewId view) {
     (void)view;
     return;
 #else
-    if (!g_perViewHudActive) {
-        return;
-    }
-    if (g_hudDraw == nullptr) {
+    if (!g_perViewHudActive || g_hudDraw == nullptr) {
         return;
     }
 
-    // Get the viewport dimensions from the current window.
-    dDlst_window_c* window = render::resolveWindow(view);
-    if (window == nullptr) {
-        return;
-    }
-    view_port_class* vp = window->getViewPort();
-    if (vp == nullptr) {
-        return;
+    // --- Compute the viewport rectangle for this view ---
+    const uint8_t activeCount = render::worldDrawPassCount();
+    const ViewAssignmentMode mode = runtime().viewMode;
+
+    render::ViewportRect vpRect = render::viewportFor(view, activeCount, mode);
+    if (vpRect.width < 0.001f || vpRect.height < 0.001f) {
+        // Window viewport fallback.
+        dDlst_window_c* window = render::resolveWindow(view);
+        if (window == nullptr || window->getViewPort() == nullptr) {
+            return;
+        }
+        view_port_class* vp = window->getViewPort();
+        vpRect.x = vp->x_orig;
+        vpRect.y = vp->y_orig;
+        vpRect.width = vp->width;
+        vpRect.height = vp->height;
     }
 
-    const f32 vpX = vp->x_orig;
-    const f32 vpY = vp->y_orig;
-    const f32 vpW = vp->width;
-    const f32 vpH = vp->height;
+    // Convert to pixel coordinates.
+    const f32 fbW = mDoGph_gInf_c::getWidthF();
+    const f32 fbH = mDoGph_gInf_c::getHeightF();
+    const f32 vpX = vpRect.x * fbW;
+    const f32 vpY = vpRect.y * fbH;
+    const f32 vpW = vpRect.width * fbW;
+    const f32 vpH = vpRect.height * fbH;
 
     if (vpW < 1.0f || vpH < 1.0f) {
         return;
     }
 
     // Uniform scale so the full-FB HUD fits without distortion.
-    const f32 scale = std::min(vpW / FB_W, vpH / FB_H);
+    const f32 scale = std::min(vpW / fbW, vpH / fbH);
 
-    // Save the current graf port and override with a viewport-sized ortho.
-    // The getter returns J2DGrafContext*, but the setter expects J2DOrthoGraph*.
+    // --- Set up a viewport-sized 2D ortho graph ---
     J2DGrafContext* prevGraf = dComIfGp_getCurrentGrafPort();
 
-    // Set up a viewport-sized 2D ortho graph.
-    // Drawing the J2DScreen at (0,0) in this ortho places it at the viewport origin.
     J2DOrthoGraph viewportOrtho(vpX, vpY, vpW, vpH, -1.0f, 1.0f);
     viewportOrtho.setPort();
     dComIfGp_setCurrentGrafPort(&viewportOrtho);
 
-    // Temporarily allow per-view draw (suppress the global-draw skip check).
+    // --- Allow the vanilla HUD draw to execute ---
     const bool prevActive = g_perViewHudActive;
     g_perViewHudActive = false;
 
-    // Apply uniform scaling to the root pane so all HUD elements fit the viewport.
+    // Scale the root pane so HUD content fits the viewport proportionally.
     CPaneMgr* rootPane = g_hudDraw->getRootPane();
     if (rootPane != nullptr) {
         const f32 origScaleX = rootPane->getScaleX();
@@ -124,22 +123,17 @@ void drawView(ViewId view) {
         const f32 origTransX = rootPane->getTranslateX();
         const f32 origTransY = rootPane->getTranslateY();
 
-        // Scale uniformly and position at the viewport origin.
         rootPane->scale(scale, scale);
         rootPane->paneTrans(0.0f, 0.0f);
 
-        // Draw the vanilla HUD. It reads per-player data through
-        // dComIfGs_* → dusk_coop_get* → currentPlayer() (set by the active ScopedContext).
         g_hudDraw->draw();
 
-        // Restore root pane so the next viewport draw starts clean.
         rootPane->scale(origScaleX, origScaleY);
         rootPane->paneTrans(origTransX, origTransY);
     } else {
         g_hudDraw->draw();
     }
 
-    // Restore the flag for the global-draw skip check.
     g_perViewHudActive = prevActive;
 
     // Restore the previous graf port.

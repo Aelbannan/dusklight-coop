@@ -2813,8 +2813,11 @@ int mDoGph_Painter() {
                 }  // coopLastPass
 
                 // Per-view HUD draw for this viewport.
-                // Runs after bloom/fade for correct draw order.
-                dusk::coop::hud::drawView(coopViewPass);
+                // Skip for dual-composite mode — present overwrites the EFB.
+                // Drawn again after the present below.
+                if (!coopDualComposite) {
+                    dusk::coop::hud::drawView(coopViewPass);
+                }
             }
         }
         }  // coopViewPass
@@ -2822,14 +2825,20 @@ int mDoGph_Painter() {
 
 #if TARGET_PC
     // Gate B: dual full-frame captures → L/R composite.
-    // Gate A: same-camera L/R blit fallback.
-    // Multi-view tiled: EFB already has tiled viewports; neither present is needed.
+    // Multi-view tiled: EFB already has tiled viewports; no present is needed.
     if (dusk::coop::render::dualCameraCompositeReady()) {
-        if (!dusk::coop::render::presentDualCameraSplit()) {
-            dusk::coop::render::presentSameCameraSplit();
+        dusk::coop::render::presentDualCameraSplit();
+    }
+
+    // Per-view HUD draws for dual-composite mode: draw on top of the present.
+    // The present blits captured textures over the EFB, so the HUD must be
+    // redrawn after it, not inside the world-draw loop.
+    if (dusk::coop::render::dualCameraCompositeReady()) {
+        const u8 hudViewCount = dusk::coop::render::worldDrawPassCount();
+        for (u8 coopViewPass = 0; coopViewPass < hudViewCount; ++coopViewPass) {
+            dusk::coop::render::ScopedWorldDrawPass scopedViewPass(coopViewPass);
+            dusk::coop::hud::drawView(coopViewPass);
         }
-    } else if (dusk::coop::render::sameCameraSplitEnabled()) {
-        dusk::coop::render::presentSameCameraSplit();
     }
 #endif
 

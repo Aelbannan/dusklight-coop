@@ -40,7 +40,6 @@ uint64_t g_lastHash = 0;
 uint32_t g_simTicks = 0;
 uint32_t g_lastPassCount = 1;
 uint8_t g_forcedViewCount = 0;
-bool g_sameCameraSplit = false;
 bool g_dualCameraComposite = false;
 
 bool g_savedPrimaryViewport = false;
@@ -193,10 +192,7 @@ uint8_t effectiveViewCount() {
     if (camerasReadyForDual()) {
         return 2;
     }
-    // Same-camera split presents from a single world pass.
-    if (g_sameCameraSplit) {
-        return 1;
-    }
+
     const uint8_t n = runtime().activeViewCount;
     return n < 1 ? 1 : n;
 }
@@ -251,7 +247,7 @@ void syncViewports() {
             // Multi-view tiled: each viewport uses its own camera.
             window->setCameraID(static_cast<int>(v));
         } else {
-            // Same-camera fallback: every native window points at camera slot 0.
+            // Fallback: every native window points at camera slot 0.
             window->setCameraID(0);
         }
         window->setMode(2);
@@ -397,7 +393,6 @@ void init() {
     g_simTicks = 0;
     g_lastPassCount = 1;
     g_forcedViewCount = 0;
-    g_sameCameraSplit = false;
     g_dualCameraComposite = false;
     g_primaryViewportBackup = {};
 #if TARGET_PC
@@ -582,12 +577,6 @@ void setForcedViewCount(uint8_t count) {
 
 uint8_t forcedViewCount() { return g_forcedViewCount; }
 
-void setSameCameraSplitEnabled(bool enabled) { g_sameCameraSplit = enabled; }
-
-bool sameCameraSplitEnabled() {
-    return g_sameCameraSplit && runtime().joinedPlayerCount >= 2;
-}
-
 void setDualCameraCompositeEnabled(bool enabled) { g_dualCameraComposite = enabled; }
 
 bool dualCameraCompositeEnabled() {
@@ -597,7 +586,7 @@ bool dualCameraCompositeEnabled() {
 bool dualCameraCompositeReady() { return camerasReadyForDual() && dualCameraCompositeEnabled(); }
 
 bool usesHorizontalSplitPresent() {
-    return sameCameraSplitEnabled() || dualCameraCompositeEnabled();
+    return dualCameraCompositeEnabled();
 }
 
 f32 presentationPaneAspect() {
@@ -779,49 +768,6 @@ bool presentDualCameraSplit() {
     g_view0Captured = false;
     g_view1Captured = false;
     return true;
-#endif
-}
-
-void presentSameCameraSplit() {
-#if !TARGET_PC
-    return;
-#else
-    if (!sameCameraSplitEnabled()) {
-        return;
-    }
-    if (mDoGph_gInf_c::m_fullFrameBufferTimg == nullptr ||
-        mDoGph_gInf_c::m_fullFrameBufferTex == nullptr) {
-        return;
-    }
-
-    // Capture the single full-frame world render, then show it in both panes.
-    const f32 fbW = mDoGph_gInf_c::getWidth();
-    const f32 fbH = mDoGph_gInf_c::getHeight();
-    if (fbW < 2.0f || fbH < 1.0f) {
-        return;
-    }
-
-    GXSetTexCopySrc(0, 0, static_cast<u16>(fbW), static_cast<u16>(fbH));
-    GXSetTexCopyDst(static_cast<u16>(fbW), static_cast<u16>(fbH),
-                    static_cast<GXTexFmt>(mDoGph_gInf_c::m_fullFrameBufferTimg->format), 0);
-    GXCopyTex(mDoGph_gInf_c::m_fullFrameBufferTex, 0);
-    GXPixModeSync();
-    GXInvalidateTexAll();
-
-    mDoLib_setResTimgObj(mDoGph_gInf_c::m_fullFrameBufferTimg, &mDoGph_gInf_c::m_fullFrameBufferTexObj,
-                         0, nullptr);
-    GXLoadTexObj(&mDoGph_gInf_c::m_fullFrameBufferTexObj, GX_TEXMAP0);
-
-    setupSplitCompositeState();
-
-    const f32 halfW = fbW * 0.5f;
-    blitSplitPane(0.0f, 0.0f, halfW, fbH);
-    blitSplitPane(halfW, 0.0f, halfW, fbH);
-
-    // Restore full framebuffer for HUD / subsequent passes.
-    GXSetViewport(0.0f, 0.0f, fbW, fbH, 0.0f, 1.0f);
-    GXSetScissor(0, 0, static_cast<u32>(fbW), static_cast<u32>(fbH));
-    j3dSys.reinitGX();
 #endif
 }
 

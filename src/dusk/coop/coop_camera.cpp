@@ -176,13 +176,9 @@ void tick() {
     }
 
 #if TARGET_PC
-    // Gate A→B handoff: dualCameraCompositeReady requires field_0xb0c (not just pid).
-    // Clearing same-camera too early shows two identical P0 panes or crashes audio.
+    // Gate B: dualCameraCompositeReady requires field_0xb0c (not just pid).
     static bool sLoggedDualReady = false;
     if (render::dualCameraCompositeReady()) {
-        if (render::sameCameraSplitEnabled()) {
-            render::setSameCameraSplitEnabled(false);
-        }
         if (!sLoggedDualReady) {
             debug::logInfo("Gate B: cam1 initialized — dual-camera composite active");
             sLoggedDualReady = true;
