@@ -74,7 +74,7 @@ void drawView(ViewId view) {
     // --- Compute the viewport rectangle for this view ---
     render::ViewportRect vpRect = render::gridCellViewport(view);
 
-    // Convert to pixel coordinates.
+    // Convert to pixel coordinates in the internal FB coordinate space.
     const f32 fbW = mDoGph_gInf_c::getWidthF();
     const f32 fbH = mDoGph_gInf_c::getHeightF();
     const f32 vpX = vpRect.x * fbW;
@@ -86,13 +86,22 @@ void drawView(ViewId view) {
         return;
     }
 
-    // Uniform scale so the full-FB HUD fits without distortion.
-    const f32 scale = std::min(vpW / fbW, vpH / fbH);
-
-    // --- Set up a viewport-sized 2D ortho graph ---
+    // --- Set up a 2D ortho graph that maps the full FB coordinate space
+    //     into the viewport.  HUD elements are positioned in FB coordinates
+    //     (e.g. mLifeGaugePosX = 5).  Without root-pane scaling, those
+    //     positions stay correct and dAnchorHudScale shifts remain consistent
+    //     regardless of viewport width.
     J2DGrafContext* prevGraf = dComIfGp_getCurrentGrafPort();
 
+    // The ortho bounds cover the full FB space (0,0)-(fbW,fbH), and the
+    // viewport is set to the grid cell.  The GX backend maps from FB
+    // coordinates to display pixels, so an element at FB position (5,18)
+    // appears at the same physical location in both full-screen and
+    // split-screen modes.
     J2DOrthoGraph viewportOrtho(vpX, vpY, vpW, vpH, -1.0f, 1.0f);
+    // Override the ortho bounds to cover the full FB so layout coords map
+    // directly without scaling the pane hierarchy.
+    viewportOrtho.setOrtho(0.0f, 0.0f, fbW, fbH, -1.0f, 1.0f);
     viewportOrtho.setPort();
     dComIfGp_setCurrentGrafPort(&viewportOrtho);
 
@@ -100,24 +109,7 @@ void drawView(ViewId view) {
     const bool prevActive = g_perViewHudActive;
     g_perViewHudActive = false;
 
-    // Scale the root pane so HUD content fits the viewport proportionally.
-    CPaneMgr* rootPane = g_hudDraw->getRootPane();
-    if (rootPane != nullptr) {
-        const f32 origScaleX = rootPane->getScaleX();
-        const f32 origScaleY = rootPane->getScaleY();
-        const f32 origTransX = rootPane->getTranslateX();
-        const f32 origTransY = rootPane->getTranslateY();
-
-        rootPane->scale(scale, scale);
-        rootPane->paneTrans(0.0f, 0.0f);
-
-        g_hudDraw->draw();
-
-        rootPane->scale(origScaleX, origScaleY);
-        rootPane->paneTrans(origTransX, origTransY);
-    } else {
-        g_hudDraw->draw();
-    }
+    g_hudDraw->draw();
 
     g_perViewHudActive = prevActive;
 
