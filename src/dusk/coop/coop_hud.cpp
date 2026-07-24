@@ -72,22 +72,7 @@ void drawView(ViewId view) {
     }
 
     // --- Compute the viewport rectangle for this view ---
-    const uint8_t activeCount = render::worldDrawPassCount();
-    const ViewAssignmentMode mode = runtime().viewMode;
-
-    render::ViewportRect vpRect = render::viewportFor(view, activeCount, mode);
-    if (vpRect.width < 0.001f || vpRect.height < 0.001f) {
-        // Window viewport fallback.
-        dDlst_window_c* window = render::resolveWindow(view);
-        if (window == nullptr || window->getViewPort() == nullptr) {
-            return;
-        }
-        view_port_class* vp = window->getViewPort();
-        vpRect.x = vp->x_orig;
-        vpRect.y = vp->y_orig;
-        vpRect.width = vp->width;
-        vpRect.height = vp->height;
-    }
+    render::ViewportRect vpRect = render::gridCellViewport(view);
 
     // Convert to pixel coordinates.
     const f32 fbW = mDoGph_gInf_c::getWidthF();

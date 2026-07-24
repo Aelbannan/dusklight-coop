@@ -11202,7 +11202,7 @@ static void preparation(camera_process_class* i_this) {
     view_port_class* viewport = window->getViewPort();
     // ISSUE: writing half-pane aspect into camera->view.aspect on join snaps cam0
     // chase yaw (~180°) so P0 left/right stick appears inverted. Keep full-frame
-    // aspect in sim; painter applies presentationPaneAspect() to projMtx only.
+    // aspect in sim; painter applies paneAspect() to projMtx only.
     f32 aspect = mDoGph_gInf_c::getAspect();
 
     camera->SetWindow(viewport->width, viewport->height);

@@ -176,11 +176,24 @@ void tick() {
     }
 
 #if TARGET_PC
-    // Gate B: dualCameraCompositeReady requires field_0xb0c (not just pid).
     static bool sLoggedDualReady = false;
-    if (render::dualCameraCompositeReady()) {
-        if (!sLoggedDualReady) {
-            debug::logInfo("Gate B: cam1 initialized — dual-camera composite active");
+    if (!sLoggedDualReady) {
+        bool allReady = true;
+        for (ViewId i = 1; i < MAX_LOCAL_VIEWS; ++i) {
+            if (g_active[i] && g_createRequested[i]) {
+                camera_class* cam = getCameraProcess(i);
+                if (cam == nullptr) {
+                    allReady = false;
+                } else {
+                    auto* process = reinterpret_cast<camera_process_class*>(cam);
+                    if (process->mCamera.field_0xb0c == 0) {
+                        allReady = false;
+                    }
+                }
+            }
+        }
+        if (allReady) {
+            debug::logInfo("All secondary cameras initialized");
             sLoggedDualReady = true;
         }
     }
@@ -297,19 +310,13 @@ bool assignWindow(ViewId id) {
     if (runtime().activeViewCount > span) {
         span = runtime().activeViewCount;
     }
-    const auto vp = render::viewportFor(id, span, runtime().viewMode);
-
+    // All windows are full-frame; capture+grid present handles layout.
     const f32 fbW = static_cast<f32>(FB_WIDTH);
     const f32 fbH = static_cast<f32>(FB_HEIGHT);
-    const f32 x = vp.x * fbW;
-    const f32 y = vp.y * fbH;
-    const f32 w = vp.width * fbW;
-    const f32 h = vp.height * fbH;
-
     if (id == 0) {
-        dComIfGp_setWindow(0, x, y, w, h, 0.0f, 1.0f, 0, 2);
+        dComIfGp_setWindow(0, 0.0f, 0.0f, fbW, fbH, 0.0f, 1.0f, 0, 2);
     } else {
-        dComIfGp_setWindow(id, x, y, w, h, 0.0f, 1.0f, id, 2);
+        dComIfGp_setWindow(id, 0.0f, 0.0f, fbW, fbH, 0.0f, 1.0f, id, 2);
     }
     return true;
 }

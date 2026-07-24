@@ -129,7 +129,6 @@ void onCoopDisable() {
     horses::destroyAllHorses();
     camera::destroySecondaryCameras();
     enemy::onRoomUnload();
-    render::setForcedViewCount(0);
     render::reset();
     g_runtime.activePlayer = 0;
     g_runtime.activeView = 0;

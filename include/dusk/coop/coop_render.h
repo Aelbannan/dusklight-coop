@@ -10,29 +10,6 @@ struct view_port_class;
 
 namespace dusk::coop::render {
 
-struct ViewportRect {
-    f32 x = 0.0f;
-    f32 y = 0.0f;
-    f32 width = 1.0f;
-    f32 height = 1.0f;
-};
-
-enum class ActorDrawClass : uint8_t {
-    Independent,
-    DependentPure,
-    DependentMutating,
-};
-
-enum class IncompatibleEffect : uint8_t {
-    MotionBlur,
-    DepthOfField,
-    FrameBufferCapture,
-    Bloom,
-    FullFrameFade,
-    MirrorModeCopy,
-    ScreenSpaceParticles,
-};
-
 // RAII: save/restore current window/view/viewport pointers + co-op context.
 class ScopedWorldDrawPass {
 public:
@@ -49,7 +26,7 @@ private:
     view_port_class* prevPlayViewport_ = nullptr;
     view_class* prevDrawView_ = nullptr;
     view_port_class* prevDrawViewport_ = nullptr;
-    // Gate I: per-view senses visualization override.
+    // Per-view senses visualization override.
     u8 prevSensesEffect_ = 0;
     f32 prevSensesStrength_ = 0.0f;
     bool sensesOverride_ = false;
@@ -59,58 +36,41 @@ private:
 void init();
 void reset();
 
-// Gate A: replay world draw for each active view without advancing simulation.
 void beginFrame();
 void endFrame();
-
-// Called once when dScnPly_Draw advances simulation counters (not per view).
 void noteSimulationTick();
-
-// Sync native indexed viewports; returns true when painter must loop (2+ views).
-bool drawViews();
 
 uint8_t worldDrawPassCount();
 bool isMultiViewActive();
 
-// Window/camera resolution for a painter pass. Never indexes original arrays with >0.
+// Window/camera resolution for a painter pass.
 dDlst_window_c* resolveWindow(ViewId view);
 camera_process_class* resolveCamera(ViewId view);
 
-ViewportRect viewportFor(ViewId view, uint8_t activeViewCount, ViewAssignmentMode mode);
-void applyViewportToWindow(dDlst_window_c* window, const ViewportRect& norm, f32 fbWidth,
-                           f32 fbHeight);
+// Set up native windows for full-frame multi-view capture.
+void beginMultiViewCapture();
 
-ActorDrawClass classifyActor(s16 procName);
+// Capture the current EFB for the given view into its capture buffer.
+void captureView(ViewId view);
 
-uint64_t lastFrameStateHash();
-uint32_t simulationTickCounter();
-uint32_t lastWorldDrawPassCount();
+// Blit all captured views into an N-up grid on screen.
+void presentMultiViewGrid();
 
-void setIncompatibleEffectsDisabled(bool disabled);
-bool incompatibleEffectsDisabled();
-bool shouldSkipEffect(IncompatibleEffect effect);
+// Normalized viewport rectangle for one grid cell (for HUD positioning).
+// Returns {0,0,1,1} when only one view is active.
+struct ViewportRect {
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 width = 1.0f;
+    f32 height = 1.0f;
+};
+ViewportRect gridCellViewport(ViewId view);
 
-// PoC helper: force N tiled views while co-op is enabled (does not create cameras).
-void setForcedViewCount(uint8_t count);
-uint8_t forcedViewCount();
+// Aspect ratio for each pane in the grid, used for camera projection.
+f32 paneAspect();
 
-// Gate B dual-camera composite: two full-frame world renders (cam0 + cam1), then L/R blit.
-// Does NOT use tiled scissors (those black the Metal path).
-void setDualCameraCompositeEnabled(bool enabled);
-bool dualCameraCompositeEnabled();
-bool dualCameraCompositeReady();
-void captureViewToSlot(int slot);
-// Returns true when both view captures were composited to L/R.
-bool presentDualCameraSplit();
-
-// True when the final present is L/R half-width panes (dual composite).
-// Capture/render stays full-frame; projection aspect must use the *pane*, not the FB.
-bool usesHorizontalSplitPresent();
-f32 presentationPaneAspect();
-
-// Task 02: before rasterizing a painter pass, rebuild that camera's view/proj matrices
-// for presentation (pane aspect). May re-anchor a secondary lookat onto its tracked
-// player for the raster; does not write camera->view.aspect or cam0 chase yaw.
+// Before rasterizing a painter pass, rebuild camera view/proj matrices
+// for the pane aspect.
 void bindPainterCameraView(ViewId view, camera_process_class* camera);
 
 }  // namespace dusk::coop::render

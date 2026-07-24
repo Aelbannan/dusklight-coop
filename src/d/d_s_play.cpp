@@ -706,7 +706,6 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
     #endif
 
 #if TARGET_PC
-    dusk::coop::render::drawViews();
     dusk::coop::render::endFrame();
 #endif
 

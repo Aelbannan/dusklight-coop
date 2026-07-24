@@ -169,94 +169,24 @@ static void syncCamerasForJoined() {
         return;
     }
 
-    render::setIncompatibleEffectsDisabled(true);
+    // ── Multi-view capture+grid path (all player counts) ──
+    // Each view renders full-frame into a capture buffer, then the grid present
+    // blits them side-by-side.  No tiled scissors, no separate composite paths.
 
-    // ── Multi-view tiled mode for 3+ players ──
-    // NOTE: tiled multi-pass scissors currently black the Metal world path; 2P must
-    // stay on dual-composite / same-camera (full-frame passes + L/R blit).
-    if (span > 2) {
-        render::setDualCameraCompositeEnabled(false);
-
-        if (render::forcedViewCount() == span && runtime().activeViewCount == span) {
-            return;
-        }
-
-        for (PlayerId i = 1; i < span; ++i) {
-            if (!isJoined(i)) {
-                continue;
-            }
-            if (getPlayerActor(i) == nullptr) {
-                runtime().activeViewCount = 1;
-                static bool sLoggedWait = false;
-                if (!sLoggedWait) {
-                    debug::logInfo(
-                        "Co-op join: multi-view waiting for secondary Links before ensureCameras");
-                    sLoggedWait = true;
-                }
-                return;
-            }
-        }
-
-        if (!camera::ensureCameras(span)) {
-            debug::logError("Co-op join: ensureCameras(%u) failed for multi-view", span);
-            runtime().activeViewCount = 1;
-            for (PlayerId i = 1; i < span; ++i) {
-                if (auto* slot = playerSlot(i)) {
-                    slot->view = 0;
-                }
-            }
-            return;
-        }
-
-        for (PlayerId i = 1; i < span; ++i) {
-            if (!isJoined(i)) {
-                continue;
-            }
-            camera::assignTrackedPlayer(i, i);
-            camera::assignInputOwner(i, i);
-            camera::assignAttentionOwner(i, i);
-            if (auto* slot = playerSlot(i)) {
-                slot->view = i;
-            }
-        }
-
-        runtime().activeViewCount = span;
-        render::setForcedViewCount(span);
-        debug::logInfo("Co-op join: multi-view tiled mode with %u cameras", span);
-        return;
-    }
-
-    // ── 2-player dual-camera composite path ──
-    // Full-frame cam0 + cam1 renders, then L/R blit.
-    // Do not use setForcedViewCount — that path blacks Metal's world draw.
-    render::setForcedViewCount(0);
-    render::setDualCameraCompositeEnabled(true);
-
-    if (render::dualCameraCompositeReady()) {
-        return;
-    }
-
-    bool secondaryPlayerReady = false;
     for (PlayerId i = 1; i < span; ++i) {
-        if (isJoined(i) && getPlayerActor(i) != nullptr) {
-            secondaryPlayerReady = true;
-            break;
+        if (!isJoined(i)) {
+            continue;
         }
-    }
-    if (!secondaryPlayerReady) {
-        runtime().activeViewCount = 1;
-        static bool sLoggedWait = false;
-        if (!sLoggedWait) {
-            debug::logInfo(
-                "Co-op join: waiting for secondary Link before ensureCameras");
-            sLoggedWait = true;
+        if (getPlayerActor(i) == nullptr) {
+            runtime().activeViewCount = 1;
+            static bool sLoggedWait = false;
+            if (!sLoggedWait) {
+                debug::logInfo(
+                    "Co-op join: waiting for secondary Links before ensureCameras");
+                sLoggedWait = true;
+            }
+            return;
         }
-        return;
-    }
-
-    // Camera process may exist but still be in init_phase2 — wait.
-    if (camera::isCameraActive(1) && getCameraProcess(1) != nullptr) {
-        return;
     }
 
     if (!camera::ensureCameras(span)) {
@@ -282,8 +212,8 @@ static void syncCamerasForJoined() {
         }
     }
 
-    debug::logInfo(
-        "Co-op join: dual-camera requested");
+    runtime().activeViewCount = span;
+    debug::logInfo("Co-op join: %u-view capture+grid mode", span);
 }
 
 static void resolvePendingCreates() {

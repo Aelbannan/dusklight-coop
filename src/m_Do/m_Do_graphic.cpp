@@ -2261,8 +2261,8 @@ int mDoGph_Painter() {
 
     if (dComIfGp_getWindowNum() != 0) {
 #if TARGET_PC
-        // Gate A: consume the same draw lists once per tiled view without re-simulating.
-        dusk::coop::render::drawViews();
+        // Multi-view: capture each view full-frame, then present in a grid.
+        dusk::coop::render::beginMultiViewCapture();
         const u8 coopViewPasses = dusk::coop::render::worldDrawPassCount();
 #else
         const u8 coopViewPasses = 1;
@@ -2276,19 +2276,14 @@ int mDoGph_Painter() {
             // player before any list rasterization — do not rely on frame-interp/cam0.
             dusk::coop::render::bindPainterCameraView(coopViewPass, camera_p);
             const int camera_id = window_p != NULL ? window_p->getCameraID() : 0;
-            const bool coopSkipIncompatible =
-                (dusk::coop::render::isMultiViewActive() &&
-                 dusk::coop::render::incompatibleEffectsDisabled()) ||
-                dusk::coop::render::dualCameraCompositeReady();
             const bool coopLastPass = (coopViewPass + 1 == coopViewPasses);
-            const bool coopDualComposite = dusk::coop::render::dualCameraCompositeReady();
+            const bool coopMultiView = dusk::coop::render::isMultiViewActive();
 #else
             dDlst_window_c* window_p = dComIfGp_getWindow(0);
             int camera_id = window_p->getCameraID();
             camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
-            const bool coopSkipIncompatible = false;
             const bool coopLastPass = true;
-            const bool coopDualComposite = false;
+            const bool coopMultiView = false;
 #endif
 
         if (camera_p != NULL && window_p != NULL) {
@@ -2339,10 +2334,10 @@ int mDoGph_Painter() {
             f32 coopViewAspect = camera_p->view.aspect;
             Mtx44 coopProjMtx;
             const Mtx44* coopProj = &camera_p->view.projMtx;
-            // Dual/same-camera split captures full-frame then L/R blits — projection must
-            // match the half-width *pane* aspect, not the full framebuffer viewport.
-            if (dusk::coop::render::usesHorizontalSplitPresent()) {
-                coopViewAspect = dusk::coop::render::presentationPaneAspect();
+            // Multi-view captures full-frame then presents in a grid — projection must
+            // match the *pane* aspect, not the full framebuffer viewport.
+            if (dusk::coop::render::isMultiViewActive()) {
+                coopViewAspect = dusk::coop::render::paneAspect();
                 C_MTXPerspective(coopProjMtx, camera_p->view.fovy, coopViewAspect,
                                  camera_p->view.near_, camera_p->view.far_);
                 coopProj = &coopProjMtx;
@@ -2542,7 +2537,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (!coopSkipIncompatible) {
+                if (!coopMultiView) {
                     GX_DEBUG_GROUP(motionBlure, &camera_p->view);
                 }
 
@@ -2553,7 +2548,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (!coopSkipIncompatible) {
+                if (!coopMultiView) {
                     GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
                 }
                 GXInvalidateTexAll();
@@ -2639,7 +2634,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (!coopSkipIncompatible) {
+                if (!coopMultiView) {
                     retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
                 }
 
@@ -2675,7 +2670,7 @@ int mDoGph_Painter() {
 
                 GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
 
-                if (!coopSkipIncompatible &&
+                if (!coopMultiView &&
                     strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
@@ -2686,15 +2681,16 @@ int mDoGph_Painter() {
                 if (dusk::coop::render::isMultiViewActive()) {
                     GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
                 }
-                // Gate B: capture full-frame EFB for this camera before fullscreen HUD/bloom.
-                if (coopDualComposite) {
-                    dusk::coop::render::captureViewToSlot(static_cast<int>(coopViewPass));
+                // Capture full-frame EFB for this camera before any fullscreen effects.
+                if (coopMultiView) {
+                    dusk::coop::render::captureView(coopViewPass);
                 }
 #endif
 
-                // Full-frame 2D-screen / bloom / fade: once after the last world view.
-                // Dual composite overwrites the EFB on present — skip these on dual passes.
-                if (coopLastPass && !coopDualComposite) {
+                // Full-frame 2D-screen / bloom / fade: only on the last pass in single-view.
+                // Multi-view captures the raw EFB then presents as a grid, so skip effects
+                // that would only render on the last view's capture.
+                if (coopLastPass && !coopMultiView) {
                 GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
 
                 Mtx m2;
@@ -2726,7 +2722,7 @@ int mDoGph_Painter() {
 
                 j3dSys.reinitGX();
 
-                if (!coopSkipIncompatible &&
+                if (!coopMultiView &&
                     (g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
@@ -2744,7 +2740,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (!coopSkipIncompatible) {
+                if (!coopMultiView) {
                     GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
                 }
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
@@ -2754,7 +2750,7 @@ int mDoGph_Painter() {
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {
                     dComIfGd_drawOpaListDark();
                     dComIfGd_drawXluListDark();
-                    if (!coopSkipIncompatible) {
+                    if (!coopMultiView) {
                         retry_captue_frame(&camera_p->view, view_port,
                                            dComIfGp_getCameraZoomForcus(camera_id));
                     }
@@ -2799,7 +2795,7 @@ int mDoGph_Painter() {
 
                 trimming(&camera_p->view, view_port);
 
-                if (!coopSkipIncompatible &&
+                if (!coopMultiView &&
                     strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
                     (mDoGph_gInf_c::isFade() & 0x80) == 0)
                 {
@@ -2813,9 +2809,9 @@ int mDoGph_Painter() {
                 }  // coopLastPass
 
                 // Per-view HUD draw for this viewport.
-                // Skip for dual-composite mode — present overwrites the EFB.
+                // Skip for multi-view — the grid present overwrites the EFB.
                 // Drawn again after the present below.
-                if (!coopDualComposite) {
+                if (!coopMultiView) {
                     dusk::coop::hud::drawView(coopViewPass);
                 }
             }
@@ -2824,16 +2820,11 @@ int mDoGph_Painter() {
     }
 
 #if TARGET_PC
-    // Gate B: dual full-frame captures → L/R composite.
-    // Multi-view tiled: EFB already has tiled viewports; no present is needed.
-    if (dusk::coop::render::dualCameraCompositeReady()) {
-        dusk::coop::render::presentDualCameraSplit();
-    }
+    // Present captured views into an N-up grid on screen.
+    if (dusk::coop::render::isMultiViewActive()) {
+        dusk::coop::render::presentMultiViewGrid();
 
-    // Per-view HUD draws for dual-composite mode: draw on top of the present.
-    // The present blits captured textures over the EFB, so the HUD must be
-    // redrawn after it, not inside the world-draw loop.
-    if (dusk::coop::render::dualCameraCompositeReady()) {
+        // Per-view HUD on top of each grid cell.
         const u8 hudViewCount = dusk::coop::render::worldDrawPassCount();
         for (u8 coopViewPass = 0; coopViewPass < hudViewCount; ++coopViewPass) {
             dusk::coop::render::ScopedWorldDrawPass scopedViewPass(coopViewPass);
@@ -2849,8 +2840,7 @@ int mDoGph_Painter() {
     #if TARGET_PC
     if (dusk::getSettings().game.enableMirrorMode
 #if TARGET_PC
-        && !dusk::coop::render::shouldSkipEffect(
-               dusk::coop::render::IncompatibleEffect::MirrorModeCopy)
+        && !dusk::coop::render::isMultiViewActive()
 #endif
        )
     #elif PLATFORM_WII
