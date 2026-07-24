@@ -19536,6 +19536,25 @@ void daAlink_c::shadowDraw() {
 
 void daAlink_c::modelCalc(J3DModel* i_model) {
     if (mClothesChangeWaitTimer == 0) {
+#if TARGET_PC
+        // Co-op: set this Link's animation calc on the shared J3DModelData joints
+        // before calc() so the joint tree reads from the correct per-instance
+        // field_0x1f20 / field_0x1f24.  Without this, the last actor to initialize
+        // overwrites every other Link's mtxCalc pointer via changeModelDataDirect()
+        // / changeModelDataDirectWolf() which store on the shared model data.
+        if (i_model == mpLinkModel) {
+            J3DModelData* md = i_model->getModelData();
+            if (checkWolf()) {
+                md->getJointNodePointer(0)->setMtxCalc(field_0x1f20);
+                md->getJointNodePointer(3)->setMtxCalc(field_0x1f24);
+                md->getJointNodePointer(15)->setMtxCalc(field_0x1f20);
+            } else {
+                md->getJointNodePointer(0)->setMtxCalc(field_0x1f20);
+                md->getJointNodePointer(1)->setMtxCalc(field_0x1f24);
+                md->getJointNodePointer(16)->setMtxCalc(field_0x1f20);
+            }
+        }
+#endif
         i_model->calc();
     }
 }
