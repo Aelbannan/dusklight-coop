@@ -559,8 +559,15 @@ void save() {
 }
 
 void ClearAllActionBindings(int port) {
+    if (port < 0) {
+        return;
+    }
+    const auto uPort = static_cast<size_t>(port);
     for (auto& actionBinding : getActionBinds() | std::views::values) {
-        actionBinding.configVars->at(port).setValue(PAD_NATIVE_BUTTON_INVALID);
+        if (actionBinding.configVars == nullptr || uPort >= actionBinding.configVars->size()) {
+            continue;
+        }
+        actionBinding.configVars->at(uPort).setValue(PAD_NATIVE_BUTTON_INVALID);
     }
     save();
 }

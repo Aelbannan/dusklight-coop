@@ -29,9 +29,10 @@
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_drops.h"
+#include "dusk/coop/coop_render.h"
 namespace {
 bool g_coopGateEnemyDrop = false;
 }
@@ -1029,6 +1030,17 @@ DUSK_GAME_DATA cull_sphere l_cullSizeSphere[fopAc_CULLSPHERE_MAX_e] = {
 };
 
 s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
+#if TARGET_PC
+    // Dual/multi-view draw-prep is single-pass; the last camera's frustum (usually cam1)
+    // would NODRAW actors only visible to earlier views. Disable clip while split/co-op
+    // multi-view is active — cheap enough for this title.
+    if (dusk::coop::isEnabled() &&
+        (dusk::coop::render::usesHorizontalSplitPresent() ||
+         dusk::coop::render::isMultiViewActive() || dusk::coop::render::forcedViewCount() > 1)) {
+        (void)i_actor;
+        return 0;
+    }
+#endif
     MtxP mtx_p;
 #if AVOID_UB
     Mtx concat_mtx;
@@ -1517,7 +1529,7 @@ fpc_ProcID fopAcM_createItemFromEnemyID(u8 i_enemyID, cXyz const* i_pos, int i_i
         table++;
     }
     
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Gate H Strategy A: mark the following createItemFromTable roll as an enemy drop.
     struct CoopEnemyDropGate {
         CoopEnemyDropGate() { g_coopGateEnemyDrop = true; }
@@ -1527,7 +1539,7 @@ fpc_ProcID fopAcM_createItemFromEnemyID(u8 i_enemyID, cXyz const* i_pos, int i_i
 
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         tableNo = fopAcM_getItemNoFromTableNo(tableNo);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         if (dusk::coop::isEnabled() &&
             !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(tableNo))) {
             return fpcM_ERROR_PROCESS_ID_e;
@@ -1571,7 +1583,7 @@ fpc_ProcID fopAcM_createItemFromTable(cXyz const* i_pos, int i_itemNo, int i_ite
         return fpcM_ERROR_PROCESS_ID_e;
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (g_coopGateEnemyDrop && dusk::coop::isEnabled() &&
         !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(i_itemNo))) {
         return fpcM_ERROR_PROCESS_ID_e;

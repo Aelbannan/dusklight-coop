@@ -969,7 +969,7 @@ public:
     int initdata_to_card(char* card_ptr, int dataNum);
 
     dSv_save_c& getSavedata() { return mSavedata; }
-    void setSavedata(dSv_save_c& i_save) { mSavedata = i_save; }
+    void setSavedata(dSv_save_c& i_save);
     dSv_player_c& getPlayer() { return mSavedata.getPlayer(); }
     dSv_event_c& getEvent() { return mSavedata.getEvent(); }
     dSv_MiniGame_c& getMiniGame() { return mSavedata.getMiniGame(); }

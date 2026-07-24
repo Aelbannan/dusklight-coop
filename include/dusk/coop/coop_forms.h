@@ -41,7 +41,7 @@ PlayerMidnaRuntime& midna(PlayerId id);
 
 bool isWolf(PlayerId id);
 bool isCurrentContextPlayerWolf();
-// Standalone Midna / story demos: always Player 0 / global Link actor.
+// Standalone Midna / story demos use the configured story-authority player.
 bool isStoryAuthorityWolf();
 bool isTransformUnlocked();
 
@@ -49,7 +49,7 @@ bool setDesiredForm(PlayerId id, PlayerForm form);
 bool beginTransform(PlayerId id, PlayerForm form);
 void onTransformComplete(PlayerId id);
 
-// Player 0 writes global save; secondary players update sidecar only.
+// Update indexed form state and mirror only the designated story authority to vanilla save data.
 void writeTransformSaveIfAuthority(PlayerId id, PlayerForm form);
 
 // Called from changeWolf / changeHuman after models swap.
@@ -61,8 +61,8 @@ PlayerId playerIdForLink(const daAlink_c* link);
 bool sensesActiveForView(ViewId view);
 bool sensesActiveForPlayer(PlayerId id);
 void setSenses(PlayerId id, bool active);
-// Sync P0 senses from the live Link wolf-eye timer.
-void syncSensesFromAuthorityLink();
+// Sync senses from every live Link actor.
+void syncSensesFromLinks();
 
 FormRule stageRule();
 const StageFormPolicy& stagePolicy();
@@ -70,7 +70,7 @@ void setStagePolicy(StageFormPolicy policy);
 void clearStagePolicy();
 // Returns false when the stage forbids the requested form for this player.
 bool allowsForm(PlayerId id, PlayerForm form);
-// Demo / stub: apply ForceWolf to eventParticipant only (or P0 if unset).
+// Apply a forced form to the indexed event participant.
 void applyForcedFormDemo(PlayerId participant, PlayerForm form);
 void restoreFormsAfterForcedDemo();
 

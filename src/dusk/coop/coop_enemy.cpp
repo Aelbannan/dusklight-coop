@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <vector>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "SSystem/SComponent/c_bg_w.h"
 #include "SSystem/SComponent/c_m3d.h"
 #include "SSystem/SComponent/c_m3d_g_pla.h"
@@ -28,7 +28,7 @@ namespace {
 std::vector<EnemyAdapter> g_adapters;
 u32 g_pendingWaves = 0;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 // Ground codes Link treats as void / exit / fog death (unsafe placement).
 constexpr int kHazardGroundCodes[] = {4, 5, 9, 10};
@@ -313,14 +313,14 @@ int scanEligibleSources(void* actor, void* /*data*/) {
     return 0;
 }
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC
 
 }  // namespace
 
 void init() {
     g_adapters.clear();
     g_pendingWaves = 0;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_pendingIds.clear();
     g_liveCloneIds.clear();
     g_augmentedSources.clear();
@@ -343,7 +343,7 @@ void init() {
 void reset() { init(); }
 
 void tick() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
     if (!isEnabled()) {
@@ -378,7 +378,7 @@ const EnemyAdapter* findAdapter(s16 procName) {
 }
 
 void noteEligibleSource(fopAc_ac_c* source) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)source;
     return;
 #else
@@ -405,7 +405,7 @@ void noteEligibleSource(fopAc_ac_c* source) {
 }
 
 fpc_ProcID spawnClone(fopAc_ac_c* source, PlayerId /*reasonPlayer*/) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)source;
     return fpcM_ERROR_PROCESS_ID_e;
 #else
@@ -481,7 +481,7 @@ fpc_ProcID spawnClone(fopAc_ac_c* source, PlayerId /*reasonPlayer*/) {
 }
 
 bool isClone(fpc_ProcID id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)id;
     return false;
 #else
@@ -490,7 +490,7 @@ bool isClone(fpc_ProcID id) {
 }
 
 bool isClone(fopAc_ac_c* actor) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)actor;
     return false;
 #else
@@ -499,7 +499,7 @@ bool isClone(fopAc_ac_c* actor) {
 }
 
 u32 pendingCloneCount() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return 0;
 #else
     return static_cast<u32>(g_pendingIds.size());
@@ -507,7 +507,7 @@ u32 pendingCloneCount() {
 }
 
 u32 liveCloneCount() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return 0;
 #else
     return static_cast<u32>(g_liveCloneIds.size());
@@ -524,7 +524,7 @@ bool roomClearBlocked() {
 
 void onRoomUnload() {
     g_pendingWaves = 0;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_pendingIds.clear();
     g_liveCloneIds.clear();
     g_augmentedSources.clear();

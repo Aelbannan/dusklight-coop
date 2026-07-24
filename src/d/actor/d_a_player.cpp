@@ -14,7 +14,7 @@
 #include "d/actor/d_a_boomerang.h"
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop_forms_bridge.h"
 #endif
 
@@ -472,7 +472,7 @@ f32 daPy_py_c::getAttentionOffsetY() {
 }
 
 int daPy_py_c::checkNowWolfEyeUp() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     return dusk_coop_checkNowWolfEyeUp();
 #else
     return daAlink_getAlinkActorClass()->checkWolfEyeUp();

@@ -72,7 +72,8 @@ Display: player actor IDs, positions/rooms, action states, assigned controller/v
 ```cpp
 COOP_ASSERT(player < MAX_LOCAL_PLAYERS);
 COOP_ASSERT(view < MAX_LOCAL_VIEWS);
-COOP_ASSERT(originalIndex == 0 && "Original one-slot storage indexed with nonzero value");
+COOP_ASSERT(player < dComIfG_play_c::MAX_PLAYERS);
+COOP_ASSERT(view < dComIfG_play_c::MAX_VIEWS);
 ```
 
 ### Deterministic input playback

@@ -7,7 +7,7 @@ namespace dusk::coop::bottles {
 void init();
 void reset();
 
-u8 unlockedSlotCount();  // global — derived from original save
+u8 unlockedSlotCount();  // global progression; contents are indexed per player
 void setUnlockedSlotCount(u8 count);
 void syncUnlockedFromSave();
 
@@ -20,7 +20,7 @@ bool tryConsume(PlayerId id, u8 slot);
 // Collector gets initial contents; other joined players get empty unlocked bottles.
 void onBottleUnlock(PlayerId collector, u8 slot, u8 initialContents);
 
-// Find next locked slot in original save, unlock globally, give contents to collector.
+// Find the next locked slot, unlock it globally, and give contents to the collector.
 bool grantBottleUnlock(PlayerId collector, u8 initialContents);
 
 }  // namespace dusk::coop::bottles

@@ -13,7 +13,7 @@
 #include "m_Do/m_Do_Reset.h"
 #include "f_ap/f_ap_game.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #endif
 
@@ -331,7 +331,7 @@ static int dScnRoom_Delete(room_of_scene_class* i_this) {
 
     int roomNo = fopScnM_GetParam(i_this);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Gate D: if the authority player's room is unloading, drop proxy bodies (recreate on tick).
     fopAc_ac_c* player0 = dComIfGp_getPlayer(0);
     if (player0 != nullptr && fopAcM_GetRoomNo(player0) == roomNo) {

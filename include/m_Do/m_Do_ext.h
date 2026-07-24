@@ -568,8 +568,16 @@ public:
     virtual void setMaterial();
     virtual void draw();
 
-    cXyz* getPos(int param_0) { return field_0x18[param_0].field_0x0; }
-    f32* getSize(int param_0) { return field_0x18[param_0].field_0x4; }
+    cXyz* getPos(int param_0) {
+        return field_0x18 != nullptr && param_0 >= 0 && param_0 < field_0x10
+                   ? field_0x18[param_0].field_0x0
+                   : nullptr;
+    }
+    f32* getSize(int param_0) {
+        return field_0x18 != nullptr && param_0 >= 0 && param_0 < field_0x10
+                   ? field_0x18[param_0].field_0x4
+                   : nullptr;
+    }
 
 private:
     /* 0x08 */ GXColor field_0x8;
@@ -599,8 +607,16 @@ public:
     void refreshGeometryForPresentationEye(const cXyz& eye) override;
 #endif
 
-    cXyz* getPos(int i_idx) { return mpLines[i_idx].field_0x0; }
-    f32* getSize(int i_idx) { return mpLines[i_idx].field_0x4; }
+    cXyz* getPos(int i_idx) {
+        return mpLines != nullptr && i_idx >= 0 && i_idx < mNumLines
+                   ? mpLines[i_idx].field_0x0
+                   : nullptr;
+    }
+    f32* getSize(int i_idx) {
+        return mpLines != nullptr && i_idx >= 0 && i_idx < mNumLines
+                   ? mpLines[i_idx].field_0x4
+                   : nullptr;
+    }
 
 private:
     /* 0x08 */ TGXTexObj mTextureObject;

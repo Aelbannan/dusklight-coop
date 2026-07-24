@@ -8,7 +8,7 @@ Create additional camera processes through the camera manager and let the existi
 
 `dCamera_c` derives camera ID, player mapping, controller mapping, and window mapping during initialization. Flow:
 
-1. Allocate and initialize the sidecar route
+1. Initialize the native camera slot and runtime route
 2. Make co-op-aware mapping accessors visible
 3. Create the camera process
 4. Capture the returned process ID

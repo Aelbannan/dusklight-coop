@@ -35,7 +35,7 @@ bool get_ui_tick_pending();
 bool is_sim_frame();
 
 void record_camera(::camera_process_class* cam, int camera_id);
-void interp_view(::view_class* view);
+void interp_view(::view_class* view, int camera_id = 0);
 void record_final_mtx(Mtx m, const void *key);
 void record_final_mtx(Mtx m);
 
@@ -48,6 +48,10 @@ void add_interpolation_callback(InterpolationCallBack pCallBack, void* pUserWork
 
 void begin_presentation_camera();
 void end_presentation_camera();
+
+// Model/joint interpolation only — safe during co-op L/R split present when
+// begin_presentation_camera() must be skipped (it stomps cam0 matrices/audio).
+void apply_model_interpolation();
 
 }  // namespace frame_interp
 }  // namespace dusk

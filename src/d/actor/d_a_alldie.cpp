@@ -9,7 +9,7 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_enemy.h"
 #endif
@@ -30,7 +30,7 @@ static bool coopRoomStillHasEnemies(s8 roomNo) {
     if (fopAcM_myRoomSearchEnemy(roomNo) != NULL) {
         return true;
     }
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled() && dusk::coop::enemy::roomClearBlocked()) {
         return true;
     }

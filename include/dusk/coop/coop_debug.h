@@ -16,7 +16,7 @@ void logError(const char* fmt, ...);
 
 }  // namespace dusk::coop::debug
 
-#if defined(ENABLE_LOCAL_COOP) && defined(DEBUG)
+#if TARGET_PC && defined(DEBUG)
 #define COOP_ASSERT(cond)                                                                          \
     do {                                                                                           \
         if (!(cond)) {                                                                             \

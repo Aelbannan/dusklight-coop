@@ -29,6 +29,7 @@
 #endif
 
 #if TARGET_PC
+#include "dusk/coop/coop.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/logging.h"
 #include "dusk/action_bindings.h"
@@ -36,7 +37,7 @@
 #include "dusk/settings.h"
 #include "dusk/touch_camera.h"
 #include "imgui.h"
-#if defined(ENABLE_LOCAL_COOP)
+#if TARGET_PC
 #include "dusk/coop/coop_camera.h"
 #include "dusk/coop/coop_render.h"
 #include "f_pc/f_pc_name.h"
@@ -261,7 +262,7 @@ dCamera_c::dCamera_c(camera_class* i_camera) : mCamParam(0) {
 }
 
 dCamera_c::~dCamera_c() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Cameras 1-7 must not write primary turn-restart state or clear global stop status.
     if (mCameraID != 0) {
         return;
@@ -1069,50 +1070,61 @@ bool dCamera_c::Run() {
         mTicks++;
         return true;
     }
+
+    // Camera/player slots can be populated or replaced after the camera body
+    // has initialized (co-op Links are created asynchronously). Refresh the
+    // target for every native camera, including the primary camera, so its
+    // chase state never remains attached to the old actor pointer.
+    if (fopAc_ac_c* tracked =
+            dComIfGp_getPlayer(dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)))) {
+        mpPlayerActor = tracked;
+    }
 #endif
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    // ISSUE: Gate D proxy is not daAlink_c. Vanilla chase casts mpPlayerActor to
-    // daAlink_c* and will crash / follow P0. Until a second Alink exists, secondaries
-    // use this simple third-person follow (C-stick orbit via this camera's pad owner).
+#if TARGET_PC
+    // Secondary cameras always use a simple third-person follow on their tracked actor.
+    // Falling through into vanilla chase uses daAlink_getAlinkActorClass() (always P0),
+    // so cam1 looked at P1 but chased P0 — and paint-time lookat rewrites fought that.
     if (mCameraID != 0) {
         fopAc_ac_c* tracked =
             dComIfGp_getPlayer(dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)));
         if (tracked != nullptr) {
             mpPlayerActor = tracked;
         }
-        if (mpPlayerActor == nullptr || fopAcM_GetName(mpPlayerActor) != fpcNm_ALINK_e) {
-            if (mpPlayerActor != nullptr) {
-                updatePad();
-                mCamSetup.mCStick.Shift(mPadID);
+        if (mpPlayerActor != nullptr) {
+            updatePad();
+            mCamSetup.mCStick.Shift(mPadID);
 
-                const cXyz center = attentionPos(mpPlayerActor);
-                cSAngle yaw = mDirection.U();
-                cSAngle pitch = mDirection.V();
-                f32 radius = mDirection.R();
-                if (radius < 1.0f) {
-                    yaw.Val(directionOf(mpPlayerActor).Inv());
-                    pitch.Val(static_cast<s16>(0x0E00));  // mild downward look
-                    radius = 280.0f;
-                }
-
-                // C-stick orbit (same pad ownership as this camera's inputOwner).
-                yaw += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosX * -0x180));
-                pitch += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosY * -0x100));
-                if (pitch.Val() > 0x3000) {
-                    pitch.Val(static_cast<s16>(0x3000));
-                } else if (pitch.Val() < -0x1000) {
-                    pitch.Val(static_cast<s16>(-0x1000));
-                }
-
-                cSGlobe dir(radius, pitch, yaw);
-                mCenter = mViewCache.mCenter = center;
-                mDirection = mViewCache.mDirection = dir;
-                mEye = mViewCache.mEye = mCenter + mDirection.Xyz();
-                mFovy = mViewCache.mFovy = (mFovy > 1.0f) ? mFovy : 45.0f;
-                mUp.set(0.0f, 1.0f, 0.0f);
-                mControlledYaw.Val(yaw.Inv());
+            // Link's attention point can lag while a secondary actor is still
+            // finishing its execute step. Anchor the follow target to the
+            // actor's live position, with the normal Link eye height.
+            cXyz center = positionOf(mpPlayerActor);
+            center.y += 150.0f;
+            cSAngle yaw = mDirection.U();
+            cSAngle pitch = mDirection.V();
+            f32 radius = mDirection.R();
+            if (radius < 1.0f) {
+                yaw.Val(directionOf(mpPlayerActor).Inv());
+                pitch.Val(static_cast<s16>(0x0E00));  // mild downward look
+                radius = 280.0f;
             }
+
+            // C-stick orbit (same pad ownership as this camera's inputOwner).
+            yaw += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosX * -0x180));
+            pitch += cSAngle(static_cast<s16>(mPadInfo.mCStick.mLastPosY * -0x100));
+            if (pitch.Val() > 0x3000) {
+                pitch.Val(static_cast<s16>(0x3000));
+            } else if (pitch.Val() < -0x1000) {
+                pitch.Val(static_cast<s16>(-0x1000));
+            }
+
+            cSGlobe dir(radius, pitch, yaw);
+            mCenter = mViewCache.mCenter = center;
+            mDirection = mViewCache.mDirection = dir;
+            mEye = mViewCache.mEye = mCenter + mDirection.Xyz();
+            mFovy = mViewCache.mFovy = (mFovy > 1.0f) ? mFovy : 45.0f;
+            mUp.set(0.0f, 1.0f, 0.0f);
+            mControlledYaw.Val(yaw.Inv());
             checkGroundInfo();
             mFrameCounter++;
             mTicks++;
@@ -1312,6 +1324,24 @@ bool dCamera_c::Run() {
     mFovy = mViewCache.mFovy;
     mBank = mViewCache.mBank;
     bumpCheck(mBumpCheckFlags);
+
+#if TARGET_PC
+    // The vanilla chase deliberately eases its center toward Link. That is
+    // useful for a single view, but leaves the primary co-op pane visibly
+    // behind a moving P1. Carry the actor's frame-to-frame translation through
+    // the finished camera pose while retaining the vanilla orbit/obstacle
+    // result.
+    if (dusk::coop::isEnabled() && mCameraID == 0 && mpPlayerActor != nullptr &&
+        !dComIfGp_getEvent()->runCheck()) {
+        const cXyz delta = mMonitor.field_0x14.field_0x0;
+        if (delta.abs() > 0.001f) {
+            mCenter += delta;
+            mEye += delta;
+            mViewCache.mCenter += delta;
+            mViewCache.mEye += delta;
+        }
+    }
+#endif
 
     cSAngle angle = mPadInfo.mMainStick.mAngle - mFakeAngleSys.field_0x4;
     if (mPadInfo.mMainStick.mLastValue < mCamSetup.USOValue()
@@ -3486,7 +3516,7 @@ f32 dCamera_c::getWaterSurfaceHeight(cXyz* param_0) {
 
 void dCamera_c::checkGroundInfo() {
     daAlink_c* player = (daAlink_c*)mpPlayerActor;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Proxy / non-Link actors lack daAlink_c vtable methods used below.
     const bool playerIsAlink =
         mpPlayerActor != NULL && fopAcM_GetName(mpPlayerActor) == fpcNm_ALINK_e;
@@ -11478,14 +11508,9 @@ static int camera_execute(camera_process_class* i_this) {
         }, i_this);
     }
 
-    // record new camera for our sim frame
-    dusk::frame_interp::record_camera(i_this, get_camera_id(i_this));
-    // ISSUE: frame_interp stores a single cam0 snapshot. Applying interp_view to
-    // cam1+ copied P0 lookat onto every secondary → both split panes followed Link 1.
-    // Gate B stub: interpolate camera 0 only (see record_camera early-out).
-    if (get_camera_id(i_this) == 0) {
-        dusk::frame_interp::interp_view(&i_this->view);
-    }
+    const int interpolationCameraId = get_camera_id(i_this);
+    dusk::frame_interp::record_camera(i_this, interpolationCameraId);
+    dusk::frame_interp::interp_view(&i_this->view, interpolationCameraId);
 #endif
 
     view_setup(i_this);
@@ -11562,21 +11587,12 @@ static int camera_draw(camera_process_class* i_this) {
     j3dSys.setViewMtx(process->view.viewMtx);
     cMtx_inverse(process->view.viewMtx, process->view.invViewMtx);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    // ISSUE (P2 Start crash, 2026-07-21): setAudioCamera(..., camera_id) indexes
-    // Z2Audience::mAudioCamera[camID] / mSpotMic — both sized [1], mNumPlayers==1.
-    // camID>=1 → OOB → SIGSEGV in Z2SpotMic::setMicState. Also skip map/polygon
-    // audio updates so secondaries cannot stomp the shared listener. Task 19.
-    const bool coopOwnAudio = (camera_id == 0);
-#else
-    const bool coopOwnAudio = true;
-#endif
+    Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye,
+                                    process->view.lookat.center, process->view.fovy,
+                                    process->view.aspect, getComStat(0x80), camera_id, false);
 
-    if (coopOwnAudio) {
-        Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye,
-                                        process->view.lookat.center, process->view.fovy,
-                                        process->view.aspect, getComStat(0x80), camera_id, false);
-
+    // Environment audio remains a single shared mix owned by the primary listener.
+    if (camera_id == 0) {
         dBgS_GndChk gndchk;
         gndchk.OnWaterGrp();
         gndchk.SetPos(&process->view.lookat.eye);
@@ -11619,7 +11635,7 @@ static int init_phase1(camera_class* i_this) {
     fopCamM_SetPrm1(i_this, dComIfGp_getCameraWinID(camera_id));
     fopCamM_SetPrm2(i_this, dComIfGp_getCameraPlayer1ID(camera_id));
     fopCamM_SetPrm3(i_this, dComIfGp_getCameraPlayer2ID(camera_id));
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Secondary cameras must not clear the global window count during create.
     if (camera_id == 0) {
         dComIfGp_setWindowNum(0);
@@ -11667,7 +11683,7 @@ static int init_phase2(camera_class* i_this) {
     }
 
     fopAcM_setStageLayer(player);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (camera_id == 0) {
         dComIfGp_setWindowNum(1);
     }
@@ -11707,7 +11723,7 @@ static int init_phase2(camera_class* i_this) {
 #endif
     }
     i_this->field_0x238 = 0;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Only the primary camera owns the global attention manager.
     if (camera_id == 0) {
         dComIfGp_getAttention()->Init(player, PAD_1);
@@ -11745,7 +11761,7 @@ static int camera_delete(camera_process_class* i_this) {
     }
 
     camera->~dCamera_c();
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Clear the matching sparse slot — never force camera 0 when deleting secondaries.
     dComIfGp_setCamera(camera_id, NULL);
 #else

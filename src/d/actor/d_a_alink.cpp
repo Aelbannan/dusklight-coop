@@ -38,7 +38,7 @@
 #include "d/actor/d_a_tag_lantern.h"
 #include "d/actor/d_a_horse.h"
 #include "m_Do/m_Do_controller_pad.h"
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_alink.h"
@@ -4463,8 +4463,8 @@ void daAlink_c::playerInit() {
     mHeavySpeedMultiplier = 1.0f;
 
     if (!checkDungeon() && !checkBossRoom() && checkItemGet(dItemNo_DUNGEON_EXIT_e, 1)
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        && !dusk::coop::alink::isCreatingSecondary()
+#if TARGET_PC
+        && dusk::coop::alink::isStoryAuthorityLink(this)
 #endif
     ) {
         dComIfGs_setItem(SLOT_18, dItemNo_TKS_LETTER_e);
@@ -4899,27 +4899,19 @@ int daAlink_c::setStartProcInit() {
 int daAlink_c::create() {
     fopAcM_ct(this, daAlink_c);
 
-    static BOOL bgWaitFlg = FALSE;
-
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    // Phase 6: pending registry on first phase; secondaryBgWait / creatingOwner on later phases.
+#if TARGET_PC
+    // Every Link uses the create state belonging to its indexed player slot.
     dusk::coop::PlayerId coopOwner = 0;
-    bool isCoopSecondary = false;
+    bool usesStoryStart = true;
     if (dusk::coop::isCompiledIn()) {
-        if (dusk::coop::alink::secondaryBgWaitFlag()) {
-            coopOwner = dusk::coop::alink::creatingOwner();
-            if (coopOwner == 0) {
-                coopOwner = dusk::coop::forms::playerIdForLink(this);
-            }
-            isCoopSecondary = coopOwner != 0;
-        } else if (dusk::coop::alink::hasPendingSpawn()) {
-            coopOwner = dusk::coop::alink::peekPendingOwner();
-            isCoopSecondary = coopOwner != 0;
+        coopOwner = dusk::coop::alink::resolveOwner(this);
+        if (const auto* slot = dusk::coop::playerSlot(coopOwner)) {
+            usesStoryStart = slot->transitionAuthority;
         }
     }
-    BOOL& createWaitFlg =
-        isCoopSecondary ? dusk::coop::alink::secondaryBgWaitFlag() : bgWaitFlg;
+    BOOL& createWaitFlg = dusk::coop::alink::bgWaitFlag(coopOwner);
 #else
+    static BOOL bgWaitFlg = FALSE;
     BOOL& createWaitFlg = bgWaitFlg;
 #endif
 
@@ -4927,9 +4919,9 @@ int daAlink_c::create() {
     s32 startMode = getStartMode();
     s16 startPoint = dComIfGp_getStartStagePoint();
     BOOL isHorseStart = checkHorseStart(sceneMode, startMode);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (isCoopSecondary) {
-        // Secondary join places Link on known ground near P0 — skip story ride starts.
+#if TARGET_PC
+    if (!usesStoryStart) {
+        // Non-story participants use their explicit indexed spawn, not stage-start state.
         isHorseStart = FALSE;
         sceneMode = 0;
         startMode = 0;
@@ -4942,20 +4934,15 @@ int daAlink_c::create() {
                           && dComIfGp_roomControl_getStayNo() == 0
                           && dComIfG_play_c::getLayerNo(0) == 0
                           && current.pos.y > 7500.0f;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (isCoopSecondary) {
+#if TARGET_PC
+    if (!usesStoryStart) {
         isEnteringLV7 = FALSE;
     }
 #endif
 
     if (!createWaitFlg) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (isCoopSecondary) {
-            dusk::coop::alink::setCreatingOwner(coopOwner);
-            // Sidecar only — never touch mPlayerInfo[0] / LINK_PTR.
-            dusk::coop::setPlayerActor(coopOwner, this);
-            // Keep pending until createWait is set so retries still see secondary.
-        }
+#if TARGET_PC
+        dusk::coop::setPlayerActor(coopOwner, this);
 #endif
         #if DEBUG
         if (g_playerKind == 2) {
@@ -4969,33 +4956,30 @@ int daAlink_c::create() {
         } else
         #endif
         // Event Flag: Finished Sewers
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (!isCoopSecondary)
+#if TARGET_PC
+        if (usesStoryStart)
 #endif
         if (checkCasualWearFlg() && dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[47])) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_KOKIRI_e);
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (!isCoopSecondary)
+#if TARGET_PC
+        if (usesStoryStart)
 #endif
         if (isEnteringLV7 && checkMagicArmorHeavy()) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_KOKIRI_e);
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (!isCoopSecondary) {
-            dComIfGp_setPlayer(0, this);
-            dComIfGp_setLinkPlayer(this);
-        }
+#if TARGET_PC
+        dusk::coop::setPlayerActor(coopOwner, this);
 #else
         dComIfGp_setPlayer(0, this);
         dComIfGp_setLinkPlayer(this);
 #endif
         fopAcM_setStageLayer(&LEAFDRAW_BASE(this));
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (!isCoopSecondary)
+#if TARGET_PC
+        if (usesStoryStart)
 #endif
         if (sceneMode == 7) {
             current.pos = dComIfGs_getTurnRestartPos();
@@ -5003,8 +4987,8 @@ int daAlink_c::create() {
             current.angle.y = shape_angle.y;
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (isCoopSecondary) {
+#if TARGET_PC
+        if (!usesStoryStart) {
             attention_info.position.y = current.pos.y + 150.0f;
         } else
 #endif
@@ -5062,32 +5046,27 @@ int daAlink_c::create() {
         heapSize |= 0x40000000;
 
         if (!fopAcM_entrySolidHeap(this, daAlink_createHeap, heapSize)) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-            if (isCoopSecondary) {
-                dusk::coop::alink::setCreatingOwner(0);
-                dusk::coop::alink::clearPendingSpawn();
-            }
+#if TARGET_PC
+            dusk::coop::alink::clearSpawn(coopOwner);
 #endif
             return cPhs_ERROR_e;
         }
 
         mAttention = dComIfGp_getAttention();
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        field_0x317c = isCoopSecondary ? static_cast<int>(coopOwner) : dComIfGp_getPlayerCameraID(0);
+#if TARGET_PC
+        field_0x317c = dComIfGp_getPlayerCameraID(coopOwner);
 #else
         field_0x317c = dComIfGp_getPlayerCameraID(0);
 #endif
 
         playerInit();
         createWaitFlg = TRUE;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (isCoopSecondary) {
-            (void)dusk::coop::alink::consumePendingOwner();
-        }
+#if TARGET_PC
+        // Ownership stays bound via process id until markSpawnComplete at the end.
 #endif
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (isCoopSecondary) {
+#if TARGET_PC
+        if (!usesStoryStart) {
             mRideActorID = fpcM_ERROR_PROCESS_ID_e;
         } else
 #endif
@@ -5105,8 +5084,8 @@ int daAlink_c::create() {
     mLinkAcch.CrrPos(dComIfG_Bgsp());
     void* portalActor = NULL;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (isCoopSecondary) {
+#if TARGET_PC
+    if (!usesStoryStart) {
         if (mLinkAcch.GetGroundH() == -G_CM3D_F_INF) {
             return cPhs_INIT_e;
         }
@@ -5132,8 +5111,8 @@ int daAlink_c::create() {
 
     createWaitFlg = FALSE;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (!isCoopSecondary)
+#if TARGET_PC
+    if (usesStoryStart)
 #endif
     {
         dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());
@@ -5210,8 +5189,8 @@ int daAlink_c::create() {
     l_jumpTop = 0.0f;
     #endif
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (!isCoopSecondary)
+#if TARGET_PC
+    if (usesStoryStart)
 #endif
     {
         fopAcM_create(fpcNm_MIDNA_e, midna_prm, &current.pos, fopAcM_GetRoomNo(this), &shape_angle,
@@ -5234,12 +5213,9 @@ int daAlink_c::create() {
         }
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (isCoopSecondary) {
-        dusk::coop::alink::onSecondaryCreated(coopOwner, this);
-        dusk::coop::alink::setCreatingOwner(0);
-        dusk::coop::player::onSecondaryLinkReady(coopOwner);
-    }
+#if TARGET_PC
+    dusk::coop::alink::onLinkCreated(coopOwner, this);
+    dusk::coop::player::onLinkReady(coopOwner);
 #endif
 
     return cPhs_COMPLEATE_e;
@@ -9569,15 +9545,19 @@ void daAlink_c::setStickData() {
         BOOL usingFishRod = checkFishingRodAndLureItem()
                             && mItemAcKeep.getActor() != NULL
                             && (checkCanoeRide() || mProcID == PROC_FISHING_CAST);
+#if TARGET_PC
+        bool usedIndexedInput = false;
+#endif
 
         if (usingFishRod) {
             dmg_rod_class* mg_rod = (dmg_rod_class*)mItemAcKeep.getActor();
             mStickValue = JMAFastSqrt(SQUARE(mg_rod->getRodStickX()) + SQUARE(mg_rod->getRodStickY()));
             mStickAngle = cM_atan2s(-mg_rod->getRodStickX(), mg_rod->getRodStickY());
         }
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        else if (dusk::coop::isEnabled() && dusk::coop::alink::applyInputSnapshot(this)) {
-            // Stick + item buttons filled from PlayerInputSnapshot for secondary Links.
+#if TARGET_PC
+        else if (dusk::coop::isEnabled() &&
+                 (usedIndexedInput = dusk::coop::alink::applyInputSnapshot(this))) {
+            // Stick + item buttons come from the owning player's indexed input snapshot.
         }
 #endif
         else {
@@ -9586,7 +9566,20 @@ void daAlink_c::setStickData() {
         }
 
         mMoveValue = mStickValue;
+#if TARGET_PC
+        // Resolve camera ownership at the point movement is calculated.
+        int moveCameraId = field_0x317c;
+        if (dusk::coop::isEnabled()) {
+            const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+            moveCameraId = dComIfGp_getPlayerCameraID(owner);
+            field_0x317c = moveCameraId;
+        }
+        camera_process_class* moveCamera = dComIfGp_getCamera(moveCameraId);
+        mMoveAngle = mStickAngle +
+                     (moveCamera != nullptr ? dCam_getControledAngleY(moveCamera) : 0);
+#else
         mMoveAngle = mStickAngle + dCam_getControledAngleY(dComIfGp_getCamera(field_0x317c));
+#endif
 
         if (checkMagneBootsOn()) {
             if (field_0x2fb9 == 1 ||
@@ -9608,8 +9601,8 @@ void daAlink_c::setStickData() {
             field_0x2fb9 = 1;
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (!(dusk::coop::isEnabled() && dusk::coop::alink::isSecondaryLink(this)))
+#if TARGET_PC
+        if (!usedIndexedInput)
 #endif
         {
             if (mDoCPd_c::getTrigB(PAD_1)) {
@@ -17992,7 +17985,18 @@ int daAlink_c::execute() {
         mSwordUpTimer--;
     }
 
+#if TARGET_PC
+    // Every Link keeps its owner's camera id; resetting to camera 0 made Links share
+    // look/attention and froze movement yaw until another player moved.
+    if (dusk::coop::isEnabled()) {
+        const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+        field_0x317c = dComIfGp_getPlayerCameraID(owner);
+    } else {
+        field_0x317c = dComIfGp_getPlayerCameraID(0);
+    }
+#else
     field_0x317c = dComIfGp_getPlayerCameraID(0);
+#endif
     field_0x3510 = current.pos;
 
     if (checkMagneBootsOn()) {
@@ -20034,17 +20038,13 @@ daAlink_c::~daAlink_c() {
 
     dKy_plight_cut(&mMagneBootsPlight);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (dusk::coop::alink::isSecondaryLink(this)) {
-        const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
-        if (owner != 0) {
-            dusk::coop::combat::unregisterPlayerActor(owner);
-            dusk::coop::setPlayerActor(owner, nullptr);
-        }
-    } else {
-        dComIfGp_setPlayer(0, NULL);
-        dComIfGp_setLinkPlayer(NULL);
+#if TARGET_PC
+    const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+    dusk::coop::combat::unregisterPlayerActor(owner);
+    if (dusk::coop::getPlayerActor(owner) == this) {
+        dusk::coop::setPlayerActor(owner, nullptr);
     }
+    dusk::coop::alink::clearLinkOwner(owner, this);
 #else
     dComIfGp_setPlayer(0, NULL);
     dComIfGp_setLinkPlayer(NULL);

@@ -15,7 +15,7 @@
 #include <cmath>
 #include <cstring>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "SSystem/SComponent/c_math.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
@@ -29,27 +29,39 @@
 
 namespace dusk::coop::player {
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 namespace {
 
 constexpr f32 kSoftSepRadius = 45.0f;
 constexpr f32 kSoftSepPush = 0.25f;
 constexpr f32 kSoftSepAuthorityMultiplier = 2.0f;
-constexpr f32 kTetherWarnDist = 800.0f;
-constexpr f32 kTetherTeleportDist = 1500.0f;
 constexpr f32 kSpawnOffset = 80.0f;
 
-struct ProxyMeta {
+struct LinkMeta {
     fpc_ProcID processId = fpcM_ERROR_PROCESS_ID_e;
     bool pendingRecreate = false;
     bool createRequested = false;
 };
 
-std::array<ProxyMeta, MAX_LOCAL_PLAYERS> g_meta{};
+std::array<LinkMeta, MAX_LOCAL_PLAYERS> g_meta{};
+
+static bool isStoryAuthority(PlayerId id) {
+    const auto* slot = playerSlot(id);
+    return slot != nullptr && slot->transitionAuthority;
+}
+
+static PlayerId storyAuthorityId() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (isStoryAuthority(id)) {
+            return id;
+        }
+    }
+    return 0;
+}
 
 static bool isPlayerAlive(PlayerId id) {
-    if (!isValidPlayer(id) || id == 0) {
+    if (!isValidPlayer(id)) {
         return false;
     }
     fopAc_ac_c* actor = getPlayerActor(id);
@@ -70,6 +82,73 @@ static void clearMeta(PlayerId id, bool keepPending) {
     const bool pending = keepPending && g_meta[id].pendingRecreate;
     g_meta[id] = {};
     g_meta[id].pendingRecreate = pending;
+}
+
+constexpr f32 kLinkEyeHeight = 150.0f;
+
+static void syncAttention(fopAc_ac_c* actor) {
+    if (actor == nullptr) {
+        return;
+    }
+    actor->eyePos = actor->current.pos;
+    actor->eyePos.y += kLinkEyeHeight;
+    actor->attention_info.position = actor->eyePos;
+}
+
+static int authorityRoom() {
+    fopAc_ac_c* authority = getPlayerActor(storyAuthorityId());
+    if (authority == nullptr) {
+        return 0;
+    }
+    return fopAcM_GetRoomNo(authority);
+}
+
+static bool tryPlaceNearAuthority(cXyz* outPos, s16* outYaw, PlayerId joiningId = 1) {
+    fopAc_ac_c* authority = getPlayerActor(storyAuthorityId());
+    if (authority == nullptr || outPos == nullptr || outYaw == nullptr) {
+        return false;
+    }
+
+    // Eight distinct offsets so joining players do not pile onto one spawn point.
+    static const cXyz kOffsets[] = {
+        {kSpawnOffset, 0.0f, 0.0f},
+        {-kSpawnOffset, 0.0f, 0.0f},
+        {0.0f, 0.0f, kSpawnOffset},
+        {0.0f, 0.0f, -kSpawnOffset},
+        {kSpawnOffset, 0.0f, kSpawnOffset},
+        {-kSpawnOffset, 0.0f, -kSpawnOffset},
+        {kSpawnOffset, 0.0f, -kSpawnOffset},
+        {-kSpawnOffset, 0.0f, kSpawnOffset},
+    };
+    constexpr size_t kOffsetCount = sizeof(kOffsets) / sizeof(kOffsets[0]);
+    const size_t startIdx = static_cast<size_t>(joiningId) % kOffsetCount;
+
+    const s16 yaw = authority->shape_angle.y;
+    for (size_t n = 0; n < kOffsetCount; ++n) {
+        const cXyz& local = kOffsets[(startIdx + n) % kOffsetCount];
+        cXyz world = local;
+        mDoMtx_stack_c::YrotS(yaw);
+        mDoMtx_stack_c::multVec(&world, &world);
+        world += authority->current.pos;
+        world.y += 50.0f;
+
+        if (!fopAcM_gc_c::gndCheck(&world)) {
+            continue;
+        }
+        const f32 groundY = fopAcM_gc_c::getGroundY();
+        if (groundY <= -G_CM3D_F_INF) {
+            continue;
+        }
+        world.y = groundY;
+        *outPos = world;
+        *outYaw = yaw;
+        return true;
+    }
+
+    *outPos = authority->current.pos;
+    outPos->x += kSpawnOffset;
+    *outYaw = yaw;
+    return true;
 }
 
 }  // namespace
@@ -93,28 +172,30 @@ static void syncCamerasForJoined() {
     render::setIncompatibleEffectsDisabled(true);
 
     // ── Multi-view tiled mode for 3+ players ──
+    // NOTE: tiled multi-pass scissors currently black the Metal world path; 2P must
+    // stay on dual-composite / same-camera (full-frame passes + L/R blit).
     if (span > 2) {
-        // Already set up — nothing to do each frame.
+        render::setDualCameraCompositeEnabled(false);
+        render::setSameCameraSplitEnabled(false);
+
         if (render::forcedViewCount() == span && runtime().activeViewCount == span) {
             return;
         }
 
-        bool secondaryPlayerReady = false;
         for (PlayerId i = 1; i < span; ++i) {
-            if (isJoined(i) && getPlayerActor(i) != nullptr) {
-                secondaryPlayerReady = true;
-                break;
+            if (!isJoined(i)) {
+                continue;
             }
-        }
-        if (!secondaryPlayerReady) {
-            runtime().activeViewCount = 1;
-            static bool sLoggedWait = false;
-            if (!sLoggedWait) {
-                debug::logInfo(
-                    "Co-op join: multi-view waiting for proxy actors before ensureCameras");
-                sLoggedWait = true;
+            if (getPlayerActor(i) == nullptr) {
+                runtime().activeViewCount = 1;
+                static bool sLoggedWait = false;
+                if (!sLoggedWait) {
+                    debug::logInfo(
+                        "Co-op join: multi-view waiting for secondary Links before ensureCameras");
+                    sLoggedWait = true;
+                }
+                return;
             }
-            return;
         }
 
         if (!camera::ensureCameras(span)) {
@@ -147,14 +228,12 @@ static void syncCamerasForJoined() {
     }
 
     // ── 2-player dual-camera composite path ──
-    // Docs (Task 02/03, Gate A→B): sim once; cameras via scheduler; painter binds
-    // matrices. ISSUE: calling ensureCameras before the proxy is in the player sidecar
-    // leaves cam1 stuck in init_phase2; creating too early also hit Z2 audio OOB on
-    // first draw. Same-camera L/R blit until dualCameraCompositeReady().
+    // Full-frame cam0 + cam1 renders, then L/R blit. Same-camera fallback until cam1
+    // finishes dCamera init (field_0xb0c). Do not use setForcedViewCount — that path
+    // blacks Metal's world draw while leaving the HUD visible.
     render::setForcedViewCount(0);
     render::setDualCameraCompositeEnabled(true);
 
-    // Already past Gate B handoff — nothing to do.
     if (render::dualCameraCompositeReady()) {
         return;
     }
@@ -172,7 +251,7 @@ static void syncCamerasForJoined() {
         static bool sLoggedWait = false;
         if (!sLoggedWait) {
             debug::logInfo(
-                "Co-op join: waiting for proxy actor before ensureCameras — same-camera fallback");
+                "Co-op join: waiting for secondary Link before ensureCameras — same-camera fallback");
             sLoggedWait = true;
         }
         return;
@@ -185,8 +264,7 @@ static void syncCamerasForJoined() {
     }
 
     if (!camera::ensureCameras(span)) {
-        debug::logError("Co-op join: ensureCameras(%u) failed — same-camera split fallback",
-                        span);
+        debug::logError("Co-op join: ensureCameras(%u) failed — same-camera split fallback", span);
         render::setSameCameraSplitEnabled(true);
         runtime().activeViewCount = 1;
         for (PlayerId i = 1; i < span; ++i) {
@@ -209,14 +287,13 @@ static void syncCamerasForJoined() {
         }
     }
 
-    // Keep same-camera until cam1's dCamera body is constructed (see camerasReadyForDual).
     render::setSameCameraSplitEnabled(true);
     debug::logInfo(
         "Co-op join: dual-camera requested (same-camera present until cam1 init completes)");
 }
 
 static void resolvePendingCreates() {
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         auto& meta = g_meta[id];
         if (!meta.createRequested || meta.processId == fpcM_ERROR_PROCESS_ID_e) {
             continue;
@@ -231,11 +308,14 @@ static void resolvePendingCreates() {
     }
 }
 
-static void recreatePendingProxies() {
-    if (getPlayerActor(0) == nullptr) {
+static void recreatePendingLinks() {
+    if (getPlayerActor(storyAuthorityId()) == nullptr) {
         return;
     }
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (isStoryAuthority(id)) {
+            continue;
+        }
         if (!g_meta[id].pendingRecreate || !isJoined(id)) {
             continue;
         }
@@ -243,31 +323,29 @@ static void recreatePendingProxies() {
             g_meta[id].pendingRecreate = false;
             continue;
         }
-        if (spawnSecondaryLinkNearAuthority(id)) {
+        if (spawnPlayerLinkNearAuthority(id)) {
             g_meta[id].pendingRecreate = false;
         }
     }
 }
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
-
-}  // namespace
+#endif  // TARGET_PC
 
 void init() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_meta = {};
 #endif
 }
 
 void reset() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    destroyAllSecondaryLinks();
+#if TARGET_PC
+    destroyNonAuthorityLinks();
     g_meta = {};
 #endif
 }
 
 void tick() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
     if (!isEnabled()) {
@@ -275,20 +353,23 @@ void tick() {
     }
 
     resolvePendingCreates();
-    recreatePendingProxies();
+    recreatePendingLinks();
 
-    // Cameras need the proxy in the player sidecar (init_phase2). Retry wiring after resolve.
+    // Cameras wait for their tracked Link to exist in the native player slot.
     if (runtime().joinedPlayerCount >= 2) {
         syncCamerasForJoined();
     }
 
-    // Soft separation + tether after proxy execute (same frame is fine; next frame settles).
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
+    // Keep overlapping player bodies apart without restricting how far they can travel.
+    const PlayerId authority = storyAuthorityId();
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (id == authority) {
+            continue;
+        }
         if (!isJoined(id) || !isPlayerAlive(id)) {
             continue;
         }
-        softSeparate(0, id);
-        tetherTeleportIfNeeded(id, 0);
+        softSeparate(authority, id);
         for (PlayerId other = id + 1; other < MAX_LOCAL_PLAYERS; ++other) {
             if (isJoined(other) && isPlayerAlive(other)) {
                 softSeparate(id, other);
@@ -298,21 +379,21 @@ void tick() {
 #endif
 }
 
-bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+bool spawnPlayerLink(PlayerId id, const cXyz& pos, s16 yaw) {
+#if !TARGET_PC
     (void)id;
     (void)pos;
     (void)yaw;
     return false;
 #else
-    if (!isEnabled() || id == 0 || !isValidPlayer(id)) {
+    if (!isEnabled() || !isValidPlayer(id) || isStoryAuthority(id)) {
         return false;
     }
     if (isPlayerAlive(id) || g_meta[id].createRequested) {
         return true;
     }
 
-    // Never write secondary players into the original one-slot player array.
+    // Register the slot before creating the actor so init can bind it to native player storage.
     if (auto* slot = playerSlot(id)) {
         slot->joined = true;
         slot->enabled = true;
@@ -332,7 +413,7 @@ bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw) {
         fpcLy_SetCurrentLayer(&reinterpret_cast<process_node_class*>(playScene)->layer);
     }
 
-    // Phase 6: real daAlink_c. Ownership via pending registry (not Link params).
+    // Phase 6+: real daAlink_c per co-op player (up to MAX_LOCAL_PLAYERS).
     alink::registerPendingSpawn(id);
     const fpc_ProcID pid =
         fopAcM_create(fpcNm_ALINK_e, 0xFFFF, 0, &pos, roomNo, &angle, nullptr, -1, nullptr);
@@ -342,11 +423,12 @@ bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw) {
     }
 
     if (pid == fpcM_ERROR_PROCESS_ID_e) {
-        alink::clearPendingSpawn();
-        debug::logError("spawnSecondaryLink: fopAcM_create(ALINK) failed for P%u", id);
+        alink::clearSpawn(id);
+        debug::logError("spawnPlayerLink: fopAcM_create(ALINK) failed for P%u", id);
         return false;
     }
 
+    alink::noteSpawnProcess(id, static_cast<u32>(pid));
     g_meta[id].processId = pid;
     g_meta[id].createRequested = true;
     g_meta[id].pendingRecreate = false;
@@ -361,20 +443,20 @@ bool spawnSecondaryLink(PlayerId id, const cXyz& pos, s16 yaw) {
     }
 
     syncCamerasForJoined();
-    debug::logInfo("Secondary Link P%u spawn requested (pid=%u)", id, static_cast<unsigned>(pid));
+    debug::logInfo("Link P%u spawn requested (pid=%u)", id, static_cast<unsigned>(pid));
     return true;
 #endif
 }
 
-bool spawnSecondaryLinkNearAuthority(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+bool spawnPlayerLinkNearAuthority(PlayerId id) {
+#if !TARGET_PC
     (void)id;
     return false;
 #else
     cXyz pos;
     s16 yaw = 0;
-    if (!tryPlaceNearAuthority(&pos, &yaw)) {
-        debug::logWarn("spawnSecondaryLinkNearAuthority: no authority player yet for P%u", id);
+    if (!tryPlaceNearAuthority(&pos, &yaw, id)) {
+        debug::logWarn("spawnPlayerLinkNearAuthority: no authority player yet for P%u", id);
         if (auto* slot = playerSlot(id)) {
             slot->joined = true;
             slot->enabled = true;
@@ -383,16 +465,16 @@ bool spawnSecondaryLinkNearAuthority(PlayerId id) {
         g_meta[id].pendingRecreate = true;
         return false;
     }
-    return spawnSecondaryLink(id, pos, yaw);
+    return spawnPlayerLink(id, pos, yaw);
 #endif
 }
 
-void destroySecondaryLink(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+void destroyPlayerLink(PlayerId id) {
+#if !TARGET_PC
     (void)id;
     return;
 #else
-    if (id == 0 || !isValidPlayer(id)) {
+    if (!isValidPlayer(id) || isStoryAuthority(id)) {
         return;
     }
 
@@ -403,7 +485,7 @@ void destroySecondaryLink(PlayerId id) {
     }
 
     if (actor != nullptr) {
-        // Leave sidecar until Alink destructor clears it (needs owner lookup).
+        // Leave the native slot registered until the Alink destructor resolves its owner.
         fopAcM_delete(actor);
     } else {
         setPlayerActor(id, nullptr);
@@ -411,26 +493,25 @@ void destroySecondaryLink(PlayerId id) {
     }
 
     if (auto* slot = playerSlot(id)) {
-        slot->actor = nullptr;
         slot->joined = false;
         slot->enabled = false;
         slot->view.reset();
     }
     clearMeta(id, /*keepPending=*/false);
-    if (alink::peekPendingOwner() == id) {
-        alink::clearPendingSpawn();
-    }
+    alink::clearSpawn(id);
 #endif
 }
 
-void destroyAllSecondaryLinks() {
-    for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
-        destroySecondaryLink(i);
+void destroyNonAuthorityLinks() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (!isStoryAuthority(id)) {
+            destroyPlayerLink(id);
+        }
     }
 }
 
 bool softSeparate(PlayerId a, PlayerId b) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)a;
     (void)b;
     return false;
@@ -455,11 +536,11 @@ bool softSeparate(PlayerId a, PlayerId b) {
         return false;
     }
     const f32 push = (kSoftSepRadius - distance) * kSoftSepPush;
-    // Authority (player 0) is immovable; secondary proxies take the full push.
-    if (a == 0) {
+    // Story authority is immovable; other players take the full push.
+    if (isStoryAuthority(a)) {
         actorB->current.pos += delta * (push * kSoftSepAuthorityMultiplier);
         syncAttention(actorB);
-    } else if (b == 0) {
+    } else if (isStoryAuthority(b)) {
         actorA->current.pos -= delta * (push * kSoftSepAuthorityMultiplier);
         syncAttention(actorA);
     } else {
@@ -472,66 +553,19 @@ bool softSeparate(PlayerId a, PlayerId b) {
 #endif
 }
 
-bool tetherTeleportIfNeeded(PlayerId follower, PlayerId authority) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
-    (void)follower;
-    (void)authority;
-    return false;
-#else
-    if (!isEnabled() || follower == 0 || authority != 0) {
-        return false;
-    }
-    fopAc_ac_c* proxy = getPlayerActor(follower);
-    fopAc_ac_c* auth = getPlayerActor(authority);
-    if (proxy == nullptr || auth == nullptr) {
-        return false;
-    }
-
-    cXyz delta = proxy->current.pos - auth->current.pos;
-    const f32 distance = delta.abs();
-    const bool roomMismatch = fopAcM_GetRoomNo(proxy) != fopAcM_GetRoomNo(auth);
-
-    if (distance > kTetherWarnDist && distance <= kTetherTeleportDist && !roomMismatch) {
-        // Soft pull toward authority.
-        delta.y = 0.0f;
-        if (delta.normalizeRS()) {
-            proxy->current.pos -= delta * 8.0f;
-            syncAttention(proxy);
-        }
-        return false;
-    }
-
-    if (distance <= kTetherTeleportDist && !roomMismatch) {
-        return false;
-    }
-
-    cXyz dest;
-    s16 yaw = 0;
-    if (!tryPlaceNearAuthority(&dest, &yaw)) {
-        return false;
-    }
-    proxy->current.pos = dest;
-    proxy->old.pos = dest;
-    proxy->home.pos = dest;
-    proxy->shape_angle.y = yaw;
-    proxy->current.angle.y = yaw;
-    proxy->speed.setall(0.0f);
-    proxy->speedF = 0.0f;
-    syncAttention(proxy);
-    debug::logInfo("Proxy P%u tether-teleported (dist=%.1f roomMismatch=%d)", follower, distance,
-                   roomMismatch ? 1 : 0);
-    return true;
-#endif
-}
-
 void onRoomUnload() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
-    // Destroy bodies but remember which joined players need a recreate after the next room loads.
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
-        const bool wasJoined = isJoined(id) || isPlayerAlive(id) || g_meta[id].pendingRecreate;
-        if (!wasJoined) {
+    // Stage teardown owns the story-authority actor; recreate every other joined actor.
+    if (!isEnabled()) {
+        return;
+    }
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (isStoryAuthority(id)) {
+            continue;
+        }
+        if (!isJoined(id) && !g_meta[id].pendingRecreate) {
             continue;
         }
 
@@ -541,13 +575,12 @@ void onRoomUnload() {
             actor = fopAcM_SearchByID(pid);
         }
         if (actor != nullptr) {
-            // Keep sidecar through fopAcM_delete so Alink destructor can resolve owner.
+            // Keep the native slot through fopAcM_delete so Alink can resolve its owner.
             fopAcM_delete(actor);
         }
         if (auto* slot = playerSlot(id)) {
-            // Destructor clears actor; force-clear if delete was a no-op.
-            if (slot->actor == actor) {
-                slot->actor = nullptr;
+            if (getPlayerActor(id) == actor) {
+                setPlayerActor(id, nullptr);
             }
             // Keep joined so Press-Start slot + input identity survive the transition.
             slot->joined = true;
@@ -561,28 +594,28 @@ void onRoomUnload() {
 }
 
 bool onPlayerJoined(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)id;
     return false;
 #else
-    if (!isValidPlayer(id) || id == 0) {
+    if (!isValidPlayer(id) || isStoryAuthority(id)) {
         return false;
     }
     if (!isEnabled()) {
         setEnabled(true);
     }
-    const bool spawned = spawnSecondaryLinkNearAuthority(id);
+    const bool spawned = spawnPlayerLinkNearAuthority(id);
     syncCamerasForJoined();
     return spawned || g_meta[id].pendingRecreate;
 #endif
 }
 
-void onSecondaryLinkReady(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+void onLinkReady(PlayerId id) {
+#if !TARGET_PC
     (void)id;
     return;
 #else
-    if (!isValidPlayer(id) || id == 0) {
+    if (!isValidPlayer(id)) {
         return;
     }
     g_meta[id].createRequested = false;
@@ -591,7 +624,7 @@ void onSecondaryLinkReady(PlayerId id) {
         g_meta[id].processId = fopAcM_GetID(actor);
     }
     syncCamerasForJoined();
-    debug::logInfo("Secondary Link P%u ready", id);
+    debug::logInfo("Link P%u ready", id);
 #endif
 }
 

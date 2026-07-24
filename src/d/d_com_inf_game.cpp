@@ -49,12 +49,17 @@ void dComIfG_play_c::init() {
         mPlayerInfo[i].mCameraID = -1;
     }
     for (int i = 0; i < ARRAY_SIZE(mCameraInfo); i++) {
-        mCameraInfo[i].mCamera = NULL;
+        mCameraInfo[i] = {};
+        mCameraInfo[i].field_0x4 = static_cast<s8>(i);
+        mCameraInfo[i].field_0x5 = static_cast<s8>(i);
+        mCameraInfo[i].field_0x6 = -1;
+        mCameraInfo[i].mCameraZoomScale = 1.0f;
+        mCameraInfo[i].mCameraZoomForcus = 1.0f;
     }
 
-    for (int i = 0; i < ARRAY_SIZE(mPlayerPtr); i++) {
-        mPlayerPtr[i] = NULL;
-    }
+    memset(mPlayerStatus, 0, sizeof(mPlayerStatus));
+
+    memset(mPlayerPtr, 0, sizeof(mPlayerPtr));
 
     if (mItemInfo.mGameoverStatus == 2) {
         dComIfGp_roomControl_initZone();
@@ -2902,7 +2907,7 @@ BOOL dComIfGs_wolfeye_effect_check() {
     dScnKy_env_light_c* env_light = dKy_getEnvlight();
     BOOL ret = false;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Per-view senses: reject when the active draw view's owner does not have senses.
     if (!dusk_coop_sensesActiveForCurrentView()) {
         return false;

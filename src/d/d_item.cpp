@@ -10,7 +10,7 @@
 #include "d/d_meter2_info.h"
 #include <cstring>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_bottles.h"
 #include "dusk/coop/coop_context.h"
@@ -891,7 +891,7 @@ void item_func_JEWEL_BEE_ROD() {}
 void item_func_JEWEL_WORM_ROD() {}
 
 void item_func_EMPTY_BOTTLE() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled()) {
         if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
                                                    dItemNo_EMPTY_BOTTLE_e)) {
@@ -919,7 +919,7 @@ void item_func_MILK_BOTTLE() {
 }
 
 void item_func_HALF_MILK_BOTTLE() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled()) {
         if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
                                                    dItemNo_HALF_MILK_BOTTLE_e)) {

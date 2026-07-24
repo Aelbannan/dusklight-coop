@@ -1,10 +1,10 @@
 # Implementation Roadmap
 
 ## Phase 1 — Safe co-op foundation
-- Add co-op sidecar runtime, indexed accessors, runtime assertions preventing invalid original-array indexing.
-- Preserve exact single-player path.
+- Expand core player, camera, window, status, and audio storage to eight native slots.
+- Use the same indexed engine path for every active player count.
 
-**Definition of done:** Co-op disabled behaves identically; sidecars exist; no code indexes original one-slot arrays with index one.
+**Definition of done:** One through eight players use the same native indexed storage and accessors.
 
 ## Phase 2 — Split-screen rendering
 - Render one world through two viewports (same camera).

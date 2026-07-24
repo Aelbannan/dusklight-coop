@@ -5,11 +5,11 @@
 Add compile and runtime gates:
 
 ```cmake
-CMake option: ENABLE_LOCAL_COOP
+CMake option: none; local co-op is part of every PC build
 ```
 
 ```cpp
-Compile guard: TARGET_PC && ENABLE_LOCAL_COOP
+Compile guard: TARGET_PC (only where a desktop input/render API is required)
 Runtime:       coop.enabled
 ```
 

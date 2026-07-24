@@ -18,7 +18,6 @@ struct CompanionPlayerPayload {
     u8 playerId = 0;
     u8 joined = 0;
     u8 lifeState = 0;
-    u8 pad0 = 0;
 
     s16 life = 0;
     s16 maxLife = 0;
@@ -41,9 +40,8 @@ struct CompanionPlayerPayload {
     u8 sword = 0;
     u8 shield = 0;
     u8 armor = 0;
-    // Gate I: secondary form in companion (0=human, 1=wolf). Not an authoritative P0 copy.
+    // Indexed form (0=human, 1=wolf).
     u8 form = 0;
-    u8 pad1[3]{};
 };
 #pragma pack(pop)
 
@@ -99,7 +97,7 @@ CompanionPlayerPayload packPlayer(PlayerId id) {
 }
 
 void unpackPlayer(const CompanionPlayerPayload& in) {
-    if (in.playerId == 0 || in.playerId >= MAX_LOCAL_PLAYERS) {
+    if (in.playerId >= MAX_LOCAL_PLAYERS) {
         return;
     }
     const PlayerId id = in.playerId;
@@ -152,16 +150,24 @@ bool writeFully(FILE* f, const void* src, size_t n) {
     return std::fwrite(src, 1, n, f) == n;
 }
 
+PlayerId storyAuthority() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+            return id;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 void init() {}
 void reset() {}
 
 bool loadCompanion(const char* path) {
-    // Always refresh P0 from the original save first — companion must never
-    // become authority for Player 0 or global unlocks.
-    inventory::syncPlayer0FromSave();
-    inventory::syncLoadout0FromSave();
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        inventory::syncPlayerFromSave(id);
+    }
     inventory::refreshGlobalItemsFromSave();
     bottles::syncUnlockedFromSave();
 
@@ -199,11 +205,8 @@ bool loadCompanion(const char* path) {
         return false;
     }
 
-    // Payload stores players 1..N-1 only (no Player 0 duplication).
-    const u8 secondaryCount =
-        header.playerCount > 0 ? static_cast<u8>(header.playerCount - 1) : 0;
-    const u32 expectedPayload =
-        static_cast<u32>(sizeof(CompanionPlayerPayload) * secondaryCount);
+    const u8 storedCount = header.playerCount;
+    const u32 expectedPayload = static_cast<u32>(sizeof(CompanionPlayerPayload) * storedCount);
     if (header.payloadSize != expectedPayload) {
         std::fclose(f);
         recoverCorruptCompanion("payload size mismatch");
@@ -229,24 +232,24 @@ bool loadCompanion(const char* path) {
         return false;
     }
 
-    for (u8 i = 0; i < secondaryCount; ++i) {
+    for (u8 i = 0; i < storedCount; ++i) {
         CompanionPlayerPayload entry{};
         std::memcpy(&entry, payload.data() + i * sizeof(CompanionPlayerPayload),
                     sizeof(CompanionPlayerPayload));
-        if (entry.playerId == 0 || entry.playerId >= MAX_LOCAL_PLAYERS) {
+        if (entry.playerId >= MAX_LOCAL_PLAYERS) {
             recoverCorruptCompanion("bad player id in payload");
             return false;
         }
         unpackPlayer(entry);
     }
 
-    // Any joined secondary not present in the file is initialized from global progression.
-    for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
+    // Any joined player not present in the file is initialized from global progression.
+    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         if (!isJoined(i)) {
             continue;
         }
         bool found = false;
-        for (u8 j = 0; j < secondaryCount; ++j) {
+        for (u8 j = 0; j < storedCount; ++j) {
             CompanionPlayerPayload entry{};
             std::memcpy(&entry, payload.data() + j * sizeof(CompanionPlayerPayload),
                         sizeof(CompanionPlayerPayload));
@@ -256,11 +259,12 @@ bool loadCompanion(const char* path) {
             }
         }
         if (!found) {
-            inventory::initSecondaryFromGlobal(i);
+            inventory::initPlayerFromProgression(i);
         }
     }
 
-    debug::logInfo("companion save loaded (%s): secondaries=%u", path, secondaryCount);
+    inventory::syncPlayerToSave(storyAuthority());
+    debug::logInfo("multiplayer save loaded (%s): players=%u", path, storedCount);
     return true;
 }
 
@@ -269,28 +273,25 @@ bool saveCompanion(const char* path) {
         return false;
     }
 
-    // Player 0 remains authoritative in the original save (vanilla dComIfGs_* path).
-    // Refresh the P0 sidecar cache for any runtime readers; do not clobber original fields.
-    inventory::syncPlayer0FromSave();
-    inventory::syncLoadout0FromSave();
+    // Mirror the designated story authority into the vanilla save payload.
+    inventory::syncPlayerToSave(storyAuthority());
 
-    std::vector<CompanionPlayerPayload> secondaries;
-    secondaries.reserve(MAX_LOCAL_PLAYERS - 1);
-    for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
+    std::vector<CompanionPlayerPayload> players;
+    players.reserve(MAX_LOCAL_PLAYERS);
+    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         if (!isJoined(i)) {
             continue;
         }
-        secondaries.push_back(packPlayer(i));
+        players.push_back(packPlayer(i));
     }
 
     CompanionHeader header{};
     header.magic = COMPANION_SAVE_MAGIC;
     header.version = COMPANION_SAVE_VERSION;
-    header.playerCount = static_cast<u8>(1 + secondaries.size());
-    header.payloadSize = static_cast<u32>(sizeof(CompanionPlayerPayload) * secondaries.size());
+    header.playerCount = static_cast<u8>(players.size());
+    header.payloadSize = static_cast<u32>(sizeof(CompanionPlayerPayload) * players.size());
     header.payloadCrc =
-        secondaries.empty() ? 0
-                            : crc32(secondaries.data(), secondaries.size() * sizeof(CompanionPlayerPayload));
+        players.empty() ? 0 : crc32(players.data(), players.size() * sizeof(CompanionPlayerPayload));
 
     FILE* f = std::fopen(path, "wb");
     if (f == nullptr) {
@@ -299,9 +300,8 @@ bool saveCompanion(const char* path) {
     }
 
     bool ok = writeFully(f, &header, sizeof(header));
-    if (ok && !secondaries.empty()) {
-        ok = writeFully(f, secondaries.data(),
-                        secondaries.size() * sizeof(CompanionPlayerPayload));
+    if (ok && !players.empty()) {
+        ok = writeFully(f, players.data(), players.size() * sizeof(CompanionPlayerPayload));
     }
     std::fclose(f);
 
@@ -310,21 +310,20 @@ bool saveCompanion(const char* path) {
         return false;
     }
 
-    debug::logInfo("companion save written (%s): secondaries=%zu", path, secondaries.size());
+    debug::logInfo("multiplayer save written (%s): players=%zu", path, players.size());
     return true;
 }
 
 void recoverMissingCompanion() {
     debug::logWarn(
-        "coop companion save missing; initializing secondary players from global progression");
-    inventory::syncPlayer0FromSave();
+        "multiplayer save missing; initializing joined players from global progression");
     inventory::refreshGlobalItemsFromSave();
     bottles::syncUnlockedFromSave();
-    for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
+    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         if (!isJoined(i)) {
             continue;
         }
-        inventory::initSecondaryFromGlobal(i);
+        inventory::initPlayerFromProgression(i);
     }
 }
 

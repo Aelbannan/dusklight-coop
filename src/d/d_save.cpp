@@ -29,6 +29,7 @@
 
 #if TARGET_PC
 #include "dusk/settings.h"
+#include "dusk/coop/coop_inventory.h"
 #include <f_ap/f_ap_game.h>
 
 #include "helpers/string.hpp"
@@ -1506,9 +1507,21 @@ void dSv_info_c::init() {
     initZone();
     mTmp.init();
 
+#if TARGET_PC
+    // The indexed runtime exists before the canonical save is initialized.
+    dusk::coop::inventory::syncAllFromSave();
+#endif
+
 #if DEBUG
     unk_0x0 = 0;
     unk_0x1 = 0;
+#endif
+}
+
+void dSv_info_c::setSavedata(dSv_save_c& i_save) {
+    mSavedata = i_save;
+#if TARGET_PC
+    dusk::coop::inventory::syncAllFromSave();
 #endif
 }
 
@@ -1874,6 +1887,10 @@ int dSv_info_c::card_to_memory(char* i_cardPtr, int i_dataNum) {
     memcpy(pSave, i_cardPtr, sizeof(dSv_save_c));
     i_cardPtr += sizeof(dSv_save_c);
 
+#if TARGET_PC
+    dusk::coop::inventory::syncAllFromSave();
+#endif
+
 #if PLATFORM_GCN
     if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
         dComIfGs_setOptSound(OS_SOUND_MODE_MONO);
@@ -1905,6 +1922,11 @@ int dSv_info_c::card_to_memory(char* i_cardPtr, int i_dataNum) {
     dComIfGs_setLineUpItem();
     dComIfGp_setNowVibration(savedata->getPlayer().getConfig().getVibration());
     dMeter2Info_setSaveStageName(g_dComIfG_gameInfo.info.getPlayer().getPlayerReturnPlace().getName());
+
+#if TARGET_PC
+    // Capture the minimum-life and compatibility normalization above.
+    dusk::coop::inventory::syncAllFromSave();
+#endif
 
     OS_REPORT("########### save stage ====> %s\n", dMeter2Info_getSaveStageName());
     if (i_cardPtr - var_r30 > (QUEST_LOG_SIZE - 8)) {

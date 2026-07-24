@@ -58,7 +58,7 @@
 #include "dusk/imgui/ImGuiConsole.hpp"
 #include "dusk/logging.h"
 #include "dusk/settings.h"
-#if defined(ENABLE_LOCAL_COOP)
+#if TARGET_PC
 #include "dusk/coop/coop_render.h"
 #endif
 #endif
@@ -2259,7 +2259,7 @@ int mDoGph_Painter() {
     #endif
 
     if (dComIfGp_getWindowNum() != 0) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         // Gate A: consume the same draw lists once per tiled view without re-simulating.
         dusk::coop::render::drawViews();
         const u8 coopViewPasses = dusk::coop::render::worldDrawPassCount();
@@ -2267,7 +2267,7 @@ int mDoGph_Painter() {
         const u8 coopViewPasses = 1;
 #endif
         for (u8 coopViewPass = 0; coopViewPass < coopViewPasses; ++coopViewPass) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
             dusk::coop::render::ScopedWorldDrawPass scopedViewPass(coopViewPass);
             dDlst_window_c* window_p = dusk::coop::render::resolveWindow(coopViewPass);
             camera_process_class* camera_p = dusk::coop::render::resolveCamera(coopViewPass);
@@ -2307,7 +2307,7 @@ int mDoGph_Painter() {
             view_port_class* view_port = window_p->getViewPort();
 
             if (view_port->x_orig != 0.0f || view_port->y_orig != 0.0f) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
                 // Multi-view uses intentional non-zero origins; do not expand to full FB.
                 if (!dusk::coop::render::isMultiViewActive())
 #endif
@@ -2334,7 +2334,7 @@ int mDoGph_Painter() {
             GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
                          view_port->height);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
             f32 coopViewAspect = camera_p->view.aspect;
             Mtx44 coopProjMtx;
             const Mtx44* coopProj = &camera_p->view.projMtx;
@@ -2392,7 +2392,7 @@ int mDoGph_Painter() {
             dComIfGp_setCurrentWindow(window_p);
             dComIfGp_setCurrentView(&camera_p->view);
             dComIfGp_setCurrentViewport(view_port);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
             GXSetProjection(*coopProj, GX_PERSPECTIVE);
 #else
             GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
@@ -2680,7 +2680,7 @@ int mDoGph_Painter() {
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
                 // Multi-view / dual composite: submit 3D-last while viewport still owns this pass.
                 if (dusk::coop::render::isMultiViewActive()) {
                     GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
@@ -2763,7 +2763,7 @@ int mDoGph_Painter() {
                 }
                 #endif
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
                 if (!dusk::coop::render::isMultiViewActive())
 #endif
                 {
@@ -2815,7 +2815,7 @@ int mDoGph_Painter() {
         }  // coopViewPass
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Gate B: dual full-frame captures → L/R composite.
     // Gate A: same-camera L/R blit fallback.
     // Multi-view tiled: EFB already has tiled viewports; neither present is needed.
@@ -2834,7 +2834,7 @@ int mDoGph_Painter() {
 
     #if TARGET_PC
     if (dusk::getSettings().game.enableMirrorMode
-#if defined(ENABLE_LOCAL_COOP)
+#if TARGET_PC
         && !dusk::coop::render::shouldSkipEffect(
                dusk::coop::render::IncompatibleEffect::MirrorModeCopy)
 #endif

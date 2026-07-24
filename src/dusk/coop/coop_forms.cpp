@@ -8,6 +8,8 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_save.h"
+#include "f_op/f_op_actor_mng.h"
+#include "f_pc/f_pc_name.h"
 
 #include <array>
 #include <cstring>
@@ -31,6 +33,15 @@ void syncFormFromLink(PlayerId id, daAlink_c* link) {
     }
 }
 
+PlayerId storyAuthorityId() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (const auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+            return id;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 void init() {
@@ -52,13 +63,15 @@ void tick() {
         return;
     }
 
-    // Keep P0 sidecar aligned with the live Link actor flag.
-    if (auto* link = daAlink_getAlinkActorClass()) {
-        syncFormFromLink(0, link);
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        fopAc_ac_c* actor = getPlayerActor(id);
+        if (actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+            syncFormFromLink(id, static_cast<daAlink_c*>(actor));
+        }
     }
-    syncSensesFromAuthorityLink();
+    syncSensesFromLinks();
 
-    // Apply stage Force* softly to sidecar desired form (visual transform still needs Link).
+    // Apply stage Force* to indexed desired form state.
     if (g_stage.rule == FormRule::ForceWolf || g_stage.rule == FormRule::ForceHuman) {
         const PlayerForm forced =
             (g_stage.rule == FormRule::ForceWolf) ? PlayerForm::Wolf : PlayerForm::Human;
@@ -89,10 +102,9 @@ bool isWolf(PlayerId id) {
     if (!isValidPlayer(id)) {
         return false;
     }
-    if (id == 0) {
-        if (auto* link = daAlink_getAlinkActorClass()) {
-            return link->checkWolf() != 0;
-        }
+    fopAc_ac_c* actor = getPlayerActor(id);
+    if (actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(actor)->checkWolf() != 0;
     }
     return state(id).current == PlayerForm::Wolf;
 }
@@ -105,6 +117,14 @@ bool isCurrentContextPlayerWolf() {
 }
 
 bool isStoryAuthorityWolf() {
+    if (isCompiledIn()) {
+        const PlayerId authority = storyAuthorityId();
+        if (fopAc_ac_c* actor = getPlayerActor(authority);
+            actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+            return static_cast<daAlink_c*>(actor)->checkWolf() != 0;
+        }
+        return dComIfGs_getTransformStatus() == TF_STATUS_WOLF;
+    }
     if (auto* link = daAlink_getAlinkActorClass()) {
         return link->checkWolf() != 0;
     }
@@ -139,14 +159,18 @@ bool beginTransform(PlayerId id, PlayerForm form) {
     s.phase = (form == PlayerForm::Wolf) ? TransformPhase::ToWolf : TransformPhase::ToHuman;
     writeTransformSaveIfAuthority(id, form);
 
-    // Gate D proxy cannot run changeWolf — complete sidecar-only for secondaries so
-    // concurrent form *state* is demonstrable; visual wolf body remains a blocker.
-    if (id != 0) {
-        onTransformComplete(id);
-        debug::logInfo(
-            "forms: P%u sidecar transform -> %s (proxy has no changeWolf; visual deferred)", id,
-            form == PlayerForm::Wolf ? "wolf" : "human");
+    if (fopAc_ac_c* actor = getPlayerActor(id);
+        actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+        auto* link = static_cast<daAlink_c*>(actor);
+        if (form == PlayerForm::Wolf) {
+            link->changeWolf();
+        } else {
+            link->changeLink(1);
+        }
+        return true;
     }
+    debug::logInfo("forms: P%u transform queued (%s) — Link not ready", id,
+                   form == PlayerForm::Wolf ? "wolf" : "human");
     return true;
 }
 
@@ -167,14 +191,12 @@ void writeTransformSaveIfAuthority(PlayerId id, PlayerForm form) {
     auto& s = state(id);
     s.desired = form;
 
-    if (id != 0) {
-        // Secondary players must not write dComIfGs_setTransformStatus.
-        debug::logInfo("forms: P%u skip global transform save write (sidecar only)", id);
+    auto* player = playerSlot(id);
+    if (player == nullptr || !player->transitionAuthority) {
         return;
     }
 
-    // Player 0: write the original global transform save field.
-    // Call the underlying setter directly to avoid re-entering the co-op divert.
+    // The vanilla save has one story-form field; mirror the configured authority into it.
     g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().setTransformStatus(
         form == PlayerForm::Wolf ? TF_STATUS_WOLF : TF_STATUS_HUMAN);
 }
@@ -200,7 +222,7 @@ PlayerId playerIdForActor(const fopAc_ac_c* actor) {
             return id;
         }
     }
-    // Unmapped Link-like actors default to story authority (P0).
+    // Unmapped Link-like actors default to the first engine slot.
     return 0;
 }
 
@@ -232,12 +254,15 @@ void setSenses(PlayerId id, bool active) {
     }
 }
 
-void syncSensesFromAuthorityLink() {
-    auto* link = daAlink_getAlinkActorClass();
-    if (link == nullptr) {
-        return;
+void syncSensesFromLinks() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        fopAc_ac_c* actor = getPlayerActor(id);
+        if (actor == nullptr || fopAcM_GetName(actor) != fpcNm_ALINK_e) {
+            continue;
+        }
+        auto* link = static_cast<daAlink_c*>(actor);
+        setSenses(id, link->checkWolfEyeUp() != 0 && link->checkWolf() != 0);
     }
-    setSenses(0, link->checkWolfEyeUp() != 0 && link->checkWolf() != 0);
 }
 
 FormRule stageRule() { return g_stage.rule; }
@@ -314,7 +339,7 @@ void restoreFormsAfterForcedDemo() {
 
 }  // namespace dusk::coop::forms
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 extern "C" {
 
@@ -336,11 +361,11 @@ int dusk_coop_checkNowWolfEyeUp(void) {
         return link != nullptr ? link->checkWolfEyeUp() : 0;
     }
     const dusk::coop::PlayerId id = dusk::coop::currentPlayer();
-    if (id == 0) {
-        daAlink_c* link = daAlink_getAlinkActorClass();
-        return link != nullptr ? link->checkWolfEyeUp() : 0;
+    // Prefer the real Link's state; use indexed state while its actor is unavailable.
+    if (fopAc_ac_c* actor = dusk::coop::getPlayerActor(id);
+        actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(actor)->checkWolfEyeUp();
     }
-    // Secondary: sidecar senses flag (proxy has no mWolfEyeUp).
     return dusk::coop::forms::sensesActiveForPlayer(id) ? 1 : 0;
 }
 
@@ -352,12 +377,12 @@ int dusk_coop_trySetTransformStatus(u8 status) {
     const dusk::coop::PlayerForm form =
         (status == TF_STATUS_WOLF) ? dusk::coop::PlayerForm::Wolf : dusk::coop::PlayerForm::Human;
     dusk::coop::forms::writeTransformSaveIfAuthority(id, form);
-    // Always handled under co-op so secondary never falls through to the global write.
+    // Indexed form state owns the write; only the configured story authority mirrors it.
     return 1;
 }
 
 u8 dusk_coop_getTransformStatusForQuery(void) {
-    // GLOBAL_UNLOCK / stage-start reads stay on the original save (Player 0 authority).
+    // Global progression / stage-start reads use the story-authority save mirror.
     return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA().getTransformStatus();
 }
 
@@ -370,4 +395,4 @@ int dusk_coop_sensesActiveForCurrentView(void) {
 
 }
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

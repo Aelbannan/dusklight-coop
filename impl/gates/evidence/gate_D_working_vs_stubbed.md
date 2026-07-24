@@ -6,7 +6,7 @@
 
 | Item | Notes |
 |------|-------|
-| `daCoopProxy_c` process actor | `fpcNm_COOP_PROXY_e` + `g_profile_COOP_PROXY` (PC / `ENABLE_LOCAL_COOP`) |
+| `daCoopProxy_c` process actor | `fpcNm_COOP_PROXY_e` + `g_profile_COOP_PROXY` (PC / local co-op support) |
 | Spawn / destroy / recreate | `spawnProxy` / `destroyProxy` / `onRoomUnload` pending recreate |
 | Press-Start join → proxy | `input::tryJoinFromStartPress` → `player::onPlayerJoined` |
 | Snapshot-driven move | Left stick via `input::snapshot(id)`; not raw `mDoCPd` for the proxy |

@@ -44,7 +44,7 @@
 | Bow grant starter ammo for all joined | `item_func_BOW` still writes P0 arrow count; late joiners get starter via `initSecondaryFromGlobal` |
 | Select-item loadout hot path | P0 loadout sync exists; live divert of `getSelectItemIndex` for P1+ not wired yet (equip-same-item OK via global `mItems` + per-player loadout storage) |
 | Save-menu integration | Callers must invoke `save::loadCompanion` / `saveCompanion` beside original card save (path convention: `slot-N-save.coop`) |
-| In-game verification | Needs `ENABLE_LOCAL_COOP=ON` two-player session |
+| In-game verification | Needs a normal PC build two-player session |
 
 ### Key save field map
 
@@ -66,7 +66,7 @@
 
 ## Test plan
 
-1. Build with `-DENABLE_LOCAL_COOP=ON` (PC).
+1. Build with a normal PC build (PC).
 2. Load a vanilla save with **no** `.coop` file → P0 resources match save; joining P1 gets empty bottles for unlocked slots, starter ammo if bow unlocked, not P0's rupee/arrow stacks.
 3. P0 spend arrows/rupees → original save fields change after `syncPlayer0ToSave` / natural `dComIfGs_set*`.
 4. Under `ScopedContext` for P1, spend arrows/rupees → P0 counts unchanged.

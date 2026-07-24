@@ -2,10 +2,6 @@
 
 #include "dusk/coop/coop_types.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-#include "dusk/coop/coop_camera_bridge.h"
-#endif
-
 namespace dusk::coop::camera {
 
 void init();

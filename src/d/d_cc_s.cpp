@@ -12,7 +12,7 @@
 #if TARGET_PC
 #include "dusk/settings.h"
 #endif
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_combat.h"
 #endif
@@ -540,7 +540,7 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
     dCcD_GStts* at_gstts = (dCcD_GStts*)i_atGStts;
     dCcD_GStts* tg_gstts = (dCcD_GStts*)i_tgGStts;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     bool coop_contact_only = false;
     if (dusk::coop::isEnabled()) {
         // Re-evaluate so ContactNoDamage sets suppress flag for this hit.
@@ -590,7 +590,7 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
         if (chk_shield) {
             tgObjInf->OnTgShieldHit();
         } else {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
             if (!coop_contact_only)
 #endif
             {
@@ -628,7 +628,7 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
                         at_gstts, tg_gstts, i_hitPos, chk_shield);
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled()) {
         dusk::coop::combat::popAttackCutType();
     }
@@ -924,7 +924,7 @@ bool dCcS::ChkNoHitGAtTg(cCcD_GObjInf const* i_atObjInf, cCcD_GObjInf const* i_t
     dCcD_GObjInf* atObjInf = (dCcD_GObjInf*)i_atObjInf;
     dCcD_GObjInf* tgObjInf = (dCcD_GObjInf*)i_tgObjInf;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled()) {
         if (dusk::coop::combat::shouldBlockAtTgCompletely(atObjInf->GetAc(), tgObjInf->GetAc())) {
             return true;  // FriendlyFireMode::Ignore

@@ -55,7 +55,7 @@
 
 ## How to test
 
-1. Build with `-DENABLE_LOCAL_COOP=ON` (PC).
+1. Build with a normal PC build (PC).
 2. **SP regression:** co-op disabled — sword damage, fairy revive, and game over unchanged.
 3. Join P1 (Press Start). Confirm proxy registers in combat overlay / logs.
 4. **Cut type:** With two players, have P0 land a Helm Splitter (`CUT_TYPE_HEAD_JUMP`) while a second hit context is active — enemy hit direction / cut bits should follow the attributed attacker (check via `resolvedCutType` / enemy reaction).

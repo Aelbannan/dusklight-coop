@@ -58,7 +58,7 @@
 
 ## How to test
 
-1. Build with `-DENABLE_LOCAL_COOP=ON` (PC). Confirm log: `gate_H: Q16 + snapshot self-checks passed`.
+1. Build with a normal PC build (PC). Confirm log: `gate_H: Q16 + snapshot self-checks passed`.
 2. **SP regression:** co-op off / 1p Normal — enemy drops and Armos HP unchanged.
 3. Set Veteran (`difficulty::setProfile`), join P1, enter Armos room:
    - Log `drops: encounter begin …` with frozen party size and budget.

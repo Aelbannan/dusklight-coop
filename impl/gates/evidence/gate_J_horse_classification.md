@@ -1,7 +1,7 @@
 # Gate J Evidence — Horse Query Call-Site Classification
 
 Audit of `dComIfGp_getHorseActor` / `setHorseActor` / `dComIfGs_*HorseRestart*` / horse-self callbacks.
-Compat routing: when `ENABLE_LOCAL_COOP` and co-op enabled, `dComIfGp_getHorseActor()` → `dusk::coop::horses::resolveForContext()` (mounted if available, else owned for `currentPlayer()`; ambient/`activePlayer==0` → Player 0).
+Compat routing: when local co-op support and co-op enabled, `dComIfGp_getHorseActor()` → `dusk::coop::horses::resolveForContext()` (mounted if available, else owned for `currentPlayer()`; ambient/`activePlayer==0` → Player 0).
 
 ## Classes
 

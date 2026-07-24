@@ -2935,7 +2935,7 @@ static void demo_camera(b_gnd_class* i_this) {
     daHorse_c* horse;
     if (i_this->mDemoCamMode != 0) {
         // fakematch - dComIfGp_getHorseActor() isn't getting inlined for some reason
-        horse = (daHorse_c*)g_dComIfG_gameInfo.play.getPlayerPtr(1);
+        horse = dComIfGp_getHorseActor();
         // horse = (daHorse_c*)dComIfGp_getHorseActor();
     }
 

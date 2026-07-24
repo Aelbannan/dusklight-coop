@@ -5,7 +5,7 @@
 #include "f_op/f_op_actor.h"
 #include "d/d_com_inf_game.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 extern "C" u8 dusk_coop_overrideCutType(u8 nativeCutType);
 #endif
 
@@ -931,7 +931,7 @@ public:
     bool checkGoatStopGame() const { return mMode == 0x2A; }
     void onGoatStopGame() { mMode = 0x2A; }
     u8 getCutType() const {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         return dusk_coop_overrideCutType(mCutType);
 #else
         return mCutType;
@@ -1176,7 +1176,7 @@ public:
     // Under local co-op: current ScopedContext player (CURRENT_LINK). Outside co-op /
     // empty context: global Link. Story Midna must use checkNowWolfAuthority().
     static u32 checkNowWolf() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         return static_cast<u32>(dusk_coop_checkNowWolf());
 #else
         return ((daPy_py_c*)dComIfGp_getLinkPlayer())->checkWolf();
@@ -1185,7 +1185,7 @@ public:
 
     // STORY_AUTHORITY: always Player 0 / standalone Midna partner Link.
     static u32 checkNowWolfAuthority() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         return static_cast<u32>(dusk_coop_checkNowWolfAuthority());
 #else
         return checkNowWolf();

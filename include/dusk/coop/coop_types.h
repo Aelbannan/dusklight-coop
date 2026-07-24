@@ -63,8 +63,6 @@ struct PlayerMidnaRuntime {
 };
 
 struct HorseSlot {
-    daHorse_c* actor = nullptr;
-    fpc_ProcID actorId = fpcM_ERROR_PROCESS_ID_e;
     PlayerId owner = 0;
     bool unlocked = false;
     bool summoned = false;
@@ -76,8 +74,6 @@ struct HorseSlot {
 };
 
 struct PlayerSlot {
-    // Gate D: may be a lightweight proxy (fopAc_ac_c), not a full daAlink_c yet.
-    fopAc_ac_c* actor = nullptr;
     PlayerId id = 0;
     std::optional<s32> device;  // SDL_JoystickID when available
     std::optional<ViewId> view;
@@ -95,22 +91,6 @@ struct CameraRoute {
     PlayerId inputOwner = 0;
     PlayerId attentionOwner = 0;
 
-    // Sidecar play-info for view > 0 (never index original mCameraInfo[1]).
-    s8 winId = 0;
-    s8 player1Id = 0;
-    s8 player2Id = static_cast<s8>(-1);
-    u32 attentionStatus = 0;
-    f32 zoomScale = 1.0f;
-    f32 zoomForcus = 1.0f;
-    char* paramFileName = nullptr;
-    cXyz savedPos{};
-    cXyz savedTarget{};
-    f32 savedFovy = 45.0f;
-    s16 savedBank = 0;
-};
-
-struct PlayerStatusSidecar {
-    std::array<uint32_t, 4> statusWords{};
 };
 
 struct PlayerLoadout {
@@ -144,14 +124,13 @@ struct PlayerCombatState {
     fpc_ProcID lockOnTarget = fpcM_ERROR_PROCESS_ID_e;
     u16 invulnerabilityFrames = 0;
     bool finisherClaimed = false;
-    u16 cutType = 0;  // sidecar for proxy / non-daAlink bodies
+    u16 cutType = 0;  // indexed fallback for proxy / non-daAlink bodies
 };
 
 struct PlayerRuntime {
     PlayerLoadout loadout;
     PlayerResources resources;
     PlayerCombatState combat;
-    PlayerStatusSidecar status;
     PlayerLifeState lifeState = PlayerLifeState::Alive;
 };
 
@@ -169,7 +148,6 @@ struct Runtime {
     std::array<PlayerMidnaRuntime, MAX_LOCAL_PLAYERS> midna;
     std::array<HorseSlot, MAX_LOCAL_PLAYERS> horses;
     std::array<CameraRoute, MAX_LOCAL_VIEWS> cameras;
-    // Window sidecars are owned by render/camera modules; stored as opaque indices here.
     PlayerId activePlayer = 0;
     ViewId activeView = 0;
     fopAc_ac_c* activeEnemyTarget = nullptr;

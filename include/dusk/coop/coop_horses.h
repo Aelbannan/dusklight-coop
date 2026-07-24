@@ -29,7 +29,7 @@ HorseSlot& slot(PlayerId id);
 bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw);
 bool spawnOwnedHorseNearPlayer(PlayerId id);
 void destroyOwnedHorse(PlayerId id);
-void destroySecondaryHorses();
+void destroyAllHorses();
 
 // Context-aware resolve
 daHorse_c* resolveForContext();
@@ -42,9 +42,8 @@ bool setMounted(PlayerId id, bool mounted);
 u8 liveHorseCount();
 
 PlayerId ownerOf(const daHorse_c* horse);
-bool isSecondaryHorse(const daHorse_c* horse);
 
-// Pending-create token consumed by daHorse_c::create (Gate J singleton bypass).
+// Pending-create token consumed by daHorse_c::create.
 void beginPendingCreate(PlayerId id);
 PlayerId peekPendingCreateOwner();
 bool hasPendingCreate();
@@ -52,17 +51,8 @@ void onCreateSuccess(PlayerId id, daHorse_c* horse, fpc_ProcID pid);
 void onCreateFailed(PlayerId id);
 void onHorseDestroyed(daHorse_c* horse);
 
-// True when create must skip global singleton reject / setHorseActor.
-bool shouldBypassSingleton(PlayerId owner);
-bool shouldRegisterGlobally(PlayerId owner);
-
-// Secondary restart sidecar (Player 0 keeps original save fields).
+// Indexed restart state.
 void setRestart(PlayerId id, const char* stage, const cXyz& pos, s16 yaw, s8 room);
-bool useSecondaryRestart();
-const cXyz* restartPos();
-s16 restartAngleY();
-const char* restartStageName();
-s8 restartRoomNo();
 
 // Horse execution owner context for AI/collision that must not rely on ambient context.
 class ScopedHorseOwnerContext {

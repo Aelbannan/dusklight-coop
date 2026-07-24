@@ -43,11 +43,10 @@ uint8_t g_forcedViewCount = 0;
 bool g_sameCameraSplit = false;
 bool g_dualCameraComposite = false;
 
-std::array<dDlst_window_c, MAX_LOCAL_VIEWS> g_windowSidecar{};
 bool g_savedPrimaryViewport = false;
 view_port_class g_primaryViewportBackup{};
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 ResTIMG* g_view1Timg = nullptr;
 void* g_view1Tex = nullptr;
 TGXTexObj g_view1TexObj{};
@@ -120,7 +119,7 @@ bool ensureView1CaptureBuffer() {
 // (proxy not ready / floor check). Accessing mCamera before field_0xb0c==1 is UB.
 // Dual composite must wait; stay on Gate A same-camera L/R blit until then.
 bool secondaryCameraInitialized(ViewId view) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (view == 0) {
         return true;
     }
@@ -137,7 +136,7 @@ bool secondaryCameraInitialized(ViewId view) {
 }
 
 bool camerasReadyForDual() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     return g_dualCameraComposite && isEnabled() && secondaryCameraInitialized(1);
 #else
     return false;
@@ -229,7 +228,7 @@ void restorePrimaryViewportIfNeeded() {
     g_savedPrimaryViewport = false;
 }
 
-void syncViewportSidecars() {
+void syncViewports() {
     const uint8_t count = effectiveViewCount();
     g_lastPassCount = count;
     if (count <= 1) {
@@ -249,13 +248,13 @@ void syncViewportSidecars() {
     for (ViewId v = 0; v < count; ++v) {
         const ViewportRect rect =
             fullFramePasses ? ViewportRect{} : viewportFor(v, count, mode);
-        dDlst_window_c* window = (v == 0) ? dComIfGp_getWindow(0) : &g_windowSidecar[v];
+        dDlst_window_c* window = dComIfGp_getWindow(v);
         applyViewportToWindow(window, rect, fbW, fbH);
         if (fullFramePasses || g_forcedViewCount > 1) {
             // Multi-view tiled: each viewport uses its own camera.
             window->setCameraID(static_cast<int>(v));
         } else {
-            // Same-camera PoC: every sidecar points at camera slot 0 (never index >0).
+            // Same-camera fallback: every native window points at camera slot 0.
             window->setCameraID(0);
         }
         window->setMode(2);
@@ -274,8 +273,11 @@ uint64_t computeFrameStateHash() {
     h = mixU64(h, static_cast<uint64_t>(static_cast<int64_t>(g_Counter.mCounter1)));
     h = mixU64(h, g_simTicks);
 
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
-    if (player != nullptr) {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        fopAc_ac_c* player = dComIfGp_getPlayer(id);
+        if (player == nullptr) {
+            continue;
+        }
         u32 bits[3];
         std::memcpy(&bits[0], &player->current.pos.x, sizeof(u32));
         std::memcpy(&bits[1], &player->current.pos.y, sizeof(u32));
@@ -355,7 +357,7 @@ ScopedWorldDrawPass::ScopedWorldDrawPass(ViewId view) : context_(makeFrame(view)
                 env->now_senses_effect = 0;
                 env->senses_effect_strength = 0.0f;
             } else if (env->now_senses_effect == 0) {
-                // Owner has sidecar senses but global sim may still be off (secondary).
+                // The indexed owner has senses enabled; activate the effect for this view.
                 env->now_senses_effect = 1;
                 env->senses_effect_strength = 1.0f;
             }
@@ -403,9 +405,8 @@ void init() {
     g_forcedViewCount = 0;
     g_sameCameraSplit = false;
     g_dualCameraComposite = false;
-    g_windowSidecar = {};
     g_primaryViewportBackup = {};
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_view0Captured = false;
     g_view1Captured = false;
 #endif
@@ -419,7 +420,7 @@ void beginFrame() {
     }
     // Simulation advances once per game tick elsewhere; render must not bump counters.
     if (isMultiViewActive()) {
-        syncViewportSidecars();
+        syncViewports();
     } else {
         restorePrimaryViewportIfNeeded();
     }
@@ -445,7 +446,7 @@ bool drawViews() {
         g_lastPassCount = 1;
         return false;  // caller uses original single-view path
     }
-    syncViewportSidecars();
+    syncViewports();
     return true;
 }
 
@@ -459,11 +460,11 @@ uint8_t worldDrawPassCount() {
 bool isMultiViewActive() { return isEnabled() && effectiveViewCount() > 1; }
 
 dDlst_window_c* resolveWindow(ViewId view) {
-    if (!isEnabled() || view == 0 || !isMultiViewActive()) {
+    if (!isEnabled() || !isMultiViewActive()) {
         return dComIfGp_getWindow(0);
     }
     COOP_ASSERT(view < MAX_LOCAL_VIEWS);
-    return &g_windowSidecar[view];
+    return dComIfGp_getWindow(view);
 }
 
 camera_process_class* resolveCamera(ViewId view) {
@@ -629,7 +630,7 @@ f32 presentationPaneAspect() {
 }
 
 void bindPainterCameraView(ViewId view, camera_process_class* camera) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)view;
     (void)camera;
 #else
@@ -637,67 +638,10 @@ void bindPainterCameraView(ViewId view, camera_process_class* camera) {
         return;
     }
 
-    // Task 02 / Gate B: presentation binds matrices from the camera the scheduler owns.
-    // Do NOT write camera->view.aspect or mutate cam0 chase state here — that flips P0
-    // stick yaw when preparation() fights a half-pane aspect write.
-    //
-    // Safety: if this pass resolved a real secondary camera but its lookat still sits
-    // on P0 (interp stub / late init), re-anchor lookat onto the tracked actor for this
-    // raster only. Sim body (mControlledYaw etc.) stays owned by dCamera_c::Run().
-    if (view > 0 && dualCameraCompositeReady() && secondaryCameraInitialized(view) &&
-        reinterpret_cast<camera_process_class*>(getCameraProcess(view)) == camera) {
-        PlayerId tracked = static_cast<PlayerId>(view);
-        if (auto* route = cameraRoute(view)) {
-            if (!route->trackedPlayers.empty()) {
-                tracked = route->trackedPlayers.front();
-            } else {
-                tracked = route->inputOwner;
-            }
-        }
-        fopAc_ac_c* actor = getPlayerActor(tracked);
-        if (actor != nullptr) {
-            cXyz center = actor->attention_info.position;
-            if (center.y == 0.0f && actor->eyePos.y != 0.0f) {
-                center = actor->eyePos;
-            }
-            if (center.x == 0.0f && center.y == 0.0f && center.z == 0.0f) {
-                center = actor->current.pos;
-                center.y += 150.0f;
-            }
-
-            cXyz eye = camera->view.lookat.eye;
-            cXyz delta = eye - center;
-            f32 distSq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
-            if (distSq < 1.0f || !std::isfinite(distSq)) {
-                cSAngle pitch(static_cast<s16>(0x0E00));
-                cSAngle yaw(static_cast<s16>(cSAngle(actor->shape_angle.y).Inv()));
-                cSGlobe behind(280.0f, pitch, yaw);
-                eye = center + behind.Xyz();
-            } else {
-                const f32 dist = std::sqrt(distSq);
-                eye = center + delta * (280.0f / dist);
-            }
-
-            camera->view.lookat.center = center;
-            camera->view.lookat.eye = eye;
-            camera->view.lookat.up.set(0.0f, 1.0f, 0.0f);
-
-            static bool sLoggedBind = false;
-            if (!sLoggedBind) {
-                debug::logInfo(
-                    "bindPainterCameraView: view=%u tracked=P%u center=(%.1f,%.1f,%.1f) "
-                    "eye=(%.1f,%.1f,%.1f) cam0eye=(%.1f,%.1f,%.1f)",
-                    view, tracked, center.x, center.y, center.z, eye.x, eye.y, eye.z,
-                    dComIfGp_getCamera(0) ? dComIfGp_getCamera(0)->view.lookat.eye.x : 0.0f,
-                    dComIfGp_getCamera(0) ? dComIfGp_getCamera(0)->view.lookat.eye.y : 0.0f,
-                    dComIfGp_getCamera(0) ? dComIfGp_getCamera(0)->view.lookat.eye.z : 0.0f);
-                sLoggedBind = true;
-            }
-        } else {
-            debug::logWarn("bindPainterCameraView: view=%u has no tracked actor (P%u)", view,
-                           tracked);
-        }
-    }
+    // Rebuild proj/view matrices for this painter pass only.
+    // Do NOT rewrite lookat here — that fought dCamera_c::Run chase every frame
+    // (vibration) and pinned eye distance so secondary cams looked-at but never followed.
+    (void)view;
 
     const f32 aspect =
         usesHorizontalSplitPresent() ? presentationPaneAspect() : camera->view.aspect;
@@ -714,7 +658,7 @@ void bindPainterCameraView(ViewId view, camera_process_class* camera) {
 #endif
 }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 namespace {
 
 void setupSplitCompositeState() {
@@ -760,7 +704,7 @@ void blitSplitPane(f32 x, f32 y, f32 w, f32 h) {
 #endif
 
 void captureViewToSlot(int slot) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)slot;
 #else
     if (!dualCameraCompositeReady()) {
@@ -821,7 +765,7 @@ void captureViewToSlot(int slot) {
 }
 
 bool presentDualCameraSplit() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return false;
 #else
     if (!dualCameraCompositeReady() || !g_view0Captured || !g_view1Captured) {
@@ -860,7 +804,7 @@ bool presentDualCameraSplit() {
 }
 
 void presentSameCameraSplit() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
     if (!sameCameraSplitEnabled()) {

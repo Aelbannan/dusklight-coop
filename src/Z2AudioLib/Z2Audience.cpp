@@ -36,7 +36,7 @@ Z2Audible::Z2Audible(const JGeometry::TVec3<f32>& pos, const JGeometry::TVec3<f3
     mParam.field_0x0.raw = 0xFFFFFFFF;
     mAbsPos.init(&mPos, pos, param_1);
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < Z2_MAX_AUDIENCE_PLAYERS; i++) {
         if ((channel & (1 << i)) == 0) {
             mChannel[i].init();
         }
@@ -57,14 +57,14 @@ void Z2Audible::calc() {
 
 JASSoundParams* Z2Audible::getOuterParams(int index) {
     JUT_ASSERT(80, index >= 0);
-    JUT_ASSERT(81, index < 1);
+    JUT_ASSERT(81, index < Z2_MAX_AUDIENCE_PLAYERS);
     return &mChannel[index].mParams;
 }
 
 void Z2Audible::setOuterParams(const JASSoundParams& outParams, const JASSoundParams& inParams,
                                int index) {
     JUT_ASSERT(89, index >= 0);
-    JUT_ASSERT(90, index < 1);
+    JUT_ASSERT(90, index < Z2_MAX_AUDIENCE_PLAYERS);
 
     Z2AudibleChannel* channel = &mChannel[index];
     u8 iStack_94 = (mParam.field_0x0.half.f1 & 0xf00) >> 8;
@@ -141,7 +141,7 @@ void Z2Audible::setOuterParams(const JASSoundParams& outParams, const JASSoundPa
 
 Z2AudibleChannel* Z2Audible::getChannel(int index) {
     JUT_ASSERT(220, index >= 0);
-    JUT_ASSERT(221, index < 1);
+    JUT_ASSERT(221, index < Z2_MAX_AUDIENCE_PLAYERS);
     return &mChannel[index];
 }
 
@@ -330,7 +330,7 @@ void Z2AudioCamera::setCameraState(f32 (*param_0)[4], Vec& pos, Vec& param_2, f3
 void Z2AudioCamera::convertAbsToRel(Z2Audible* audible, int channelNum) {
     JUT_ASSERT(508, audible);
     JUT_ASSERT(509, channelNum >= 0);
-    JUT_ASSERT(510, channelNum < 1);
+    JUT_ASSERT(510, channelNum < Z2_MAX_AUDIENCE_PLAYERS);
 
     Z2AudibleChannel* channel = audible->getChannel(channelNum);
     if (channel == NULL) {
@@ -377,7 +377,7 @@ Z2SpotMic::Z2SpotMic() {
     mMicOn = true;
     field_0x1c = 255.0f / (field_0x4 - field_0x0);
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < Z2_MAX_AUDIENCE_PLAYERS; i++) {
         clearMicState(i);
     }
 }
@@ -395,7 +395,7 @@ void Z2SpotMic::calcVolumeFactor(int camID) {
 
 void Z2SpotMic::setMicState(Z2AudioCamera* camera, int camID) {
     JUT_ASSERT(622, camID >= 0);
-    JUT_ASSERT(623, camID < 1);
+    JUT_ASSERT(623, camID < Z2_MAX_AUDIENCE_PLAYERS);
 
     if (mMicOn && mPosPtr != 0 && camera != NULL) {
         clearMicState(camID);
@@ -457,7 +457,7 @@ u32 Z2SpotMic::calcMicPriority(f32 param_0) {
 
 f32 Z2SpotMic::calcMicVolume(f32 param_0, int camID, f32 param_2) {
     JUT_ASSERT(687, camID >= 0);
-    JUT_ASSERT(688, camID < 1);
+    JUT_ASSERT(688, camID < Z2_MAX_AUDIENCE_PLAYERS);
 
     if (mMicOn == false) {
         return param_2;
@@ -497,9 +497,11 @@ f32 Z2SpotMic::calcMicVolume(f32 param_0, int camID, f32 param_2) {
 }
 
 Z2Audience::Z2Audience() : JASGlobalInstance<Z2Audience>(true), field_0x4(1.0f), field_0x8(0x7f) {
-    mNumPlayers = 1;
+    mNumPlayers = Z2_MAX_AUDIENCE_PLAYERS;
     mUsingOffMicVol = false;
-    mAudioCamera[0].init();
+    for (int i = 0; i < mNumPlayers; ++i) {
+        mAudioCamera[i].init();
+    }
     mAudioCamera[0].setMainCamera(true);
     mLinkMic = mSpotMic;
 }
@@ -516,8 +518,6 @@ void Z2Audience::setAudioCamera(f32 (*param_0)[4], Vec& pos, Vec& param_2, f32 p
                                 f32 param_4, bool param_5, int camID, bool param_7) {
     JUT_ASSERT(687, camID >= 0);
     JUT_ASSERT(688, camID < mNumPlayers);
-    // RelWithDebInfo builds strip JUT_ASSERT — callers (d_camera::camera_draw) must
-    // still keep camID < mNumPlayers. Co-op secondaries skip this path entirely.
     mAudioCamera[camID].setCameraState(param_0, pos, param_2, param_3, param_4, param_5, param_7);
     mLinkMic->setMicState(&mAudioCamera[camID], camID);
 }
@@ -578,7 +578,7 @@ u32 Z2Audience::calcPriority(JAIAudible* audible) {
         return 0;
     } 
     
-    u32 deltaPriority[1];
+    u32 deltaPriority[Z2_MAX_AUDIENCE_PLAYERS];
     u32 rv = 0xFFFFFFFF;
     for (int i = 0; i < mNumPlayers; i++) {
         Z2AudibleChannel* channel = (Z2audible)->getChannel(i);

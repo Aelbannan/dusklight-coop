@@ -5,7 +5,7 @@
 namespace dusk::coop::save {
 
 constexpr u32 COMPANION_SAVE_MAGIC = 0x434F4F50;  // 'COOP'
-constexpr u32 COMPANION_SAVE_VERSION = 2;
+constexpr u32 COMPANION_SAVE_VERSION = 3;
 
 struct CompanionHeader {
     u32 magic = COMPANION_SAVE_MAGIC;
@@ -22,7 +22,7 @@ void reset();
 bool loadCompanion(const char* path);
 bool saveCompanion(const char* path);
 
-// Missing companion → initialize secondary players from global progression.
+// Missing companion → initialize every joined player from global progression.
 void recoverMissingCompanion();
 // Corrupt companion → log + reinitialize affected players.
 void recoverCorruptCompanion(const char* reason);

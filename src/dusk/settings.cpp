@@ -175,36 +175,60 @@ UserSettings g_userSettings = {
             ActionBindConfigVar{"actionBindings.firstPersonCamera_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.firstPersonCamera_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.firstPersonCamera_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.firstPersonCamera_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.firstPersonCamera_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.firstPersonCamera_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.firstPersonCamera_port7", PAD_NATIVE_BUTTON_INVALID},
         },
         .callMidna {
             ActionBindConfigVar{"actionBindings.callMidna_port0", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.callMidna_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.callMidna_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.callMidna_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.callMidna_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.callMidna_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.callMidna_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.callMidna_port7", PAD_NATIVE_BUTTON_INVALID},
         },
         .openMapScreen {
             ActionBindConfigVar{"actionBindings.openMapScreen_port0", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openMapScreen_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openMapScreen_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openMapScreen_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openMapScreen_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openMapScreen_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openMapScreen_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openMapScreen_port7", PAD_NATIVE_BUTTON_INVALID},
         },
         .toggleMinimap {
             ActionBindConfigVar{"actionBindings.toggleMinimap_port0", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.toggleMinimap_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.toggleMinimap_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.toggleMinimap_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.toggleMinimap_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.toggleMinimap_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.toggleMinimap_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.toggleMinimap_port7", PAD_NATIVE_BUTTON_INVALID},
         },
         .openDusklightMenu {
             ActionBindConfigVar{"actionBindings.openDusklightMenu_port0", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openDusklightMenu_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openDusklightMenu_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.openDusklightMenu_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openDusklightMenu_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openDusklightMenu_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openDusklightMenu_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.openDusklightMenu_port7", PAD_NATIVE_BUTTON_INVALID},
         },
         .turboSpeedButton {
             ActionBindConfigVar{"actionBindings.turboButton_port0", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.turboButton_port1", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.turboButton_port2", PAD_NATIVE_BUTTON_INVALID},
             ActionBindConfigVar{"actionBindings.turboButton_port3", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.turboButton_port4", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.turboButton_port5", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.turboButton_port6", PAD_NATIVE_BUTTON_INVALID},
+            ActionBindConfigVar{"actionBindings.turboButton_port7", PAD_NATIVE_BUTTON_INVALID},
         },
     }
 };
@@ -357,26 +381,50 @@ void registerSettings() {
     Register(g_userSettings.actionBindings.firstPersonCamera[1]);
     Register(g_userSettings.actionBindings.firstPersonCamera[2]);
     Register(g_userSettings.actionBindings.firstPersonCamera[3]);
+    Register(g_userSettings.actionBindings.firstPersonCamera[4]);
+    Register(g_userSettings.actionBindings.firstPersonCamera[5]);
+    Register(g_userSettings.actionBindings.firstPersonCamera[6]);
+    Register(g_userSettings.actionBindings.firstPersonCamera[7]);
     Register(g_userSettings.actionBindings.callMidna[0]);
     Register(g_userSettings.actionBindings.callMidna[1]);
     Register(g_userSettings.actionBindings.callMidna[2]);
     Register(g_userSettings.actionBindings.callMidna[3]);
+    Register(g_userSettings.actionBindings.callMidna[4]);
+    Register(g_userSettings.actionBindings.callMidna[5]);
+    Register(g_userSettings.actionBindings.callMidna[6]);
+    Register(g_userSettings.actionBindings.callMidna[7]);
     Register(g_userSettings.actionBindings.openMapScreen[0]);
     Register(g_userSettings.actionBindings.openMapScreen[1]);
     Register(g_userSettings.actionBindings.openMapScreen[2]);
     Register(g_userSettings.actionBindings.openMapScreen[3]);
+    Register(g_userSettings.actionBindings.openMapScreen[4]);
+    Register(g_userSettings.actionBindings.openMapScreen[5]);
+    Register(g_userSettings.actionBindings.openMapScreen[6]);
+    Register(g_userSettings.actionBindings.openMapScreen[7]);
     Register(g_userSettings.actionBindings.toggleMinimap[0]);
     Register(g_userSettings.actionBindings.toggleMinimap[1]);
     Register(g_userSettings.actionBindings.toggleMinimap[2]);
     Register(g_userSettings.actionBindings.toggleMinimap[3]);
+    Register(g_userSettings.actionBindings.toggleMinimap[4]);
+    Register(g_userSettings.actionBindings.toggleMinimap[5]);
+    Register(g_userSettings.actionBindings.toggleMinimap[6]);
+    Register(g_userSettings.actionBindings.toggleMinimap[7]);
     Register(g_userSettings.actionBindings.openDusklightMenu[0]);
     Register(g_userSettings.actionBindings.openDusklightMenu[1]);
     Register(g_userSettings.actionBindings.openDusklightMenu[2]);
     Register(g_userSettings.actionBindings.openDusklightMenu[3]);
+    Register(g_userSettings.actionBindings.openDusklightMenu[4]);
+    Register(g_userSettings.actionBindings.openDusklightMenu[5]);
+    Register(g_userSettings.actionBindings.openDusklightMenu[6]);
+    Register(g_userSettings.actionBindings.openDusklightMenu[7]);
     Register(g_userSettings.actionBindings.turboSpeedButton[0]);
     Register(g_userSettings.actionBindings.turboSpeedButton[1]);
     Register(g_userSettings.actionBindings.turboSpeedButton[2]);
     Register(g_userSettings.actionBindings.turboSpeedButton[3]);
+    Register(g_userSettings.actionBindings.turboSpeedButton[4]);
+    Register(g_userSettings.actionBindings.turboSpeedButton[5]);
+    Register(g_userSettings.actionBindings.turboSpeedButton[6]);
+    Register(g_userSettings.actionBindings.turboSpeedButton[7]);
 }
 
 // Transient settings

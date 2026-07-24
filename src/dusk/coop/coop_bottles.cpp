@@ -46,12 +46,14 @@ void setUnlockedSlotCount(u8 count) {
 void syncUnlockedFromSave() {
     g_unlockedSlots = countUnlockedInSave();
 
-    // Mirror P0 bottle contents into sidecar via original save (not dComIfGs hooks).
+    // Seed every indexed player from the vanilla save before companion data is applied.
     auto& items = g_dComIfG_gameInfo.info.getPlayer().getItem();
     auto& record = g_dComIfG_gameInfo.info.getPlayer().getItemRecord();
-    for (u8 s = 0; s < dSv_player_item_c::BOTTLE_MAX; ++s) {
-        inventory::resources(0).bottleContents[s] = items.getItem(s + SLOT_11, true);
-        inventory::resources(0).bottleQuantities[s] = record.getBottleNum(s);
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        for (u8 s = 0; s < dSv_player_item_c::BOTTLE_MAX; ++s) {
+            inventory::resources(id).bottleContents[s] = items.getItem(s + SLOT_11, true);
+            inventory::resources(id).bottleQuantities[s] = record.getBottleNum(s);
+        }
     }
 }
 
@@ -67,9 +69,6 @@ bool setContents(PlayerId id, u8 slot, u8 itemNo) {
         return false;
     }
     inventory::resources(id).bottleContents[slot] = itemNo;
-    if (id == 0) {
-        g_dComIfG_gameInfo.info.getPlayer().getItem().setItem(slot + SLOT_11, itemNo);
-    }
     return true;
 }
 
@@ -85,9 +84,6 @@ bool setQuantity(PlayerId id, u8 slot, u8 qty) {
         return false;
     }
     inventory::resources(id).bottleQuantities[slot] = qty;
-    if (id == 0) {
-        g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setBottleNum(slot, qty);
-    }
     return true;
 }
 
@@ -101,11 +97,6 @@ bool tryConsume(PlayerId id, u8 slot) {
     }
     contents = dItemNo_EMPTY_BOTTLE_e;
     inventory::resources(id).bottleQuantities[slot] = 0;
-    if (id == 0) {
-        g_dComIfG_gameInfo.info.getPlayer().getItem().setItem(slot + SLOT_11,
-                                                             dItemNo_EMPTY_BOTTLE_e);
-        g_dComIfG_gameInfo.info.getPlayer().getItemRecord().setBottleNum(slot, 0);
-    }
     return true;
 }
 
@@ -117,10 +108,9 @@ void onBottleUnlock(PlayerId collector, u8 slot, u8 initialContents) {
         g_unlockedSlots = static_cast<u8>(slot + 1);
     }
 
-    // Global unlock: ensure original save has the slot (empty if collector is secondary).
-    const u8 p0Contents = (collector == 0) ? initialContents : dItemNo_EMPTY_BOTTLE_e;
-    g_dComIfG_gameInfo.info.getPlayer().getItem().setItem(slot + SLOT_11, p0Contents);
-    inventory::resources(0).bottleContents[slot] = p0Contents;
+    // Persist the unlock itself globally; contents remain indexed per player.
+    g_dComIfG_gameInfo.info.getPlayer().getItem().setItem(slot + SLOT_11,
+                                                         dItemNo_EMPTY_BOTTLE_e);
 
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         if (!isJoined(i)) {
@@ -128,7 +118,7 @@ void onBottleUnlock(PlayerId collector, u8 slot, u8 initialContents) {
         }
         if (i == collector) {
             inventory::resources(i).bottleContents[slot] = initialContents;
-        } else if (i != 0) {
+        } else {
             inventory::resources(i).bottleContents[slot] = dItemNo_EMPTY_BOTTLE_e;
         }
         inventory::resources(i).bottleQuantities[slot] = 0;

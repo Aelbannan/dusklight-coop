@@ -27,7 +27,7 @@
 #include "dusk/settings.h"
 #include "dusk/speedrun.h"
 #include "dusk/version.hpp"
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_context.h"
@@ -1251,7 +1251,7 @@ BOOL daAlink_c::checkRestartDead(int i_dmgAmount, BOOL i_checkZoraMag) {
     if (mProcID != PROC_DEAD && i_dmgAmount >= dComIfGs_getLife() && !checkMagicArmorNoDamage() &&
         !dComIfGs_checkBottle(dItemNo_FAIRY_e))
     {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         if (dusk::coop::isEnabled() &&
             dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
         {
@@ -1282,7 +1282,7 @@ void daAlink_c::setDeadRideSyncPos() {
 }
 
 BOOL daAlink_c::checkDeadHP() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled() &&
         dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
     {
@@ -1308,7 +1308,7 @@ BOOL daAlink_c::checkDeadHP() {
 
 BOOL daAlink_c::checkDeadAction(int param_0) {
     if (!checkEventRun()) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         // Per-player fairy via Gate E bottles when co-op is on.
         if (dusk::coop::isEnabled() && dComIfGs_getLife() == 0 &&
             !checkResetFlg0(RFLG0_UNK_400))
@@ -1316,7 +1316,7 @@ BOOL daAlink_c::checkDeadAction(int param_0) {
             const dusk::coop::PlayerId id = dusk::coop::currentPlayer();
             if (dusk::coop::combat::tryConsumeFairy(id)) {
                 makeFairy(&current.pos, 0);
-                // Restore life after fairy (sidecar / P0 via inventory).
+                // Restore the owning player's indexed life after the fairy.
                 dusk::coop::inventory::setLife(
                     id, dusk::coop::inventory::resources(id).maxLife);
                 if (auto* rt = dusk::coop::playerRuntime(id)) {

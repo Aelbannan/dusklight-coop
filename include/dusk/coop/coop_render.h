@@ -66,7 +66,7 @@ void endFrame();
 // Called once when dScnPly_Draw advances simulation counters (not per view).
 void noteSimulationTick();
 
-// Sync sidecar viewports; returns true when painter must loop (2+ views).
+// Sync native indexed viewports; returns true when painter must loop (2+ views).
 bool drawViews();
 
 uint8_t worldDrawPassCount();

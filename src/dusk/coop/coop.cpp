@@ -44,7 +44,7 @@ void initPlayer0() {
 Runtime& runtime() { return g_runtime; }
 
 bool isCompiledIn() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     return true;
 #else
     return false;
@@ -68,7 +68,7 @@ void setEnabled(bool enabled) {
 }
 
 void init() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     g_runtime = {};
     return;
 #else
@@ -114,7 +114,7 @@ void reset() {
 }
 
 void tick() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
     // Input always ticks when compiled in so Press-Start can enable co-op.
@@ -146,8 +146,8 @@ void onRoomUnload() {
 }
 
 void onCoopDisable() {
-    player::destroyAllSecondaryLinks();
-    horses::destroySecondaryHorses();
+    player::destroyNonAuthorityLinks();
+    horses::destroyAllHorses();
     camera::destroySecondaryCameras();
     enemy::onRoomUnload();
     render::setForcedViewCount(0);

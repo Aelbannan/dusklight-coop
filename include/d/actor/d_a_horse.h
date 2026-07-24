@@ -479,6 +479,18 @@ public:
     /* 0x18E0 */ void (daHorse_c::*m_setHorsePosAngle)(const cXyz* i_pos, s16 i_angle);
     /* 0x18EC */ void (daHorse_c::*m_onRideFlg)();
     /* 0x18F8 */ void (daHorse_c::*m_offRideFlg)();
+#if TARGET_PC
+    // Presentation interpolation belongs to each horse. Multiple joined players may
+    // own horses, so a process-global snapshot cannot identify the correct geometry.
+    static constexpr int REIN_INTERP_POINT_MAX = 75;
+    cXyz m_reinSimPrev[REIN_INTERP_POINT_MAX];
+    cXyz m_reinSimCurr[REIN_INTERP_POINT_MAX];
+    int m_reinSimNumPrev;
+    int m_reinSimNumCurr;
+    bool m_reinSimPrevValid;
+    bool m_reinSimCurrValid;
+    uint64_t m_reinSimRolledSeq;
+#endif
 };
 
 class daHorse_hio_c1 {

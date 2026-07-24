@@ -9,7 +9,7 @@
 #include <array>
 #include <cstring>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
@@ -24,7 +24,7 @@ namespace dusk::coop::horses {
 
 namespace {
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 constexpr PlayerId kNoPending = 0xFF;
 constexpr f32 kSpawnOffset = 120.0f;
@@ -39,6 +39,16 @@ struct HorseMeta {
 
 std::array<HorseMeta, MAX_LOCAL_PLAYERS> g_meta{};
 PlayerId g_pendingCreateOwner = kNoPending;
+
+static PlayerId storyAuthorityId() {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (const auto* player = playerSlot(id);
+            player != nullptr && player->transitionAuthority) {
+            return id;
+        }
+    }
+    return 0;
+}
 
 static void clearMeta(PlayerId id, bool keepPending) {
     if (!isValidPlayer(id)) {
@@ -56,28 +66,28 @@ static void clearMeta(PlayerId id, bool keepPending) {
 }
 
 static bool isHorseAlive(PlayerId id) {
-    auto& s = slot(id);
-    if (s.actor == nullptr) {
+    daHorse_c* horse = getOwnedHorse(id);
+    if (horse == nullptr) {
         return false;
     }
     if (g_meta[id].processId != fpcM_ERROR_PROCESS_ID_e) {
-        return fopAcM_SearchByID(g_meta[id].processId) == reinterpret_cast<fopAc_ac_c*>(s.actor);
+        return fopAcM_SearchByID(g_meta[id].processId) == reinterpret_cast<fopAc_ac_c*>(horse);
     }
-    return fopAcM_GetName(reinterpret_cast<fopAc_ac_c*>(s.actor)) == fpcNm_HORSE_e;
+    return fopAcM_GetName(reinterpret_cast<fopAc_ac_c*>(horse)) == fpcNm_HORSE_e;
 }
 
 static int authorityRoom() {
-    fopAc_ac_c* p0 = getPlayerActor(0);
-    if (p0 == nullptr) {
+    fopAc_ac_c* authority = getPlayerActor(storyAuthorityId());
+    if (authority == nullptr) {
         return dComIfGp_roomControl_getStayNo();
     }
-    return fopAcM_GetRoomNo(p0);
+    return fopAcM_GetRoomNo(authority);
 }
 
 static bool placeNearPlayer(PlayerId id, cXyz* outPos, s16* outYaw) {
     fopAc_ac_c* player = getPlayerActor(id);
     if (player == nullptr) {
-        player = getPlayerActor(0);
+        player = getPlayerActor(storyAuthorityId());
     }
     if (player == nullptr || outPos == nullptr || outYaw == nullptr) {
         return false;
@@ -117,19 +127,6 @@ static bool placeNearPlayer(PlayerId id, cXyz* outPos, s16* outYaw) {
     return true;
 }
 
-static void syncSlot0FromGlobal() {
-    daHorse_c* global = getGlobalHorseActor();
-    auto& s = slot(0);
-    s.owner = 0;
-    s.actor = global;
-    if (global != nullptr) {
-        s.actorId = fopAcM_GetID(global);
-        s.summoned = true;
-        s.lastKnownPosition = global->current.pos;
-        s.lastKnownYaw = global->shape_angle.y;
-    }
-}
-
 static void resolvePendingCreates() {
     for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         if (!g_meta[id].createRequested) {
@@ -147,14 +144,14 @@ static void resolvePendingCreates() {
         }
         // create() registers via onCreateSuccess; just clear the request flag.
         g_meta[id].createRequested = false;
-        if (slot(id).actor == nullptr) {
+        if (getOwnedHorse(id) == nullptr) {
             onCreateSuccess(id, reinterpret_cast<daHorse_c*>(actor), g_meta[id].processId);
         }
     }
 }
 
 static void recreatePendingHorses() {
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         if (!g_meta[id].pendingRecreate || !isJoined(id)) {
             continue;
         }
@@ -168,7 +165,7 @@ static void recreatePendingHorses() {
     }
 }
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC
 
 }  // namespace
 
@@ -177,7 +174,7 @@ void init() {
         runtime().horses[i] = {};
         runtime().horses[i].owner = i;
     }
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_meta = {};
     g_pendingCreateOwner = kNoPending;
 #endif
@@ -186,33 +183,33 @@ void init() {
 void reset() { init(); }
 
 void tick() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
     if (!isEnabled()) {
         return;
     }
-    syncSlot0FromGlobal();
     resolvePendingCreates();
     recreatePendingHorses();
 #endif
 }
 
 void onRoomUnload() {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     return;
 #else
-    // Secondary horses despawn on room unload; keep ownership / last pose for recreate.
-    for (PlayerId id = 1; id < MAX_LOCAL_PLAYERS; ++id) {
+    // Despawn indexed horses on room unload; keep ownership / last pose for recreate.
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         auto& s = slot(id);
-        if (!s.summoned && s.actor == nullptr) {
+        daHorse_c* horse = getOwnedHorse(id);
+        if (!s.summoned && horse == nullptr) {
             continue;
         }
-        if (s.actor != nullptr) {
-            g_meta[id].spawnPos = s.actor->current.pos;
-            g_meta[id].spawnYaw = s.actor->shape_angle.y;
-            s.lastKnownPosition = s.actor->current.pos;
-            s.lastKnownYaw = s.actor->shape_angle.y;
+        if (horse != nullptr) {
+            g_meta[id].spawnPos = horse->current.pos;
+            g_meta[id].spawnYaw = horse->shape_angle.y;
+            s.lastKnownPosition = horse->current.pos;
+            s.lastKnownYaw = horse->shape_angle.y;
         }
         const bool wasSummoned = s.summoned;
         destroyOwnedHorse(id);
@@ -230,7 +227,7 @@ HorseSlot& slot(PlayerId id) {
 }
 
 bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)id;
     (void)pos;
     (void)yaw;
@@ -238,14 +235,6 @@ bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw) {
 #else
     if (!isEnabled() || !isValidPlayer(id)) {
         return false;
-    }
-
-    if (id == 0) {
-        syncSlot0FromGlobal();
-        if (slot(0).actor != nullptr) {
-            return true;
-        }
-        // Stage normally creates P0's horse; allow explicit spawn as fallback.
     }
 
     if (isHorseAlive(id) || g_meta[id].createRequested) {
@@ -292,10 +281,10 @@ bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw) {
     g_meta[id].pendingRecreate = false;
 
     if (fopAc_ac_c* actor = fopAcM_SearchByID(pid)) {
-        if (slot(id).actor == nullptr && fopAcM_GetName(actor) == fpcNm_HORSE_e) {
+        if (getOwnedHorse(id) == nullptr && fopAcM_GetName(actor) == fpcNm_HORSE_e) {
             // create may still be mid-phase; registration happens in onCreateSuccess.
         }
-        g_meta[id].createRequested = slot(id).actor == nullptr;
+        g_meta[id].createRequested = getOwnedHorse(id) == nullptr;
     }
 
     debug::logInfo("Horse P%u spawn requested (pid=%u) at (%.1f, %.1f, %.1f)", id,
@@ -305,7 +294,7 @@ bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw) {
 }
 
 bool spawnOwnedHorseNearPlayer(PlayerId id) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)id;
     return false;
 #else
@@ -330,40 +319,30 @@ void destroyOwnedHorse(PlayerId id) {
     }
     auto& s = slot(id);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (s.actor != nullptr) {
-        fopAc_ac_c* actor = reinterpret_cast<fopAc_ac_c*>(s.actor);
-        // Destructor clears sidecar via onHorseDestroyed; null first to avoid re-entry.
-        s.actor = nullptr;
-        s.actorId = fpcM_ERROR_PROCESS_ID_e;
-        if (id == 0) {
-            if (getGlobalHorseActor() == reinterpret_cast<daHorse_c*>(actor)) {
-                dComIfGp_setHorseActor(nullptr);
-            }
-        }
+#if TARGET_PC
+    if (daHorse_c* horse = getOwnedHorse(id)) {
+        fopAc_ac_c* actor = reinterpret_cast<fopAc_ac_c*>(horse);
+        // Destructor clears indexed ownership; null first to avoid re-entry.
+        dComIfGp_setHorseActor(id, nullptr);
         fopAcM_delete(actor);
     }
     clearMeta(id, /*keepPending=*/false);
 #else
-    s.actor = nullptr;
-    s.actorId = fpcM_ERROR_PROCESS_ID_e;
+    setOwnedHorse(id, nullptr);
 #endif
 
     s.summoned = false;
     s.mounted = false;
 }
 
-void destroySecondaryHorses() {
-    for (PlayerId i = 1; i < MAX_LOCAL_PLAYERS; ++i) {
+void destroyAllHorses() {
+    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         destroyOwnedHorse(i);
     }
 }
 
 daHorse_c* resolveForContext() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (!isEnabled()) {
-        return getGlobalHorseActor();
-    }
+#if TARGET_PC
     const PlayerId id = currentPlayer();
     if (daHorse_c* mounted = resolveMounted(id)) {
         return mounted;
@@ -383,7 +362,7 @@ daHorse_c* resolveMounted(PlayerId id) {
         return nullptr;
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     fopAc_ac_c* player = getPlayerActor(id);
     if (player != nullptr && fopAcM_GetName(player) == fpcNm_ALINK_e) {
         auto* link = static_cast<daAlink_c*>(player);
@@ -398,13 +377,13 @@ daHorse_c* resolveMounted(PlayerId id) {
 #endif
 
     auto& s = slot(id);
-    return s.mounted ? s.actor : nullptr;
+    return s.mounted ? getOwnedHorse(id) : nullptr;
 }
 
 daHorse_c* horseForPlayer(PlayerId id) { return resolveOwned(id); }
 
 daHorse_c* mountedHorseForLink(const daAlink_c* link) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)link;
     return nullptr;
 #else
@@ -429,13 +408,8 @@ bool setMounted(PlayerId id, bool mounted) {
 
 u8 liveHorseCount() {
     u8 n = 0;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (isEnabled()) {
-        syncSlot0FromGlobal();
-    }
-#endif
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (slot(i).actor != nullptr || slot(i).summoned) {
+        if (getOwnedHorse(i) != nullptr || slot(i).summoned) {
             ++n;
         }
     }
@@ -447,24 +421,15 @@ PlayerId ownerOf(const daHorse_c* horse) {
         return 0;
     }
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (slot(i).actor == horse) {
+        if (getOwnedHorse(i) == horse) {
             return i;
         }
     }
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (getGlobalHorseActor() == horse) {
-        return 0;
-    }
-#endif
     return 0;
 }
 
-bool isSecondaryHorse(const daHorse_c* horse) {
-    return horse != nullptr && ownerOf(horse) > 0;
-}
-
 void beginPendingCreate(PlayerId id) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_pendingCreateOwner = isValidPlayer(id) ? id : kNoPending;
 #else
     (void)id;
@@ -472,7 +437,7 @@ void beginPendingCreate(PlayerId id) {
 }
 
 PlayerId peekPendingCreateOwner() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (g_pendingCreateOwner != kNoPending) {
         return g_pendingCreateOwner;
     }
@@ -481,7 +446,7 @@ PlayerId peekPendingCreateOwner() {
 }
 
 bool hasPendingCreate() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     return g_pendingCreateOwner != kNoPending;
 #else
     return false;
@@ -495,31 +460,29 @@ void onCreateSuccess(PlayerId id, daHorse_c* horse, fpc_ProcID pid) {
     setOwnedHorse(id, horse);
     auto& s = slot(id);
     s.owner = id;
-    s.actor = horse;
-    s.actorId = pid;
     s.summoned = true;
     s.lastKnownPosition = horse->current.pos;
     s.lastKnownYaw = horse->shape_angle.y;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     g_meta[id].processId = pid;
     g_meta[id].createRequested = false;
     g_meta[id].pendingRecreate = false;
     if (g_pendingCreateOwner == id) {
         g_pendingCreateOwner = kNoPending;
     }
-    debug::logInfo("Horse P%u created (secondary=%d)", id, id > 0 ? 1 : 0);
+    debug::logInfo("Horse P%u created", id);
 #endif
 }
 
 void onCreateFailed(PlayerId id) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (g_pendingCreateOwner == id) {
         g_pendingCreateOwner = kNoPending;
     }
     if (isValidPlayer(id)) {
         g_meta[id].createRequested = false;
-        if (slot(id).actor == nullptr) {
+        if (getOwnedHorse(id) == nullptr) {
             slot(id).summoned = false;
         }
     }
@@ -533,34 +496,15 @@ void onHorseDestroyed(daHorse_c* horse) {
         return;
     }
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (slot(i).actor == horse) {
-            slot(i).actor = nullptr;
-            slot(i).actorId = fpcM_ERROR_PROCESS_ID_e;
+        if (getOwnedHorse(i) == horse) {
             slot(i).mounted = false;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+            dComIfGp_setHorseActor(i, nullptr);
+#if TARGET_PC
             clearMeta(i, /*keepPending=*/false);
 #endif
             return;
         }
     }
-}
-
-bool shouldBypassSingleton(PlayerId owner) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return isEnabled() && owner > 0;
-#else
-    (void)owner;
-    return false;
-#endif
-}
-
-bool shouldRegisterGlobally(PlayerId owner) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return !isEnabled() || owner == 0;
-#else
-    (void)owner;
-    return true;
-#endif
 }
 
 void setRestart(PlayerId id, const char* stage, const cXyz& pos, s16 yaw, s8 room) {
@@ -576,38 +520,8 @@ void setRestart(PlayerId id, const char* stage, const cXyz& pos, s16 yaw, s8 roo
     s.lastKnownRoom = room;
 }
 
-bool useSecondaryRestart() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return isEnabled() && hasPendingCreate() && peekPendingCreateOwner() > 0;
-#else
-    return false;
-#endif
-}
-
-const cXyz* restartPos() {
-    const PlayerId id = peekPendingCreateOwner();
-    auto& s = slot(id);
-    return s.lastKnownPosition ? &*s.lastKnownPosition : nullptr;
-}
-
-s16 restartAngleY() {
-    const PlayerId id = peekPendingCreateOwner();
-    return slot(id).lastKnownYaw.value_or(0);
-}
-
-const char* restartStageName() {
-    const PlayerId id = peekPendingCreateOwner();
-    auto& s = slot(id);
-    return s.lastKnownStage.empty() ? "" : s.lastKnownStage.c_str();
-}
-
-s8 restartRoomNo() {
-    const PlayerId id = peekPendingCreateOwner();
-    return slot(id).lastKnownRoom;
-}
-
 ScopedHorseOwnerContext::ScopedHorseOwnerContext(const daHorse_c& horse) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (!isEnabled()) {
         return;
     }
@@ -641,18 +555,12 @@ const char* queryKindName(HorseQueryKind kind) {
 
 }  // namespace dusk::coop::horses
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 namespace dusk::coop::horses {
 
-bool useCompatResolver() { return isEnabled(); }
-
 daHorse_c* resolveForContextBridge() { return resolveForContext(); }
-
-daHorse_c* getGlobalHorseActor() {
-    return reinterpret_cast<daHorse_c*>(g_dComIfG_gameInfo.play.getPlayerPtr(HORSE_PTR));
-}
 
 }  // namespace dusk::coop::horses
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

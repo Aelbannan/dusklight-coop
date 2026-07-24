@@ -42,7 +42,7 @@
 
 ## How to test (PoC)
 
-Build with `-DENABLE_LOCAL_COOP=ON`. At runtime:
+Build normally for PC. At runtime:
 
 ```cpp
 dusk::coop::setEnabled(true);

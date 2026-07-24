@@ -4,7 +4,7 @@
 
 namespace dusk::coop {
 
-// Safe indexed accessors. Never index original one-slot arrays with id > 0.
+// Indexed accessors backed by the engine's native eight-player/eight-view storage.
 fopAc_ac_c* getPlayerActor(PlayerId id);
 void setPlayerActor(PlayerId id, fopAc_ac_c* actor);
 

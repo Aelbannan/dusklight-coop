@@ -4,6 +4,7 @@
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_bottles.h"
+#include "dusk/coop/coop_context.h"
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_input.h"
 #include "dusk/coop/coop_inventory.h"
@@ -280,7 +281,7 @@ u16 resolvedCutType() {
     if (g_cutOverrideActive) {
         return g_cutOverrideValue;
     }
-    return rawCutType(getPlayerActor(0));
+    return rawCutType(getPlayerActor(currentPlayer()));
 }
 
 void pushAttackCutType(u16 cutType) {
@@ -471,10 +472,15 @@ void triggerGameOverIfNeeded() {
     if (!allPlayersDowned()) {
         return;
     }
-    fopAc_ac_c* p0 = getPlayerActor(0);
-    if (p0 != nullptr && fopAcM_GetName(p0) == fpcNm_ALINK_e) {
-        static_cast<daPy_py_c*>(p0)->onForceGameOver();
-        debug::logInfo("combat: all players downed — forcing game over");
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        const auto* slot = playerSlot(id);
+        fopAc_ac_c* actor = getPlayerActor(id);
+        if (slot != nullptr && slot->transitionAuthority && actor != nullptr &&
+            fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+            static_cast<daPy_py_c*>(actor)->onForceGameOver();
+            debug::logInfo("combat: all players downed — forcing game over");
+            return;
+        }
     }
 }
 
@@ -495,7 +501,7 @@ bool shouldSuppressGameOver(PlayerId id) {
 
 }  // namespace dusk::coop::combat
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 extern "C" u8 dusk_coop_overrideCutType(u8 nativeCutType) {
     return dusk::coop::combat::peekCutTypeOverride(nativeCutType);
 }

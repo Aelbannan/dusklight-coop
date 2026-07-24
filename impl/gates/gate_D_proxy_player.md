@@ -50,7 +50,7 @@
 
 ## How to test
 
-1. Configure/build with `-DENABLE_LOCAL_COOP=ON` (`TARGET_PC`).
+1. Configure/build with a normal PC build (`TARGET_PC`).
 2. Boot into a playable field stage with Player 0 present.
 3. On a second gamepad, press **Start** → log `Player N joined` then `Proxy PN spawn/created`.
 4. Confirm split views (Gate A forced view count) and Camera 1 tracks the proxy.

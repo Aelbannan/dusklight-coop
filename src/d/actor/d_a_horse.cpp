@@ -20,7 +20,7 @@
 #include <cmath>
 #include <cstring>
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_horses.h"
 #endif
@@ -28,18 +28,6 @@
 #if TARGET_PC
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
-
-namespace {
-// FRAME INTERP NOTE: Sim tick control point snapshots for interpolation
-constexpr int kHorseReinSimMax = 75;
-cXyz s_horseReinSimPrev[kHorseReinSimMax];
-cXyz s_horseReinSimCurr[kHorseReinSimMax];
-int s_horseReinSimNumPrev;
-int s_horseReinSimNumCurr;
-bool s_horseReinSimPrevValid;
-bool s_horseReinSimCurrValid;
-uint64_t s_horseReinSimRolledSeq;
-}  // namespace
 #endif
 
 #define ANM_HS_BACK_WALK           6
@@ -492,7 +480,7 @@ static void daHorse_coHitCallbackAll(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coO
 }
 
 static void* daHorse_searchEnemy(fopAc_ac_c* i_actor, void* i_data) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     auto* ctx = static_cast<dusk::coop::horses::HorseSearchContext*>(i_data);
     daHorse_c* horse_p = ctx != nullptr ? ctx->horse : nullptr;
     f32 search_dist = ctx != nullptr ? ctx->maximumDistance : 0.0f;
@@ -657,6 +645,14 @@ int daHorse_c::createHeap() {
         return 0;
     }
 
+#if TARGET_PC
+    m_reinSimNumPrev = 0;
+    m_reinSimNumCurr = 0;
+    m_reinSimPrevValid = false;
+    m_reinSimCurrValid = false;
+    m_reinSimRolledSeq = 0;
+#endif
+
     m_rein[0].field_0x8[1] = 35;
     m_rein[1].field_0x8[1] = 35;
     m_rein[2].field_0x8[1] = 5;
@@ -696,11 +692,13 @@ extern int g_horsePosInit;
 int daHorse_c::create() {
     fopAcM_ct(this, daHorse_c);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    const dusk::coop::PlayerId coopOwner = dusk::coop::horses::peekPendingCreateOwner();
-    const bool coopSecondary = dusk::coop::horses::shouldBypassSingleton(coopOwner);
+#if TARGET_PC
+    const bool indexedCreate = dusk::coop::horses::hasPendingCreate();
+    const dusk::coop::PlayerId coopOwner = indexedCreate
+                                                ? dusk::coop::horses::peekPendingCreateOwner()
+                                                : dusk::coop::currentPlayer();
 #else
-    const bool coopSecondary = false;
+    const bool indexedCreate = false;
 #endif
 
     if (checkEnding()) {
@@ -718,8 +716,8 @@ int daHorse_c::create() {
            /* General use - When on (while changing scenes) stage name is not shown */
         || dComIfGs_isTmpBit(dSv_event_tmp_flag_c::NO_TELOP)))
     {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (coopSecondary) {
+#if TARGET_PC
+        if (indexedCreate) {
             dusk::coop::horses::onCreateFailed(coopOwner);
         }
 #endif
@@ -732,13 +730,9 @@ int daHorse_c::create() {
             return cPhs_INIT_e;
         }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (coopSecondary) {
-            if (dusk::coop::horses::resolveOwned(coopOwner) != NULL) {
-                dusk::coop::horses::onCreateFailed(coopOwner);
-                return cPhs_ERROR_e;
-            }
-        } else if (dusk::coop::horses::getGlobalHorseActor() != NULL) {
+#if TARGET_PC
+        if (dusk::coop::horses::resolveOwned(coopOwner) != NULL) {
+            dusk::coop::horses::onCreateFailed(coopOwner);
             return cPhs_ERROR_e;
         }
 #else
@@ -762,9 +756,9 @@ int daHorse_c::create() {
         m_onRideFlg = &daHorse_c::onRideFlgSubstance;
         m_offRideFlg = &daHorse_c::offRideFlgSubstance;
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        // Secondary owned horses keep the spawn pose from fopAcM_create — skip P0 restart.
-        if (coopSecondary) {
+#if TARGET_PC
+        // Explicit indexed spawns keep the pose supplied to fopAcM_create.
+        if (indexedCreate) {
             // no restart reposition
         } else
 #endif
@@ -795,8 +789,8 @@ int daHorse_c::create() {
         }
 
         if (!fopAcM_entrySolidHeap(this, daHorse_createHeap, 0x6E60)) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-            if (coopSecondary) {
+#if TARGET_PC
+            if (indexedCreate) {
                 dusk::coop::horses::onCreateFailed(coopOwner);
             }
 #endif
@@ -913,10 +907,7 @@ int daHorse_c::create() {
         m_acch.CrrPos(dComIfG_Bgsp());
         setRoomInfo(1);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-        if (dusk::coop::horses::shouldRegisterGlobally(coopOwner)) {
-            dComIfGp_setHorseActor(this);
-        }
+#if TARGET_PC
         dusk::coop::horses::onCreateSuccess(coopOwner, this, fopAcM_GetID(this));
 #else
         dComIfGp_setHorseActor(this);
@@ -3069,6 +3060,12 @@ void daHorse_c::setReinPosMoveInit(int param_0) {
 void daHorse_c::copyReinPos() {
     int i;
     cXyz* pos_p = m_reinLine.getPos(0);
+#if TARGET_PC
+    if (pos_p == nullptr) {
+        m_reinSimCurrValid = false;
+        return;
+    }
+#endif
     daHorseRein_c* rein = &m_rein[0];
     
     field_0x1204 = rein->field_0x8[0];
@@ -3090,21 +3087,22 @@ void daHorse_c::copyReinPos() {
         *pos_p = rein->field_0x0[0][i];
     }
 #if TARGET_PC
-    if (field_0x1204 > 0) {
+    if (field_0x1204 > 0 && field_0x1204 <= REIN_INTERP_POINT_MAX) {
         const uint64_t simSeq = dusk::frame_interp::sim_tick_seq();
-        if (simSeq != s_horseReinSimRolledSeq) {
-            s_horseReinSimRolledSeq = simSeq;
-            if (s_horseReinSimCurrValid && s_horseReinSimNumCurr > 0) {
-                memcpy(s_horseReinSimPrev, s_horseReinSimCurr, s_horseReinSimNumCurr * sizeof(cXyz));
-                s_horseReinSimNumPrev = s_horseReinSimNumCurr;
-                s_horseReinSimPrevValid = true;
+        if (simSeq != m_reinSimRolledSeq) {
+            m_reinSimRolledSeq = simSeq;
+            if (m_reinSimCurrValid && m_reinSimNumCurr > 0) {
+                memcpy(m_reinSimPrev, m_reinSimCurr,
+                       m_reinSimNumCurr * sizeof(cXyz));
+                m_reinSimNumPrev = m_reinSimNumCurr;
+                m_reinSimPrevValid = true;
             }
         }
-        memcpy(s_horseReinSimCurr, m_reinLine.getPos(0), field_0x1204 * sizeof(cXyz));
-        s_horseReinSimNumCurr = field_0x1204;
-        s_horseReinSimCurrValid = true;
+        memcpy(m_reinSimCurr, pos_p, field_0x1204 * sizeof(cXyz));
+        m_reinSimNumCurr = field_0x1204;
+        m_reinSimCurrValid = true;
     } else {
-        s_horseReinSimCurrValid = false;
+        m_reinSimCurrValid = false;
     }
 #endif
 }
@@ -3221,22 +3219,27 @@ void daHorse_c::setReinPosNormalSubstance() {
 #if TARGET_PC
 void daHorse_c::lerpControlPoints(f32 alpha) {
     // FRAME INTERP NOTE: Currently only lerping points for Epona's reins. Need a more global solution.
-    if (!dusk::frame_interp::is_enabled() || !s_horseReinSimPrevValid || !s_horseReinSimCurrValid) {
+    if (!dusk::frame_interp::is_enabled() || !m_reinSimPrevValid || !m_reinSimCurrValid) {
         return;
     }
-    const int nCurr = s_horseReinSimNumCurr;
-    const int nPrev = s_horseReinSimNumPrev;
+    const int nCurr = m_reinSimNumCurr;
+    const int nPrev = m_reinSimNumPrev;
     if (nCurr <= 0) {
         return;
     }
     int n = nPrev < nCurr ? nPrev : nCurr;
-    if (n <= 0 || n > kHorseReinSimMax) {
+    if (n <= 0 || n > REIN_INTERP_POINT_MAX) {
         return;
     }
     cXyz* dst = m_reinLine.getPos(0);
+    if (dst == nullptr) {
+        m_reinSimPrevValid = false;
+        m_reinSimCurrValid = false;
+        return;
+    }
     for (int i = 0; i < n; i++) {
-        const cXyz& p0 = s_horseReinSimPrev[i];
-        const cXyz& p1 = s_horseReinSimCurr[i];
+        const cXyz& p0 = m_reinSimPrev[i];
+        const cXyz& p1 = m_reinSimCurr[i];
         dst[i] = p0 + (p1 - p0) * alpha;
     }
 }
@@ -3532,7 +3535,7 @@ void daHorse_c::setBoarHit(fopAc_ac_c* param_0, int param_1) {
 
 void daHorse_c::savePos() {
     if (this->model != NULL && !checkStateFlg0(FLG0_UNK_8000) && !checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         const dusk::coop::PlayerId owner = dusk::coop::horses::ownerOf(this);
         if (owner > 0) {
             dusk::coop::horses::setRestart(owner, dComIfGp_getStartStageName(), current.pos,
@@ -3728,7 +3731,7 @@ int daHorse_c::procWait() {
     }
 
     f32 enemy_search_range = m_hio->m.enemy_search_range;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     dusk::coop::horses::HorseSearchContext search_ctx;
     search_ctx.horse = this;
     search_ctx.owner = dusk::coop::horses::ownerOf(this);
@@ -4504,7 +4507,7 @@ void daHorse_c::searchSceneChangeArea(fopAc_ac_c* i_scnChg) {
 }
 
 static void* daHorse_searchSceneChangeArea(fopAc_ac_c* i_actor, void* i_data) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     daHorse_c* horse_p = static_cast<daHorse_c*>(i_data);
     if (horse_p != nullptr) {
         horse_p->searchSceneChangeArea(i_actor);
@@ -4518,7 +4521,7 @@ static void* daHorse_searchSceneChangeArea(fopAc_ac_c* i_actor, void* i_data) {
 
 int daHorse_c::execute() {
     m_scnChg_num = 0;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, this);
 #else
     fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, NULL);
@@ -4823,10 +4826,7 @@ daHorse_c::~daHorse_c() {
     m_sound.deleteObject();
     dComIfG_resDelete(&m_phase, l_arcName);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (dusk::coop::horses::getGlobalHorseActor() == this) {
-        dComIfGp_setHorseActor(NULL);
-    }
+#if TARGET_PC
     dusk::coop::horses::onHorseDestroyed(this);
 #else
     if (dComIfGp_getHorseActor() == this) {

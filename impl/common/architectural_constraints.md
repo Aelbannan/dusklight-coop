@@ -2,20 +2,20 @@
 
 Confirmed by source audit against Dusklight `eed14ac` and Aurora `e3d4f82`. These are not design preferences — they are the current reality that any implementation must work within or deliberately replace.
 
-## 2.1 One-slot game-state storage behind indexed APIs
+## 2.1 Eight-slot game-state storage behind indexed APIs
 
-`dComIfG_play_c` exposes indexed getters/setters for players, cameras, camera mappings, and windows, but underlying storage is one element wide:
+`dComIfG_play_c` exposes indexed getters/setters for players, cameras, camera mappings, and windows. The engine storage has been expanded to eight slots:
 
 ```cpp
-dDlst_window_c mWindow[1];
-dComIfG_camera_info_class mCameraInfo[1];
-dComIfG_player_info_class mPlayerInfo[1];
-u32 mPlayerStatus[1][4];
+dDlst_window_c mWindow[8];
+dComIfG_camera_info_class mCameraInfo[8];
+dComIfG_player_info_class mPlayerInfo[8];
+u32 mPlayerStatus[8][4];
 ```
 
 **Consequences:**
-- Never call the original storage accessor with player/camera/window index > 0.
-- Co-op requires sidecars for players, player status, cameras, windows, item-runtime state, and attention ownership.
+- Player/camera/window IDs 0–7 are native engine indices.
+- Per-player gameplay resources can remain runtime state where the original game had no indexed concept.
 - Every render pass must save and restore current render pointers.
 
 ## 2.2 Four-port legacy PAD ABI

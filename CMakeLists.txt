@@ -90,7 +90,6 @@ option(DUSK_ENABLE_SENTRY_NATIVE "Enable sentry-native crash reporting support" 
 option(DUSK_PACKAGE_INSTALL "Install Dusklight with a Linux-native file structure" OFF)
 option(DUSK_GFX_DEBUG_GROUPS "Report debug groups to the native graphics API" ${DUSK_GFX_DEBUG_GROUPS_DEFAULT})
 option(DUSK_ENABLE_CODE_MODS "Enable code mods" OFF)
-option(ENABLE_LOCAL_COOP "Enable local split-screen co-op (PC only)" OFF)
 
 set(DUSK_HAS_FUNCHOOK OFF)
 if (DUSK_ENABLE_CODE_MODS AND (NOT APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
@@ -410,10 +409,6 @@ endif ()
 
 if (DUSK_ENABLE_CODE_MODS)
     list(APPEND GAME_COMPILE_DEFS DUSK_CODE_MODS=1)
-endif ()
-if (ENABLE_LOCAL_COOP)
-    list(APPEND GAME_COMPILE_DEFS ENABLE_LOCAL_COOP=1)
-    message(STATUS "dusklight: ENABLE_LOCAL_COOP is ON")
 endif ()
 list(APPEND GAME_COMPILE_DEFS
         DUSK_HAS_FUNCHOOK=$<BOOL:${DUSK_HAS_FUNCHOOK}>

@@ -10,7 +10,7 @@
 
 `init_phase2` always called `dComIfGp_getAttention()->Init(player, PAD_1)`, re-binding the single global attention manager.
 
-## Guards added (`ENABLE_LOCAL_COOP && TARGET_PC`)
+## Guards added (`local co-op support && TARGET_PC`)
 
 | Site | Behavior |
 |------|----------|

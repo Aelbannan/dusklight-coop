@@ -47,7 +47,7 @@
 
 ## How to test
 
-1. Build with `-DENABLE_LOCAL_COOP=ON`.
+1. Build with a normal PC build.
 2. Join P1 (Start on pad 2).
 3. Transform P0 to wolf — confirm `global_save_tf=1` in `[coop]` logs.
 4. Press **X** on P1 — log `sidecar transform -> wolf`; `global_save_tf` unchanged if P0 human again.

@@ -115,12 +115,7 @@ inline s16 fopCamM_GetBank(camera_class* i_camera) {
     return i_camera->view.bank;
 }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-// PC co-op: at least eight camera process slots (see architectural_constraints §2.4).
 constexpr int fopCamM_MAX_CAMERAS = 8;
-#else
-constexpr int fopCamM_MAX_CAMERAS = 4;
-#endif
 
 fpc_ProcID fopCamM_Create(int i_cameraIdx, s16 i_procName, void* i_append);
 fpc_ProcID fopCamM_GetID(int i_cameraIdx);

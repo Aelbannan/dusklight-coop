@@ -1,33 +1,41 @@
 #pragma once
 
-// Thin C-linkage bridge so dComIfGs_* inlines can route consumables to
-// per-player sidecars without pulling the full co-op runtime into every TU.
+// Thin C-linkage bridge so dComIfGs_* inlines use indexed player resources
+// without pulling the multiplayer runtime into every translation unit.
 
 #include "dolphin/types.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// True when co-op is compiled in, enabled, and the active context player is not 0.
-int dusk_coop_useResourceSidecar(void);
+// True after indexed resources have been initialized from save data.
+int dusk_coop_resourcesReady(void);
 
 u16 dusk_coop_getLife(void);
 void dusk_coop_setLife(u16 life);
+u16 dusk_coop_getMaxLife(void);
+void dusk_coop_setMaxLife(u16 maxLife);
 
 u16 dusk_coop_getRupee(void);
 void dusk_coop_setRupee(u16 rupees);
 
 u16 dusk_coop_getOil(void);
 void dusk_coop_setOil(u16 oil);
+u16 dusk_coop_getMaxOil(void);
+void dusk_coop_setMaxOil(u16 maxOil);
 
 u8 dusk_coop_getMagic(void);
 void dusk_coop_setMagic(u8 magic);
+u8 dusk_coop_getMaxMagic(void);
+void dusk_coop_setMaxMagic(u8 maxMagic);
 
 u8 dusk_coop_getArrowNum(void);
 void dusk_coop_setArrowNum(u8 num);
+u8 dusk_coop_getArrowMax(void);
+void dusk_coop_setArrowMax(u8 max);
 
 u8 dusk_coop_getPachinkoNum(void);
 void dusk_coop_setPachinkoNum(u8 num);
@@ -46,4 +54,4 @@ void dusk_coop_setBottleItem(u8 bottleIdx, u8 itemNo);
 }
 #endif
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

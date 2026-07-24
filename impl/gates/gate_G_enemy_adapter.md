@@ -85,7 +85,7 @@ Elites, bosses, puzzle/scripted enemies, and any proc name without a whitelist a
 
 ## How to test
 
-1. Build with `-DENABLE_LOCAL_COOP=ON` (PC).
+1. Build with a normal PC build (PC).
 2. **SP regression:** co-op disabled — Armos and ALLDIE behavior unchanged (no clone notes, no ALLDIE wait).
 3. Join P1 (Press Start) in a room with a stage-placed Armos (`E_AI`, real set ID).
 4. Confirm log: `enemy: clone requested … setId=0xFFFF` and params mid-byte `FF`.

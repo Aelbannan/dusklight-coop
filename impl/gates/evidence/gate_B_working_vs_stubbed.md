@@ -14,7 +14,7 @@
 | Per-camera input owner + tracked player + attention owner IDs | Stored on `CameraRoute` |
 | Per-camera window | `g_windows[view]` + `assignWindow` |
 | Secondary destructor isolation | Turn-restart / stop-status / attention Init / setCamera(0) fixed |
-| Single-player unchanged when co-op off | Paths guarded; registry stays size 4 without `ENABLE_LOCAL_COOP` |
+| Single-player unchanged when co-op off | Paths guarded; registry stays size 4 without local co-op support |
 | Dual full-frame composite | Two painter passes → EFB capture → L/R blit (tiled scissors black Metal) |
 | Proxy third-person follow on cam1 | `dCamera_c::Run` early-out when tracked actor is not `daAlink_c` |
 | Cam1 audio isolation | Secondary `camera_draw` skips `setAudioCamera` / map audio (see Known issues) |
@@ -45,12 +45,12 @@ Documented in code at the call sites. Summary:
 
 ## Manual test plan
 
-1. **Baseline:** Build with `ENABLE_LOCAL_COOP=OFF` (or unset). Confirm single-player camera / soft-reset / peep unchanged.
-2. **Compile-in:** Build with `ENABLE_LOCAL_COOP=ON`. Boot game; leave co-op disabled at runtime — still one camera.
+1. **Baseline:** Build normally. Confirm one-player camera / soft-reset / peep behavior.
+2. **One-player runtime:** Boot without joined extra players — only camera slot 0 is active.
 3. **Enable co-op** (Press-Start path once input gate wires it): call `camera::ensureCameras(N)` for N=2..8 after stage camera 0 exists.
 4. **Scheduler:** Confirm N camera processes appear in the process list / overlay; no custom execute loop.
 5. **Sparse leave:** `removeCameraSlot(3)` with cams 4–7 present — IDs 4–7 remain; slot 3 cleared.
 6. **Rejoin:** `rejoinCameraSlot(3, owner)` restores only slot 3.
 7. **Destruct:** Room unload / `destroySecondaryCameras` — primary turn-restart camera data must match pre-destroy Camera 0 pose (secondaries must not overwrite it).
-8. **OOB safety:** Never index original `mCameraInfo[1]` / `mWindow[1]` with >0 (assert / ASan if available).
+8. **Indexed storage:** Exercise native camera/window/player slots 0–7 under ASan if available.
 9. **P2 join (play):** Start on pad 2 → no crash; log `Gate B: cam1 initialized`; right pane tracks proxy; P0 stick axes unchanged.

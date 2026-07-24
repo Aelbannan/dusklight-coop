@@ -40,6 +40,5 @@ void onDeviceReconnect(s32 deviceId);
 
 bool isDeviceAssigned(s32 deviceId);
 std::optional<PlayerId> playerForDevice(s32 deviceId);
-std::optional<PlayerId> keyboardPlayer();
 
 }  // namespace dusk::coop::input

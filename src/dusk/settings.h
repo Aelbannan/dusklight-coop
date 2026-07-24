@@ -295,14 +295,14 @@ struct UserSettings {
         ConfigVar<bool> enableAdvancedSettings;
     } backend;
 
-    // Arrays of size 4 for 4 ports
+    // Arrays sized for PAD_CHANMAX / local co-op ports (0-7).
     struct {
-        std::array<ActionBindConfigVar, 4> firstPersonCamera;
-        std::array<ActionBindConfigVar, 4> callMidna;
-        std::array<ActionBindConfigVar, 4> openMapScreen;
-        std::array<ActionBindConfigVar, 4> toggleMinimap;
-        std::array<ActionBindConfigVar, 4> openDusklightMenu;
-        std::array<ActionBindConfigVar, 4> turboSpeedButton;
+        std::array<ActionBindConfigVar, 8> firstPersonCamera;
+        std::array<ActionBindConfigVar, 8> callMidna;
+        std::array<ActionBindConfigVar, 8> openMapScreen;
+        std::array<ActionBindConfigVar, 8> toggleMinimap;
+        std::array<ActionBindConfigVar, 8> openDusklightMenu;
+        std::array<ActionBindConfigVar, 8> turboSpeedButton;
     } actionBindings;
 };
 

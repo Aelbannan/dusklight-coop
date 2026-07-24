@@ -8,30 +8,85 @@
 #include "dusk/coop/coop_input.h"
 #include "dusk/coop/coop_player.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "SSystem/SComponent/c_math.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dolphin/pad.h"
 #include "f_op/f_op_actor_mng.h"
+#include "f_pc/f_pc_base.h"
 #include "m_Do/m_Do_controller_pad.h"
 
+#include <array>
 #include <cmath>
+#include <deque>
 #endif
 
 namespace dusk::coop::alink {
 namespace {
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
-bool g_hasPending = false;
-PlayerId g_pendingOwner = 0;
-BOOL g_secondaryBgWait = FALSE;
-PlayerId g_creatingOwner = 0;
+struct SpawnState {
+    bool active = false;
+    fpc_ProcID processId = fpcM_ERROR_PROCESS_ID_e;
+    BOOL bgWait = FALSE;
+};
+
+std::array<SpawnState, MAX_LOCAL_PLAYERS> g_spawns{};
+// Spawn bookkeeping is transient. Keep the finished actor-to-player binding
+// separately so ownerOf() cannot fall back to P0 after markSpawnComplete().
+std::array<const daAlink_c*, MAX_LOCAL_PLAYERS> g_ownedLinks{};
+std::deque<PlayerId> g_pendingOrder{};
+constexpr PlayerId kUnowned = 0xFF;
 
 f32 stickMagnitude(f32 x, f32 y) {
     const f32 mag = std::sqrt(x * x + y * y);
     return mag > 1.0f ? 1.0f : mag;
+}
+
+PlayerId ownerForProcess(fpc_ProcID pid) {
+    if (pid == fpcM_ERROR_PROCESS_ID_e) {
+        return kUnowned;
+    }
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (g_spawns[id].active && g_spawns[id].processId == pid) {
+            return id;
+        }
+    }
+    return kUnowned;
+}
+
+PlayerId ownerForLink(const daAlink_c* link) {
+    if (link == nullptr) {
+        return kUnowned;
+    }
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (g_ownedLinks[id] == link) {
+            return id;
+        }
+    }
+    return kUnowned;
+}
+
+PlayerId claimNextUnbound(fpc_ProcID pid) {
+    while (!g_pendingOrder.empty()) {
+        const PlayerId id = g_pendingOrder.front();
+        g_pendingOrder.pop_front();
+        if (!isValidPlayer(id)) {
+            continue;
+        }
+        auto& slot = g_spawns[id];
+        if (!slot.active) {
+            continue;
+        }
+        if (slot.processId != fpcM_ERROR_PROCESS_ID_e && slot.processId != pid) {
+            continue;
+        }
+        slot.processId = pid;
+        return id;
+    }
+    return kUnowned;
 }
 
 #endif
@@ -39,111 +94,133 @@ f32 stickMagnitude(f32 x, f32 y) {
 }  // namespace
 
 void registerPendingSpawn(PlayerId player) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (player == 0 || !isValidPlayer(player)) {
+#if TARGET_PC
+    if (!isValidPlayer(player)) {
         return;
     }
-    g_hasPending = true;
-    g_pendingOwner = player;
-    g_secondaryBgWait = FALSE;
+    auto& slot = g_spawns[player];
+    slot.active = true;
+    slot.processId = fpcM_ERROR_PROCESS_ID_e;
+    slot.bgWait = FALSE;
+    g_pendingOrder.push_back(player);
+    debug::logInfo("Link P%u pending create registered", player);
 #else
     (void)player;
 #endif
 }
 
-bool hasPendingSpawn() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return g_hasPending && g_pendingOwner != 0;
-#else
-    return false;
-#endif
-}
-
-PlayerId peekPendingOwner() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return g_hasPending ? g_pendingOwner : static_cast<PlayerId>(0);
-#else
-    return 0;
-#endif
-}
-
-PlayerId consumePendingOwner() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (!g_hasPending) {
-        return 0;
+void noteSpawnProcess(PlayerId player, u32 processId) {
+#if TARGET_PC
+    if (!isValidPlayer(player) || !g_spawns[player].active) {
+        return;
     }
-    const PlayerId id = g_pendingOwner;
-    g_hasPending = false;
-    g_pendingOwner = 0;
-    return id;
+    const auto pid = static_cast<fpc_ProcID>(processId);
+    if (pid == fpcM_ERROR_PROCESS_ID_e) {
+        return;
+    }
+    // create() may already have claimed this process via the FIFO.
+    if (g_spawns[player].processId == fpcM_ERROR_PROCESS_ID_e ||
+        g_spawns[player].processId == pid) {
+        g_spawns[player].processId = pid;
+    }
 #else
-    return 0;
+    (void)player;
+    (void)processId;
+#endif
+}
+
+void clearSpawn(PlayerId player) {
+#if TARGET_PC
+    if (!isValidPlayer(player)) {
+        return;
+    }
+    g_spawns[player] = {};
+    for (auto it = g_pendingOrder.begin(); it != g_pendingOrder.end();) {
+        if (*it == player) {
+            it = g_pendingOrder.erase(it);
+        } else {
+            ++it;
+        }
+    }
+#else
+    (void)player;
 #endif
 }
 
 void clearPendingSpawn() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    g_hasPending = false;
-    g_pendingOwner = 0;
-    g_secondaryBgWait = FALSE;
+#if TARGET_PC
+    g_spawns = {};
+    g_ownedLinks = {};
+    g_pendingOrder.clear();
 #endif
 }
 
-BOOL& secondaryBgWaitFlag() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return g_secondaryBgWait;
+void markSpawnComplete(PlayerId player) {
+#if TARGET_PC
+    clearSpawn(player);
 #else
+    (void)player;
+#endif
+}
+
+PlayerId resolveOwner(const daAlink_c* link) {
+#if !TARGET_PC
+    (void)link;
+    return 0;
+#else
+    if (link == nullptr) {
+        return 0;
+    }
+
+    if (const PlayerId bound = ownerForLink(link); bound != kUnowned) {
+        return bound;
+    }
+
+    const fpc_ProcID pid = fopAcM_GetID(link);
+
+    if (const PlayerId bound = ownerForProcess(pid); bound != kUnowned) {
+        return bound;
+    }
+
+    // First create phase only: bind the next unbound pending join to this process.
+    if (const PlayerId claimed = claimNextUnbound(pid); claimed != kUnowned) {
+        return claimed;
+    }
+
+    // Already registered in the native player slot by a later create phase.
+    return forms::playerIdForLink(link);
+#endif
+}
+
+BOOL& bgWaitFlag(PlayerId player) {
+#if TARGET_PC
+    if (!isValidPlayer(player)) {
+        static BOOL dummy = FALSE;
+        return dummy;
+    }
+    return g_spawns[player].bgWait;
+#else
+    (void)player;
     static BOOL dummy = FALSE;
     return dummy;
 #endif
 }
 
-void setCreatingOwner(PlayerId id) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    g_creatingOwner = id;
-#else
-    (void)id;
-#endif
-}
-
-PlayerId creatingOwner() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return g_creatingOwner;
-#else
-    return 0;
-#endif
-}
-
-bool isCreatingSecondary() {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    return g_creatingOwner != 0;
-#else
-    return false;
-#endif
-}
-
-bool isSecondaryLink(const daAlink_c* link) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (link == nullptr || !isEnabled()) {
-        return false;
-    }
-    const PlayerId id = forms::playerIdForLink(link);
-    return id != 0;
-#else
-    (void)link;
-    return false;
-#endif
-}
-
 PlayerId ownerOf(const daAlink_c* link) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (link == nullptr) {
         return 0;
     }
-    // Prefer creating-owner during create (sidecar may not be set yet).
-    if (g_creatingOwner != 0) {
-        return g_creatingOwner;
+
+    if (const PlayerId bound = ownerForLink(link); bound != kUnowned) {
+        return bound;
     }
+
+    const fpc_ProcID pid = fopAcM_GetID(link);
+    if (const PlayerId bound = ownerForProcess(pid); bound != kUnowned) {
+        return bound;
+    }
+    // Never claim pending joins here; ownership lookup must not consume create state.
     return forms::playerIdForLink(link);
 #else
     (void)link;
@@ -151,23 +228,36 @@ PlayerId ownerOf(const daAlink_c* link) {
 #endif
 }
 
-void onSecondaryCreated(PlayerId id, daAlink_c* link) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    if (id == 0 || link == nullptr) {
+bool isStoryAuthorityLink(const daAlink_c* link) {
+    if (link == nullptr) {
+        return false;
+    }
+#if TARGET_PC
+    const auto* slot = playerSlot(ownerOf(link));
+    return slot != nullptr && slot->transitionAuthority;
+#else
+    return true;
+#endif
+}
+
+void onLinkCreated(PlayerId id, daAlink_c* link) {
+#if TARGET_PC
+    if (!isValidPlayer(id) || link == nullptr) {
         return;
     }
+    g_ownedLinks[id] = link;
     setPlayerActor(id, static_cast<fopAc_ac_c*>(link));
     combat::registerPlayerActor(id, static_cast<fopAc_ac_c*>(link));
     if (auto* slot = playerSlot(id)) {
         slot->joined = true;
         slot->enabled = true;
         slot->id = id;
-        slot->actor = static_cast<fopAc_ac_c*>(link);
         if (!slot->view.has_value()) {
             slot->view = static_cast<ViewId>(id);
         }
     }
-    debug::logInfo("Secondary Link P%u created (proc=%u)", id,
+    markSpawnComplete(id);
+    debug::logInfo("Link P%u created (proc=%u)", id,
                    static_cast<unsigned>(fopAcM_GetID(link)));
 #else
     (void)id;
@@ -175,8 +265,19 @@ void onSecondaryCreated(PlayerId id, daAlink_c* link) {
 #endif
 }
 
+void clearLinkOwner(PlayerId id, const daAlink_c* link) {
+#if TARGET_PC
+    if (isValidPlayer(id) && g_ownedLinks[id] == link) {
+        g_ownedLinks[id] = nullptr;
+    }
+#else
+    (void)id;
+    (void)link;
+#endif
+}
+
 bool applyInputSnapshot(daAlink_c* link) {
-#if !(defined(ENABLE_LOCAL_COOP) && TARGET_PC)
+#if !TARGET_PC
     (void)link;
     return false;
 #else
@@ -184,15 +285,12 @@ bool applyInputSnapshot(daAlink_c* link) {
         return false;
     }
     const PlayerId id = ownerOf(link);
-    if (id == 0) {
-        return false;
-    }
-
     const auto& snap = input::snapshot(id);
     link->mStickValue = stickMagnitude(snap.leftStick.x, snap.leftStick.y);
-    // Match mDoCPd_c::getStickAngle3D convention used by setStickData.
+    // Keep the engine's forward/up convention while preserving the movement
+    // handedness used by daAlink's sin/cos move calculation.
     link->mStickAngle =
-        static_cast<s16>(cM_atan2s(-snap.leftStick.x, snap.leftStick.y) - static_cast<s16>(-0x8000));
+        static_cast<s16>(cM_atan2s(-snap.leftStick.x, -snap.leftStick.y) - static_cast<s16>(-0x8000));
 
     auto mapTrig = [&](u16 padBit, daAlink_c::daAlink_ITEM_BTN btn) {
         if (snap.buttonsPressed & padBit) {

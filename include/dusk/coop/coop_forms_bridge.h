@@ -5,7 +5,7 @@
 
 #include "dolphin/types.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,4 +22,4 @@ int dusk_coop_sensesActiveForCurrentView(void);
 }
 #endif
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

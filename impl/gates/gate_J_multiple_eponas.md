@@ -56,7 +56,7 @@
 
 ## How to test
 
-1. Configure/build with `-DENABLE_LOCAL_COOP=ON` (`TARGET_PC`).
+1. Configure/build with a normal PC build (`TARGET_PC`).
 2. Load a field stage where Epona is allowed (rescued bit set; not mid-telop).
 3. Confirm P0 horse still registers via `dComIfGp_getHorseActor` / slot 0.
 4. Press **Start** on pad 2 → proxy joins; log should show `Horse P1 spawn requested` then `Horse P1 created (secondary=1)`.

@@ -19,7 +19,6 @@ namespace dusk::coop::camera {
 namespace {
 
 std::array<bool, MAX_LOCAL_VIEWS> g_active{};
-std::array<dDlst_window_c, MAX_LOCAL_VIEWS> g_windows{};
 std::array<bool, MAX_LOCAL_VIEWS> g_createRequested{};
 
 bool validIndex(int idx) { return idx >= 0 && idx < static_cast<int>(MAX_LOCAL_VIEWS); }
@@ -45,13 +44,6 @@ void clearRouteSlot(ViewId id, bool keepMapping) {
         route->trackedPlayers.clear();
         route->inputOwner = 0;
         route->attentionOwner = 0;
-        route->winId = static_cast<s8>(id);
-        route->player1Id = static_cast<s8>(id);
-        route->player2Id = static_cast<s8>(-1);
-        route->attentionStatus = 0;
-        route->zoomScale = 1.0f;
-        route->zoomForcus = 1.0f;
-        route->paramFileName = nullptr;
     }
     g_createRequested[id] = false;
 }
@@ -72,13 +64,10 @@ void syncPrimaryRoute() {
     if (route->trackedPlayers.empty()) {
         route->trackedPlayers.push_back(0);
     }
-    route->winId = 0;
-    route->player1Id = 0;
-    route->player2Id = static_cast<s8>(-1);
     g_active[0] = true;
 }
 
-void prepareSidecarMapping(ViewId id, PlayerId owner) {
+void prepareNativeMapping(ViewId id, PlayerId owner) {
     auto* route = cameraRoute(id);
     if (!route) {
         return;
@@ -87,14 +76,14 @@ void prepareSidecarMapping(ViewId id, PlayerId owner) {
     route->inputOwner = owner;
     route->attentionOwner = owner;
     route->trackedPlayers = {owner};
-    route->winId = static_cast<s8>(id);
-    route->player1Id = static_cast<s8>(owner);
-    route->player2Id = static_cast<s8>(-1);
-    route->attentionStatus = 0;
-    route->zoomScale = 1.0f;
-    route->zoomForcus = 1.0f;
     // Share param file with primary so initialize() can load camtype.dat.
-    route->paramFileName = const_cast<char*>(dComIfGp_getCameraParamFileName(0));
+    char* paramFileName = const_cast<char*>(dComIfGp_getCameraParamFileName(0));
+
+    // Populate the engine's native slot before the camera process initializes.
+    dComIfGp_setCameraInfo(id, nullptr, id, owner, -1);
+    dComIfGp_setCameraParamFileName(id, paramFileName);
+    dComIfGp_setCameraZoomScale(id, 1.0f);
+    dComIfGp_setCameraZoomForcus(id, 1.0f);
 
     assignWindow(id);
 }
@@ -122,7 +111,8 @@ bool requestSecondaryCreate(ViewId id) {
     // fopCam_Create does `fpcM_SetParam(a_this, *append)` with a raw u32* read of the
     // append blob — it does NOT go through BE(u32). Writing via params->base.parameters
     // (BE) stores a byteswapped value, so camera_id becomes 0x01000000 for id==1 and
-    // init_phase1 then OOB-writes the one-slot mCameraInfo[]. Store host-endian instead.
+    // init_phase1 reads this raw process parameter. Store it host-endian rather than
+    // through the big-endian wrapper so every native camera slot receives the right ID.
     *reinterpret_cast<u32*>(params) = id;
 
     const fpc_ProcID pid = fopCamM_Create(static_cast<int>(id), fpcNm_CAMERA_e, params);
@@ -164,16 +154,12 @@ void resolveProcessPointer(ViewId id) {
 void init() {
     g_active = {};
     g_createRequested = {};
-    g_windows = {};
     g_active[0] = true;
     if (auto* route = cameraRoute(0)) {
         route->view = 0;
         route->inputOwner = 0;
         route->attentionOwner = 0;
         route->trackedPlayers = {0};
-        route->winId = 0;
-        route->player1Id = 0;
-        route->player2Id = static_cast<s8>(-1);
         route->processId = fpcM_ERROR_PROCESS_ID_e;
         route->process = nullptr;
     }
@@ -192,7 +178,7 @@ void tick() {
         }
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Gate A→B handoff: dualCameraCompositeReady requires field_0xb0c (not just pid).
     // Clearing same-camera too early shows two identical P0 panes or crashes audio.
     static bool sLoggedDualReady = false;
@@ -232,7 +218,7 @@ bool ensureCameras(uint8_t count) {
             }
             continue;
         }
-        prepareSidecarMapping(i, owner);
+        prepareNativeMapping(i, owner);
         if (!requestSecondaryCreate(i)) {
             return false;
         }
@@ -280,9 +266,8 @@ bool assignInputOwner(ViewId id, PlayerId owner) {
         return false;
     }
     route->inputOwner = owner;
-    if (id != 0) {
-        route->player1Id = static_cast<s8>(owner);
-    }
+    dComIfGp_setCameraInfo(id, reinterpret_cast<camera_class*>(dComIfGp_getCamera(id)), id,
+                           owner, -1);
     return true;
 }
 
@@ -292,9 +277,8 @@ bool assignTrackedPlayer(ViewId id, PlayerId player) {
         return false;
     }
     route->trackedPlayers = {player};
-    if (id != 0) {
-        route->player1Id = static_cast<s8>(player);
-    }
+    dComIfGp_setCameraInfo(id, reinterpret_cast<camera_class*>(dComIfGp_getCamera(id)), id,
+                           player, -1);
     return true;
 }
 
@@ -335,11 +319,7 @@ bool assignWindow(ViewId id) {
     if (id == 0) {
         dComIfGp_setWindow(0, x, y, w, h, 0.0f, 1.0f, 0, 2);
     } else {
-        g_windows[id].setViewPort(x, y, w, h, 0.0f, 1.0f);
-        g_windows[id].setScissor(x, y, w, h);
-        g_windows[id].setCameraID(static_cast<int>(id));
-        g_windows[id].setMode(2);
-        route->winId = static_cast<s8>(id);
+        dComIfGp_setWindow(id, x, y, w, h, 0.0f, 1.0f, id, 2);
     }
     return true;
 }
@@ -358,7 +338,7 @@ bool rejoinCameraSlot(ViewId id, PlayerId owner) {
         return false;
     }
     g_active[id] = true;
-    prepareSidecarMapping(id, owner);
+    prepareNativeMapping(id, owner);
     if (!requestSecondaryCreate(id)) {
         g_active[id] = false;
         return false;
@@ -381,7 +361,7 @@ uint8_t activeCameraCount() {
 bool isCameraActive(ViewId id) { return isValidView(id) && g_active[id]; }
 
 bool isSecondaryCameraBody(const void* dCameraBody) {
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dCameraBody == nullptr || !isEnabled()) {
         return false;
     }
@@ -402,186 +382,5 @@ bool isSecondaryCameraBody(const void* dCameraBody) {
     return false;
 #endif
 }
-
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-
-bool useSidecarCamera(int cameraIndex) {
-    // Any nonzero index must use the sidecar — never the one-slot original array.
-    return cameraIndex != 0 && validIndex(cameraIndex);
-}
-
-bool useSidecarWindow(int windowIndex) {
-    return windowIndex != 0 && validIndex(windowIndex);
-}
-
-bool useSidecarPlayer(int playerIndex) {
-    return playerIndex != 0 && playerIndex < static_cast<int>(MAX_LOCAL_PLAYERS);
-}
-
-camera_class* sidecarGetCamera(int cameraIndex) {
-    if (!useSidecarCamera(cameraIndex)) {
-        return nullptr;
-    }
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->process : nullptr;
-}
-
-void sidecarSetCamera(int cameraIndex, camera_class* cam) {
-    if (!useSidecarCamera(cameraIndex)) {
-        return;
-    }
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->process = cam;
-    }
-}
-
-int sidecarGetCameraWinID(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->winId : 0;
-}
-
-int sidecarGetCameraPlayer1ID(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->player1Id : 0;
-}
-
-int sidecarGetCameraPlayer2ID(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->player2Id : -1;
-}
-
-u32 sidecarGetCameraAttentionStatus(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->attentionStatus : 0;
-}
-
-BOOL sidecarCheckCameraAttentionStatus(int cameraIndex, u32 flag) {
-    return sidecarGetCameraAttentionStatus(cameraIndex) & flag;
-}
-
-void sidecarSetCameraAttentionStatus(int cameraIndex, u32 flag) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->attentionStatus = flag;
-    }
-}
-
-void sidecarOnCameraAttentionStatus(int cameraIndex, u32 flag) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->attentionStatus |= flag;
-    }
-}
-
-void sidecarOffCameraAttentionStatus(int cameraIndex, u32 flag) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->attentionStatus &= ~flag;
-    }
-}
-
-void sidecarSetCameraInfo(int camIdx, camera_class* p_cam, int winId, int player1Id,
-                          int player2Id) {
-    if (!useSidecarCamera(camIdx)) {
-        return;
-    }
-    if (auto* route = cameraRoute(static_cast<ViewId>(camIdx))) {
-        route->process = p_cam;
-        route->winId = static_cast<s8>(winId);
-        route->player1Id = static_cast<s8>(player1Id);
-        route->player2Id = static_cast<s8>(player2Id);
-        route->attentionStatus = 0;
-    }
-}
-
-f32 sidecarGetCameraZoomScale(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->zoomScale : 1.0f;
-}
-
-void sidecarSetCameraZoomScale(int cameraIndex, f32 scale) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->zoomScale = scale;
-    }
-}
-
-f32 sidecarGetCameraZoomForcus(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    return route ? route->zoomForcus : 1.0f;
-}
-
-void sidecarSetCameraZoomForcus(int cameraIndex, f32 focus) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->zoomForcus = focus;
-    }
-}
-
-const char* sidecarGetCameraParamFileName(int cameraIndex) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    if (route && route->paramFileName != nullptr) {
-        return route->paramFileName;
-    }
-    // Fall back to primary param file.
-    return dComIfGp_getCameraParamFileName(0);
-}
-
-void sidecarSetCameraParamFileName(int cameraIndex, char* name) {
-    if (auto* route = cameraRoute(static_cast<ViewId>(cameraIndex))) {
-        route->paramFileName = name;
-    }
-}
-
-void sidecarSaveCameraPosition(int cameraIndex, cXyz* pos, cXyz* target, f32 fovy, s16 bank) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    if (!route || pos == nullptr || target == nullptr) {
-        return;
-    }
-    route->savedPos = *pos;
-    route->savedTarget = *target;
-    route->savedFovy = fovy;
-    route->savedBank = bank;
-}
-
-void sidecarLoadCameraPosition(int cameraIndex, cXyz* pos, cXyz* target, f32* fovy, s16* bank) {
-    auto* route = cameraRoute(static_cast<ViewId>(cameraIndex));
-    if (!route || pos == nullptr || target == nullptr || fovy == nullptr || bank == nullptr) {
-        return;
-    }
-    *pos = route->savedPos;
-    *target = route->savedTarget;
-    *fovy = route->savedFovy;
-    *bank = route->savedBank;
-}
-
-dDlst_window_c* sidecarGetWindow(int windowIndex) {
-    if (!useSidecarWindow(windowIndex)) {
-        return nullptr;
-    }
-    return &g_windows[windowIndex];
-}
-
-void sidecarSetWindow(u8 windowIndex, f32 x, f32 y, f32 width, f32 height, f32 nearZ, f32 farZ,
-                      int camID, int mode) {
-    if (!useSidecarWindow(windowIndex)) {
-        return;
-    }
-    g_windows[windowIndex].setViewPort(x, y, width, height, nearZ, farZ);
-    g_windows[windowIndex].setScissor(x, y, width, height);
-    g_windows[windowIndex].setCameraID(camID);
-    g_windows[windowIndex].setMode(mode);
-}
-
-fopAc_ac_c* sidecarGetPlayer(int playerIndex) {
-    if (!useSidecarPlayer(playerIndex)) {
-        return nullptr;
-    }
-    return getPlayerActor(static_cast<PlayerId>(playerIndex));
-}
-
-void sidecarSetPlayer(int playerIndex, fopAc_ac_c* player) {
-    if (!useSidecarPlayer(playerIndex)) {
-        return;
-    }
-    setPlayerActor(static_cast<PlayerId>(playerIndex), player);
-}
-
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
 
 }  // namespace dusk::coop::camera

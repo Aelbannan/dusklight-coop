@@ -6,26 +6,26 @@ class daAlink_c;
 
 namespace dusk::coop::alink {
 
-// Phase 6: pending-spawn registry (do not encode player id in Link params).
+// Every player owns a real daAlink_c and indexed create state.
+
 void registerPendingSpawn(PlayerId player);
-bool hasPendingSpawn();
-PlayerId peekPendingOwner();
-PlayerId consumePendingOwner();
+void noteSpawnProcess(PlayerId player, u32 processId);
+void clearSpawn(PlayerId player);
 void clearPendingSpawn();
+void markSpawnComplete(PlayerId player);
 
-// Create-state isolation so secondary Links never share P0's bgWaitFlg.
-BOOL& secondaryBgWaitFlag();
+// Resolve which indexed player slot owns this Link.
+PlayerId resolveOwner(const daAlink_c* link);
 
-// Set while a secondary daAlink_c is inside create/playerInit.
-void setCreatingOwner(PlayerId id);
-PlayerId creatingOwner();
-bool isCreatingSecondary();
+// Per-player create wait flag for every engine slot.
+BOOL& bgWaitFlag(PlayerId player);
 
-bool isSecondaryLink(const daAlink_c* link);
 PlayerId ownerOf(const daAlink_c* link);
+bool isStoryAuthorityLink(const daAlink_c* link);
 
-// Called when secondary create completes.
-void onSecondaryCreated(PlayerId id, daAlink_c* link);
+// Called whenever an indexed Link finishes creating.
+void onLinkCreated(PlayerId id, daAlink_c* link);
+void clearLinkOwner(PlayerId id, const daAlink_c* link);
 
 // Fill stick/buttons from PlayerInputSnapshot. Returns true if applied.
 bool applyInputSnapshot(daAlink_c* link);

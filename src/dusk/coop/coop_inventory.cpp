@@ -18,6 +18,7 @@ namespace dusk::coop::inventory {
 namespace {
 
 std::array<bool, 256> g_globalItems{};
+bool g_ready = false;
 
 dSv_player_c& originalPlayer() {
     return g_dComIfG_gameInfo.info.getPlayer();
@@ -73,14 +74,28 @@ void clampToCapacities(PlayerResources& res) {
 }  // namespace
 
 void init() {
+    g_ready = false;
     g_globalItems = {};
     refreshGlobalItemsFromSave();
-    syncPlayer0FromSave();
-    syncLoadout0FromSave();
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        syncPlayerFromSave(id);
+    }
     bottles::syncUnlockedFromSave();
+    g_ready = true;
 }
 
 void reset() { init(); }
+
+void syncAllFromSave() {
+    const bool wasReady = g_ready;
+    g_ready = false;
+    refreshGlobalItemsFromSave();
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        syncPlayerFromSave(id);
+    }
+    bottles::syncUnlockedFromSave();
+    g_ready = wasReady;
+}
 
 PlayerResources& resources(PlayerId id) {
     COOP_ASSERT(isValidPlayer(id));
@@ -92,11 +107,13 @@ PlayerLoadout& loadout(PlayerId id) {
     return runtime().playerRuntime[id].loadout;
 }
 
+bool ready() { return g_ready; }
+
 bool hasGlobalItem(u8 itemNo) {
     if (g_globalItems[itemNo]) {
         return true;
     }
-    // Fall back to original first-bit / inventory so P0 save remains authority.
+    // Global progression remains in the vanilla save format.
     if (dComIfGs_isItemFirstBit(itemNo)) {
         g_globalItems[itemNo] = true;
         return true;
@@ -119,26 +136,10 @@ void refreshGlobalItemsFromSave() {
 }
 
 s16 getLife(PlayerId id) {
-    if (id == 0) {
-        return static_cast<s16>(originalPlayer().getPlayerStatusA().getLife());
-    }
     return resources(id).life;
 }
 
 void setLife(PlayerId id, s16 life) {
-    if (id == 0) {
-        auto& status = originalPlayer().getPlayerStatusA();
-        if (life < 0) {
-            life = 0;
-        }
-        const s16 maxL = static_cast<s16>(status.getMaxLife());
-        if (life > maxL) {
-            life = maxL;
-        }
-        status.setLife(static_cast<u16>(life));
-        resources(0).life = life;
-        return;
-    }
     auto& res = resources(id);
     res.life = life;
     if (res.life < 0) {
@@ -149,67 +150,70 @@ void setLife(PlayerId id, s16 life) {
     }
 }
 
-u16 getMagic(PlayerId id) {
-    if (id == 0) {
-        return originalPlayer().getPlayerStatusA().getMagic();
+s16 getMaxLife(PlayerId id) { return resources(id).maxLife; }
+
+void setMaxLife(PlayerId id, s16 maxLife) {
+    auto& res = resources(id);
+    res.maxLife = std::max<s16>(0, maxLife);
+    if (res.life > res.maxLife) {
+        res.life = res.maxLife;
     }
+    if (const auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+        originalPlayer().getPlayerStatusA().setMaxLife(static_cast<u8>(res.maxLife));
+    }
+}
+
+u16 getMagic(PlayerId id) {
     return resources(id).magic;
 }
 
 void setMagic(PlayerId id, u16 magic) {
-    if (id == 0) {
-        auto& status = originalPlayer().getPlayerStatusA();
-        if (magic > status.getMaxMagic()) {
-            magic = status.getMaxMagic();
-        }
-        status.setMagic(static_cast<u8>(magic));
-        resources(0).magic = magic;
-        return;
-    }
     auto& res = resources(id);
     res.magic = magic > res.maxMagic ? res.maxMagic : magic;
 }
 
-u16 getOil(PlayerId id) {
-    if (id == 0) {
-        return originalPlayer().getPlayerStatusA().getOil();
+u16 getMaxMagic(PlayerId id) { return resources(id).maxMagic; }
+
+void setMaxMagic(PlayerId id, u16 maxMagic) {
+    auto& res = resources(id);
+    res.maxMagic = maxMagic;
+    if (res.magic > res.maxMagic) {
+        res.magic = res.maxMagic;
     }
+    if (const auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+        originalPlayer().getPlayerStatusA().setMaxMagic(static_cast<u8>(maxMagic));
+    }
+}
+
+u16 getOil(PlayerId id) {
     return resources(id).oil;
 }
 
 void setOil(PlayerId id, u16 oil) {
-    if (id == 0) {
-        auto& status = originalPlayer().getPlayerStatusA();
-        if (oil > status.getMaxOil()) {
-            oil = status.getMaxOil();
-        }
-        status.setOil(oil);
-        resources(0).oil = oil;
-        return;
-    }
     auto& res = resources(id);
     res.oil = oil > res.maxOil ? res.maxOil : oil;
 }
 
-s16 getRupees(PlayerId id) {
-    if (id == 0) {
-        return static_cast<s16>(originalPlayer().getPlayerStatusA().getRupee());
+u16 getMaxOil(PlayerId id) { return resources(id).maxOil; }
+
+void setMaxOil(PlayerId id, u16 maxOil) {
+    auto& res = resources(id);
+    res.maxOil = maxOil;
+    if (res.oil > res.maxOil) {
+        res.oil = res.maxOil;
     }
+    if (const auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+        originalPlayer().getPlayerStatusA().setMaxOil(maxOil);
+    }
+}
+
+s16 getRupees(PlayerId id) {
     return resources(id).rupees;
 }
 
 bool trySpendRupees(PlayerId id, s16 amount) {
     if (amount < 0) {
         return false;
-    }
-    if (id == 0) {
-        auto& status = originalPlayer().getPlayerStatusA();
-        if (status.getRupee() < static_cast<u16>(amount)) {
-            return false;
-        }
-        status.setRupee(static_cast<u16>(status.getRupee() - amount));
-        resources(0).rupees = static_cast<s16>(status.getRupee());
-        return true;
     }
     auto& res = resources(id);
     if (res.rupees < amount) {
@@ -220,15 +224,6 @@ bool trySpendRupees(PlayerId id, s16 amount) {
 }
 
 bool tryAddRupees(PlayerId id, s16 amount) {
-    if (id == 0) {
-        auto& status = originalPlayer().getPlayerStatusA();
-        const s32 next = static_cast<s32>(status.getRupee()) + amount;
-        const s32 maxR = status.getRupeeMax();
-        const u16 clamped = static_cast<u16>(next > maxR ? maxR : (next < 0 ? 0 : next));
-        status.setRupee(clamped);
-        resources(0).rupees = static_cast<s16>(clamped);
-        return true;
-    }
     auto& res = resources(id);
     const s32 next = static_cast<s32>(res.rupees) + amount;
     res.rupees = static_cast<s16>(next > res.maxRupees ? res.maxRupees : (next < 0 ? 0 : next));
@@ -236,22 +231,23 @@ bool tryAddRupees(PlayerId id, s16 amount) {
 }
 
 u16 getArrows(PlayerId id) {
-    if (id == 0) {
-        return originalPlayer().getItemRecord().getArrowNum();
-    }
     return resources(id).arrows;
 }
 
-bool tryConsumeArrow(PlayerId id) {
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        if (record.getArrowNum() == 0) {
-            return false;
-        }
-        record.setArrowNum(static_cast<u8>(record.getArrowNum() - 1));
-        resources(0).arrows = record.getArrowNum();
-        return true;
+u16 getMaxArrows(PlayerId id) { return resources(id).maxArrows; }
+
+void setMaxArrows(PlayerId id, u16 maxArrows) {
+    auto& res = resources(id);
+    res.maxArrows = maxArrows;
+    if (res.arrows > res.maxArrows) {
+        res.arrows = res.maxArrows;
     }
+    if (const auto* slot = playerSlot(id); slot != nullptr && slot->transitionAuthority) {
+        originalPlayer().getItemMax().setArrowNum(static_cast<u8>(maxArrows));
+    }
+}
+
+bool tryConsumeArrow(PlayerId id) {
     auto& res = resources(id);
     if (res.arrows == 0) {
         return false;
@@ -261,15 +257,6 @@ bool tryConsumeArrow(PlayerId id) {
 }
 
 bool tryAddArrows(PlayerId id, u16 amount) {
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        const u16 maxA = originalPlayer().getItemMax().getArrowNum();
-        const u32 next = static_cast<u32>(record.getArrowNum()) + amount;
-        const u8 clamped = static_cast<u8>(next > maxA ? maxA : next);
-        record.setArrowNum(clamped);
-        resources(0).arrows = clamped;
-        return true;
-    }
     auto& res = resources(id);
     const u32 next = static_cast<u32>(res.arrows) + amount;
     res.arrows = static_cast<u16>(next > res.maxArrows ? res.maxArrows : next);
@@ -277,22 +264,10 @@ bool tryAddArrows(PlayerId id, u16 amount) {
 }
 
 u8 getPachinko(PlayerId id) {
-    if (id == 0) {
-        return originalPlayer().getItemRecord().getPachinkoNum();
-    }
     return resources(id).pachinko;
 }
 
 bool tryConsumePachinko(PlayerId id) {
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        if (record.getPachinkoNum() == 0) {
-            return false;
-        }
-        record.setPachinkoNum(static_cast<u8>(record.getPachinkoNum() - 1));
-        resources(0).pachinko = record.getPachinkoNum();
-        return true;
-    }
     auto& res = resources(id);
     if (res.pachinko == 0) {
         return false;
@@ -303,14 +278,6 @@ bool tryConsumePachinko(PlayerId id) {
 
 bool tryAddPachinko(PlayerId id, u8 amount) {
     const u16 maxP = dComIfGs_getPachinkoMax();
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        const u16 next = static_cast<u16>(record.getPachinkoNum()) + amount;
-        const u8 clamped = static_cast<u8>(next > maxP ? maxP : next);
-        record.setPachinkoNum(clamped);
-        resources(0).pachinko = clamped;
-        return true;
-    }
     auto& res = resources(id);
     const u16 next = static_cast<u16>(res.pachinko) + amount;
     res.pachinko = static_cast<u8>(next > maxP ? maxP : next);
@@ -321,25 +288,12 @@ u8 getBombCount(PlayerId id, u8 bagIdx) {
     if (bagIdx >= 3) {
         return 0;
     }
-    if (id == 0) {
-        return originalPlayer().getItemRecord().getBombNum(bagIdx);
-    }
     return resources(id).bombCounts[bagIdx];
 }
 
 bool tryConsumeBomb(PlayerId id, u8 bagIdx) {
     if (bagIdx >= 3) {
         return false;
-    }
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        const u8 cur = record.getBombNum(bagIdx);
-        if (cur == 0) {
-            return false;
-        }
-        record.setBombNum(bagIdx, static_cast<u8>(cur - 1));
-        resources(0).bombCounts[bagIdx] = static_cast<u8>(cur - 1);
-        return true;
     }
     auto& count = resources(id).bombCounts[bagIdx];
     if (count == 0) {
@@ -357,22 +311,15 @@ bool tryAddBombs(PlayerId id, u8 bagIdx, u8 amount) {
     const u8 maxBombs = (bagItem == dItemNo_NONE_e || bagItem == dItemNo_BOMB_BAG_LV1_e)
                             ? 0
                             : dComIfGs_getBombMax(bagItem);
-    if (id == 0) {
-        auto& record = originalPlayer().getItemRecord();
-        const u16 next = static_cast<u16>(record.getBombNum(bagIdx)) + amount;
-        const u8 clamped = static_cast<u8>(next > maxBombs ? maxBombs : next);
-        record.setBombNum(bagIdx, clamped);
-        resources(0).bombCounts[bagIdx] = clamped;
-        return true;
-    }
     auto& res = resources(id);
     const u16 next = static_cast<u16>(res.bombCounts[bagIdx]) + amount;
     res.bombCounts[bagIdx] = static_cast<u8>(next > maxBombs ? maxBombs : next);
     return true;
 }
 
-void syncPlayer0FromSave() {
-    auto& res = resources(0);
+void syncPlayerFromSave(PlayerId id) {
+    COOP_ASSERT(isValidPlayer(id));
+    auto& res = resources(id);
     auto& status = originalPlayer().getPlayerStatusA();
     auto& record = originalPlayer().getItemRecord();
 
@@ -396,20 +343,26 @@ void syncPlayer0FromSave() {
         res.bottleContents[i] = originalPlayer().getItem().getItem(SLOT_11 + i, true);
         res.bottleQuantities[i] = record.getBottleNum(i);
     }
+
+    auto& lo = loadout(id);
+    lo.itemX = status.getSelectItemIndex(SELECT_ITEM_X);
+    lo.itemY = status.getSelectItemIndex(SELECT_ITEM_Y);
+    lo.itemSelect = status.getSelectItemIndex(SELECT_ITEM_DOWN);
+    lo.sword = status.getSelectEquip(COLLECT_SWORD);
+    lo.shield = status.getSelectEquip(COLLECT_SHIELD);
+    lo.armor = status.getSelectEquip(COLLECT_CLOTHING);
 }
 
-void syncPlayer0ToSave() {
-    auto& res = resources(0);
+void syncPlayerToSave(PlayerId id) {
+    COOP_ASSERT(isValidPlayer(id));
+    auto& res = resources(id);
     auto& status = originalPlayer().getPlayerStatusA();
     auto& record = originalPlayer().getItemRecord();
 
-    // Capacities stay authoritative in original save; only write current consumables
-    // and life/magic/oil/rupees for Player 0. Do not resize or rewrite unlocks here.
     status.setLife(static_cast<u16>(res.life < 0 ? 0 : res.life));
     status.setMagic(static_cast<u8>(res.magic > 0xFF ? 0xFF : res.magic));
     status.setOil(res.oil);
     status.setRupee(static_cast<u16>(res.rupees < 0 ? 0 : res.rupees));
-
     record.setArrowNum(static_cast<u8>(res.arrows > 0xFF ? 0xFF : res.arrows));
     record.setPachinkoNum(res.pachinko);
     for (u8 i = 0; i < 3; ++i) {
@@ -419,22 +372,8 @@ void syncPlayer0ToSave() {
         originalPlayer().getItem().setItem(SLOT_11 + i, res.bottleContents[i]);
         record.setBottleNum(i, res.bottleQuantities[i]);
     }
-}
 
-void syncLoadout0FromSave() {
-    auto& lo = loadout(0);
-    auto& status = originalPlayer().getPlayerStatusA();
-    lo.itemX = status.getSelectItemIndex(SELECT_ITEM_X);
-    lo.itemY = status.getSelectItemIndex(SELECT_ITEM_Y);
-    lo.itemSelect = status.getSelectItemIndex(SELECT_ITEM_DOWN);
-    lo.sword = status.getSelectEquip(COLLECT_SWORD);
-    lo.shield = status.getSelectEquip(COLLECT_SHIELD);
-    lo.armor = status.getSelectEquip(COLLECT_CLOTHING);
-}
-
-void syncLoadout0ToSave() {
-    auto& lo = loadout(0);
-    auto& status = originalPlayer().getPlayerStatusA();
+    auto& lo = loadout(id);
     status.setSelectItemIndex(SELECT_ITEM_X, lo.itemX);
     status.setSelectItemIndex(SELECT_ITEM_Y, lo.itemY);
     status.setSelectItemIndex(SELECT_ITEM_DOWN, lo.itemSelect);
@@ -443,14 +382,14 @@ void syncLoadout0ToSave() {
     status.setSelectEquip(COLLECT_CLOTHING, lo.armor);
 }
 
-void initSecondaryFromGlobal(PlayerId id) {
-    if (id == 0 || !isValidPlayer(id)) {
+void initPlayerFromProgression(PlayerId id) {
+    if (!isValidPlayer(id)) {
         return;
     }
     auto& res = resources(id);
     mirrorGlobalCapacities(res);
 
-    // Starter consumables from global progression (not a copy of P0's current stack).
+    // Starter consumables from global progression, independent of another player's stack.
     res.life = res.maxLife;
     res.magic = res.maxMagic;
     res.oil = res.maxOil;
@@ -494,12 +433,12 @@ void initSecondaryFromGlobal(PlayerId id) {
 
 }  // namespace dusk::coop::inventory
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 extern "C" {
 
-int dusk_coop_useResourceSidecar(void) {
-    return dusk::coop::isEnabled() && dusk::coop::currentPlayer() != 0 ? 1 : 0;
+int dusk_coop_resourcesReady(void) {
+    return dusk::coop::inventory::ready() ? 1 : 0;
 }
 
 u16 dusk_coop_getLife(void) {
@@ -508,6 +447,14 @@ u16 dusk_coop_getLife(void) {
 
 void dusk_coop_setLife(u16 life) {
     dusk::coop::inventory::setLife(dusk::coop::currentPlayer(), static_cast<s16>(life));
+}
+
+u16 dusk_coop_getMaxLife(void) {
+    return static_cast<u16>(dusk::coop::inventory::getMaxLife(dusk::coop::currentPlayer()));
+}
+
+void dusk_coop_setMaxLife(u16 maxLife) {
+    dusk::coop::inventory::setMaxLife(dusk::coop::currentPlayer(), static_cast<s16>(maxLife));
 }
 
 u16 dusk_coop_getRupee(void) {
@@ -530,12 +477,28 @@ void dusk_coop_setOil(u16 oil) {
     dusk::coop::inventory::setOil(dusk::coop::currentPlayer(), oil);
 }
 
+u16 dusk_coop_getMaxOil(void) {
+    return dusk::coop::inventory::getMaxOil(dusk::coop::currentPlayer());
+}
+
+void dusk_coop_setMaxOil(u16 maxOil) {
+    dusk::coop::inventory::setMaxOil(dusk::coop::currentPlayer(), maxOil);
+}
+
 u8 dusk_coop_getMagic(void) {
     return static_cast<u8>(dusk::coop::inventory::getMagic(dusk::coop::currentPlayer()));
 }
 
 void dusk_coop_setMagic(u8 magic) {
     dusk::coop::inventory::setMagic(dusk::coop::currentPlayer(), magic);
+}
+
+u8 dusk_coop_getMaxMagic(void) {
+    return static_cast<u8>(dusk::coop::inventory::getMaxMagic(dusk::coop::currentPlayer()));
+}
+
+void dusk_coop_setMaxMagic(u8 maxMagic) {
+    dusk::coop::inventory::setMaxMagic(dusk::coop::currentPlayer(), maxMagic);
 }
 
 u8 dusk_coop_getArrowNum(void) {
@@ -548,6 +511,14 @@ void dusk_coop_setArrowNum(u8 num) {
     if (res.arrows > res.maxArrows) {
         res.arrows = res.maxArrows;
     }
+}
+
+u8 dusk_coop_getArrowMax(void) {
+    return static_cast<u8>(dusk::coop::inventory::getMaxArrows(dusk::coop::currentPlayer()));
+}
+
+void dusk_coop_setArrowMax(u8 max) {
+    dusk::coop::inventory::setMaxArrows(dusk::coop::currentPlayer(), max);
 }
 
 u8 dusk_coop_getPachinkoNum(void) {
@@ -595,4 +566,4 @@ void dusk_coop_setBottleItem(u8 bottleIdx, u8 itemNo) {
 
 }  // extern "C"
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

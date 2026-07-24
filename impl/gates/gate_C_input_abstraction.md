@@ -48,7 +48,7 @@
 
 ## How to test (multiple controllers)
 
-1. Configure with `-DENABLE_LOCAL_COOP=ON` (PC / `TARGET_PC`).
+1. Configure a normal PC / `TARGET_PC` build; local co-op is always included.
 2. Boot with the usual DVD/ISO path.
 3. Connect 5+ gamepads (Aurora opens them — do not open second SDL handles).
 4. Player 0 uses legacy port 0 (gamepad and/or keyboard).

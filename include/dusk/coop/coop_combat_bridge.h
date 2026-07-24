@@ -4,7 +4,7 @@
 
 #include "dolphin/types.h"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,4 +18,4 @@ u8 dusk_coop_overrideCutType(u8 nativeCutType);
 }
 #endif
 
-#endif  // ENABLE_LOCAL_COOP && TARGET_PC
+#endif  // TARGET_PC

@@ -12,7 +12,7 @@
 #include "d/actor/d_a_obj_carry.h"
 #include "dusk/achievements.h"
 #endif
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_context.h"
@@ -215,7 +215,7 @@ int daAlink_c::setDamagePoint(int i_dmgAmount, BOOL i_checkZoraMag, BOOL i_setDm
         dComIfGp_setItemLifeCount(-i_dmgAmount, 0);
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled() && i_dmgAmount > 0) {
         dusk::coop::combat::onPlayerDamaged(dusk::coop::currentPlayer(),
                                             static_cast<s16>(i_dmgAmount));

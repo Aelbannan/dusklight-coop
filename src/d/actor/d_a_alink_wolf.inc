@@ -218,8 +218,8 @@ void daAlink_c::changeWolf() {
 
     mDoExt_setCurrentHeap(current_heap);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
-    // Save write only here; sidecar current updates after FLG1_IS_WOLF (below).
+#if TARGET_PC
+    // Mirror the indexed story-authority form; live state updates after FLG1_IS_WOLF below.
     dusk::coop::forms::writeTransformSaveIfAuthority(
         dusk::coop::forms::playerIdForLink(this), dusk::coop::PlayerForm::Wolf);
 #else
@@ -235,7 +235,7 @@ void daAlink_c::changeWolf() {
 
     changeCommon();
     onNoResetFlg1(FLG1_IS_WOLF);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     dusk::coop::forms::onTransformComplete(dusk::coop::forms::playerIdForLink(this));
 #endif
     deleteEquipItem(FALSE, FALSE);
@@ -425,7 +425,7 @@ void daAlink_c::changeLink(int param_0) {
 
     mDoExt_setCurrentHeap(current_heap);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     dusk::coop::forms::writeTransformSaveIfAuthority(
         dusk::coop::forms::playerIdForLink(this), dusk::coop::PlayerForm::Human);
 #else
@@ -533,7 +533,7 @@ void daAlink_c::changeLink(int param_0) {
     } else {
         changeCommon();
         offNoResetFlg1(FLG1_IS_WOLF);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         dusk::coop::forms::onTransformComplete(dusk::coop::forms::playerIdForLink(this));
         dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), false);
 #endif
@@ -615,7 +615,7 @@ void daAlink_c::onWolfEyeUp() {
         mZ2Link.setWolfEyeOpen(true);
         mWolfEyeUp = mpHIO->mWolf.m.mSensesLingerTime;
         field_0x2fd2 = 20;
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), true);
 #endif
     }
@@ -626,7 +626,7 @@ void daAlink_c::offWolfEyeUp() {
         mWolfEyeUp = 0;
         field_0x2fd2 = 20;
         mZ2Link.setWolfEyeOpen(false);
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
         dusk::coop::forms::setSenses(dusk::coop::forms::playerIdForLink(this), false);
 #endif
     }

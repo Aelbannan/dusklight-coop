@@ -4,7 +4,7 @@
 
 #include "dusk/config_var.hpp"
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop_types.h"
 #endif
 
@@ -21,7 +21,7 @@ enum class ActionBinds {
 };
 
 struct ActionBindData {
-    std::array<config::ActionBindConfigVar, 4>* configVars{};
+    std::array<config::ActionBindConfigVar, 8>* configVars{};
     std::string actionName{};
 };
 
@@ -52,7 +52,7 @@ bool getActionBindHoldAnyPort(ActionBinds action);
 
 int getActionBindButton(ActionBinds action, u32 port);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 // Player-ID aware wrappers — reject invalid / unjoined players.
 bool isActionBoundForPlayer(ActionBinds action, coop::PlayerId player);
 bool getActionBindTrigForPlayer(ActionBinds action, coop::PlayerId player);

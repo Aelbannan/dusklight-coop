@@ -20,7 +20,7 @@
 #include "dusk/frame_interpolation.h"
 #endif
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_combat.h"
@@ -131,7 +131,7 @@ static void itemGetCoCallBack(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coObjInfA,
                 return;
             }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
             if (dusk::coop::isEnabled()) {
                 // Gate H free-for-all: full player leaves pickup; lower id wins ties.
                 std::optional<dusk::coop::PlayerId> collider =

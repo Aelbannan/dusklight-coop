@@ -18,7 +18,7 @@
 #include "dusk/settings.h"
 #include "d/actor/d_a_alink.h"
 #endif
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_combat.h"
 #include "f_pc/f_pc_name.h"
@@ -96,7 +96,7 @@ int pl_cut_LRC(int index) {
 u16 cc_pl_cut_bit_get() {
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Prefer attributed attacking cut type over always-P0 when co-op is active.
     const u8 cut =
         dusk::coop::isEnabled() ? static_cast<u8>(dusk::coop::combat::resolvedCutType())
@@ -384,7 +384,7 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
     i_AtInfo->mpActor = at_power_check(i_AtInfo);
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     // Attribute cut type from the actual attacking actor when co-op is on.
     if (dusk::coop::isEnabled() && i_AtInfo->mpActor != nullptr) {
         const u16 cut = dusk::coop::combat::cutTypeForActor(i_AtInfo->mpActor);
@@ -536,7 +536,7 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
         }
     }
 
-#if defined(ENABLE_LOCAL_COOP) && TARGET_PC
+#if TARGET_PC
     if (dusk::coop::isEnabled()) {
         dusk::coop::combat::popAttackCutType();
     }

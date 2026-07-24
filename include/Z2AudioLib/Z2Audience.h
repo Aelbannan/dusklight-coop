@@ -10,6 +10,7 @@
 #include "JSystem/TPosition3.h"
 
 struct Z2Audible;
+constexpr int Z2_MAX_AUDIENCE_PLAYERS = 8;
 
 struct Z2AudibleAbsPos {
     void calc(const JGeometry::TVec3<f32>& pos);
@@ -83,14 +84,14 @@ struct Z2SpotMic {
     /* 0x04 */ f32 field_0x4;
     /* 0x08 */ f32 field_0x8;
     /* 0x0C */ f32 field_0xc;
-    /* 0x10 */ Z2AudioCamera* field_0x10[1];
+    /* 0x10 */ Z2AudioCamera* field_0x10[Z2_MAX_AUDIENCE_PLAYERS];
     /* 0x14 */ Vec* mPosPtr;
-    /* 0x18 */ f32 field_0x18[1];
+    /* 0x18 */ f32 field_0x18[Z2_MAX_AUDIENCE_PLAYERS];
     /* 0x1C */ f32 field_0x1c;
-    /* 0x20 */ f32 field_0x20[1];
+    /* 0x20 */ f32 field_0x20[Z2_MAX_AUDIENCE_PLAYERS];
     /* 0x24 */ bool mIgnoreIfOut;
     /* 0x25 */ bool mMicOn;
-    /* 0x26 */ bool field_0x26[1];
+    /* 0x26 */ bool field_0x26[Z2_MAX_AUDIENCE_PLAYERS];
 };  // Size: 0x28
 
 struct Z2Audience3DSetting {
@@ -200,7 +201,7 @@ struct Z2Audible : public JAIAudible, public JASPoolAllocObject<Z2Audible> {
 
     /* 0x10 */ JAUAudibleParam mParam;
     /* 0x14 */ Z2AudibleAbsPos mAbsPos;
-    /* 0x2C */ Z2AudibleChannel mChannel[1];
+    /* 0x2C */ Z2AudibleChannel mChannel[Z2_MAX_AUDIENCE_PLAYERS];
     /* 0x64 */ f32 field_0x64[1];
 };
 
@@ -244,10 +245,7 @@ struct Z2Audience : public JAIAudience, public JASGlobalInstance<Z2Audience> {
     /* 0x004 */ f32 field_0x4;
     /* 0x008 */ u8 field_0x8;
     /* 0x00C */ Z2Audience3DSetting mSetting;
-    // COOP NOTE: arrays are size 1 and mNumPlayers starts at 1. camera_draw must not
-    // call setAudioCamera with camID >= 1 — that OOBs into Z2SpotMic::setMicState
-    // (SIGSEGV on P2 join). Shared listener stays Camera 0 until Task 19 expands this.
-    /* 0x134 */ Z2AudioCamera mAudioCamera[1];
+    /* 0x134 */ Z2AudioCamera mAudioCamera[Z2_MAX_AUDIENCE_PLAYERS];
     /* 0x1A8 */ Z2SpotMic mSpotMic[1];
     /* 0x1D0 */ Z2SpotMic* mLinkMic;
     /* 0x1D4 */ s32 mNumPlayers;
