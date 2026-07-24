@@ -28,6 +28,7 @@
 #endif
 
 #if TARGET_PC
+#include "dusk/coop/coop_attention.h"
 #include "dusk/coop/coop_resource_bridge.h"
 #include "dusk/coop/coop_forms_bridge.h"
 #include "dusk/coop/coop_horse_bridge.h"
@@ -3062,7 +3063,11 @@ inline int dComIfGp_evmng_checkStartDemo() {
 }
 
 inline dAttention_c* dComIfGp_getAttention() {
+#if TARGET_PC
+    return dusk::coop::attention::forContext();
+#else
     return g_dComIfG_gameInfo.play.getAttention();
+#endif
 }
 
 inline fopAc_ac_c* dComIfGp_att_getZHint() {

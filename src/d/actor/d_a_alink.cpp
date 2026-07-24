@@ -43,6 +43,7 @@
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_combat.h"
+#include "dusk/coop/coop_context.h"
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_player.h"
 #endif
@@ -5220,6 +5221,13 @@ int daAlink_c::create() {
 static int daAlink_Create(fopAc_ac_c* actor) {
     daAlink_c* i_this = (daAlink_c*)actor;
     fpc_ProcID id = fopAcM_GetID(actor);
+#if TARGET_PC
+    dusk::coop::PlayerId owner = dusk::coop::alink::resolveOwner(i_this);
+    dusk::coop::ContextFrame frame;
+    frame.player = owner;
+    frame.view = static_cast<dusk::coop::ViewId>(owner);
+    dusk::coop::ScopedContext ctx(frame);
+#endif
     return i_this->create();
 }
 
@@ -19095,6 +19103,16 @@ int daAlink_c::execute() {
 }
 
 static int daAlink_Execute(daAlink_c* i_this) {
+#if TARGET_PC
+    dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(i_this);
+    dusk::coop::ContextFrame frame;
+    frame.player = owner;
+    frame.view = static_cast<dusk::coop::ViewId>(owner);
+    dusk::coop::ScopedContext ctx(frame);
+    // Refresh the cached attention pointer so this Link always uses
+    // its own player's attention instance.
+    i_this->mAttention = dComIfGp_getAttention();
+#endif
     return i_this->execute();
 }
 
@@ -20033,6 +20051,14 @@ int daAlink_c::draw() {
 }
 
 static int daAlink_Draw(daAlink_c* i_this) {
+#if TARGET_PC
+    dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(i_this);
+    dusk::coop::ContextFrame frame;
+    frame.player = owner;
+    frame.view = static_cast<dusk::coop::ViewId>(owner);
+    dusk::coop::ScopedContext ctx(frame);
+    i_this->mAttention = dComIfGp_getAttention();
+#endif
     return i_this->draw();
 }
 

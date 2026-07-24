@@ -1103,19 +1103,22 @@ bool dCamera_c::Run() {
     int iVar8 = mIsWolf;
 
 #if TARGET_PC
-    // Scoped coop context: checkNowWolf() looks up the correct player form.
+    // Scoped coop context for the entire camera pipeline.
+    // checkNowWolf(), Att(), and all attention queries use this camera's player.
+    dusk::coop::ContextFrame camFrame;
+    bool haveCoopCtx = false;
     if (dusk::coop::isEnabled() && mpPlayerActor != nullptr) {
-        dusk::coop::ContextFrame frame;
-        frame.player = static_cast<dusk::coop::PlayerId>(
+        camFrame.player = static_cast<dusk::coop::PlayerId>(
             dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)));
-        frame.view = static_cast<dusk::coop::ViewId>(mCameraID);
-        dusk::coop::ScopedContext ctx(frame);
-        mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
-    } else
-#endif
-    {
-        mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
+        camFrame.view = static_cast<dusk::coop::ViewId>(mCameraID);
+        haveCoopCtx = true;
     }
+    dusk::coop::ScopedContext ctx(camFrame);  // always constructed, but only meaningful when haveCoopCtx
+    (void)haveCoopCtx;  // ctx manages its own lifecycle; haveCoopCtx signals intent
+    mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
+#else
+    mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
+#endif
 #if TARGET_PC
     // Snap camera center to the tracked actor before any camera math,
     // so every camera's chase starts from the correct position.

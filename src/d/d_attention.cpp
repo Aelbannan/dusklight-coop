@@ -652,6 +652,14 @@ int dAttention_c::SelectAttention(fopAc_ac_c* i_actor) {
         return 0;
     }
 
+#if TARGET_PC
+    // Co-op: never add another player's Link to this attention's lock-on
+    // or check-object lists.  Each player only targets NPCs/enemies.
+    if (fopAcM_GetName(i_actor) == fpcNm_ALINK_e) {
+        return 0;
+    }
+#endif
+
     mPlayerAttentionFlags = mpPlayer->attention_info.flags;
 
     cSGlobe globe(i_actor->attention_info.position - mOwnerAttnPos);
@@ -1351,8 +1359,17 @@ int dAttention_c::Run() {
     }
 
     if (chkFlag(0x80)) {
+#if TARGET_PC
+        // Co-op: keep the player/pad set by Init().  Fall back to P0 only when
+        // no explicit player has been assigned yet.
+        if (mpPlayer == nullptr) {
+            mpPlayer = (fopAc_ac_c*) dComIfGp_getPlayer(0);
+            mPadNo = PAD_1;
+        }
+#else
         mpPlayer = (fopAc_ac_c*) dComIfGp_getPlayer(0);
         mPadNo = PAD_1;
+#endif
     }
 
 #if DEBUG

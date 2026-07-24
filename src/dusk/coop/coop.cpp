@@ -1,6 +1,7 @@
 #include "dusk/coop/coop.h"
 
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_attention.h"
 #include "dusk/coop/coop_bottles.h"
 #include "dusk/coop/coop_camera.h"
 #include "dusk/coop/coop_combat.h"
@@ -90,6 +91,7 @@ void init() {
     drops::init();
     forms::init();
     horses::init();
+    attention::init();
     debug::init();
     gate_h::runSelfChecks();
 #endif
@@ -130,6 +132,7 @@ void tick() {
     player::tick();
     forms::tick();
     horses::tick();
+    attention::tick();
     enemy::tick();
     combat::endFrame();
     combat::beginFrame();
