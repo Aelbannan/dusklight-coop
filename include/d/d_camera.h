@@ -13,6 +13,7 @@
 #include "m_Do/m_Do_graphic.h"
 
 dAttention_c* dComIfGp_getAttention();
+class daAlink_c;
 
 struct dCamMapToolData {
     dCamMapToolData() { Clr(); }
@@ -1089,6 +1090,18 @@ public:
     cXyz talkEyePos(fopAc_ac_c* i_actor) { return i_actor->eyePos; }
 
     int CameraID() { return mCameraID; }
+
+    // ── Co-op generic camera helpers (use per-camera IDs instead of hardcoded 0) ──
+    void setComStat(u32 flag) { dComIfGp_onCameraAttentionStatus(mCameraID, flag); }
+    BOOL getComStat(u32 flag) { return dComIfGp_getCameraAttentionStatus(mCameraID) & flag; }
+    void clrComStat(u32 flag) { dComIfGp_offCameraAttentionStatus(mCameraID, flag); }
+    void setComZoomScale(f32 val) { dComIfGp_setCameraZoomScale(mCameraID, val); }
+    void setComZoomForcus(f32 val) { dComIfGp_setCameraZoomForcus(mCameraID, val); }
+
+    // Per-camera player accessor — use instead of daAlink_getAlinkActorClass().
+    // Defined in d_camera.cpp where the full daAlink_c type is available.
+    daAlink_c* linkActor();
+    daPy_py_c* playerActor();
 
     bool Active() { return mCurState == 0; }
     f32 TrimHeight() { return mTrimHeight; }

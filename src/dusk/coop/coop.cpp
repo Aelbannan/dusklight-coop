@@ -8,6 +8,7 @@
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_difficulty.h"
 #include "dusk/coop/coop_drops.h"
+#include "m_Do/m_Do_lib.h"
 #include "dusk/coop/coop_enemy.h"
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_gate_h_selfcheck.h"
@@ -56,12 +57,14 @@ bool isEnabled() { return isCompiledIn() && g_runtime.enabled; }
 void setEnabled(bool enabled) {
     if (!isCompiledIn()) {
         g_runtime.enabled = false;
+        mDoLib_clipper::setCullingDisabled(false);
         return;
     }
     if (g_runtime.enabled == enabled) {
         return;
     }
     g_runtime.enabled = enabled;
+    mDoLib_clipper::setCullingDisabled(enabled);
     if (!enabled) {
         onCoopDisable();
     }

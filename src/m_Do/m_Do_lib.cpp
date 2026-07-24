@@ -44,6 +44,8 @@ DUSK_GAME_DATA f32 mDoLib_clipper::mSystemFar;
 
 DUSK_GAME_DATA f32 mDoLib_clipper::mFovyRate;
 
+DUSK_GAME_DATA bool mDoLib_clipper::sCullingDisabled = false;
+
 void mDoLib_clipper::setup(f32 fovy, f32 aspect, f32 near_, f32 far_) {
     mClipper.setFovy(fovy);
     mClipper.setAspect(aspect);

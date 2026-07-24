@@ -2011,10 +2011,6 @@ daAlinkHIO_cut_c::~daAlinkHIO_cut_c() {}
 
 daAlinkHIO_c::~daAlinkHIO_c() {}
 
-DUSK_GAME_DATA bool daAlink_matAnm_c::m_eye_move_flg;
-
-DUSK_GAME_DATA u8 daAlink_matAnm_c::m_morf_frame;
-
 void daAlink_matAnm_c::init() {
     field_0xf4 = 0.0f;
     field_0xf8 = 0.0f;
@@ -3351,14 +3347,14 @@ void daAlink_c::setEyeMove(cXyz* param_0, s16 param_1, s16 param_2) {
         field_0x2180[0]->setNowOffsetY(0.0f);
         field_0x2180[1]->setNowOffsetY(0.0f);
 
-        if (daAlink_matAnm_c::getEyeMoveFlg()) {
-            daAlink_matAnm_c::offEyeMoveFlg();
-            daAlink_matAnm_c::setMorfFrame(3);
+        if (field_0x2180[0]->getEyeMoveFlg()) {
+            field_0x2180[0]->offEyeMoveFlg();
+            field_0x2180[0]->setMorfFrame(3);
         }
         return;
     }
 
-    if (daAlink_matAnm_c::getMorfFrame() == 0) {
+    if (field_0x2180[0]->getMorfFrame() == 0) {
         var_f31 = cLib_minMaxLimit<f32>(var_f31, -1.0f, 1.0f);
         var_f30 = cLib_minMaxLimit<f32>(var_f30, -1.0f, 1.0f);
 
@@ -3384,7 +3380,7 @@ void daAlink_c::setEyeMove(cXyz* param_0, s16 param_1, s16 param_2) {
             var_f28 *= -1.0f;
         }
 
-        daAlink_matAnm_c::onEyeMoveFlg();
+        field_0x2180[0]->onEyeMoveFlg();
         cLib_addCalc(field_0x2180[0]->getNowOffsetXP(), var_f29, 0.5f, 0.1f, 0.03f);
         cLib_addCalc(field_0x2180[1]->getNowOffsetXP(), var_f28, 0.5f, 0.1f, 0.03f);
         cLib_addCalc(field_0x2180[0]->getNowOffsetYP(), sp10, 0.5f, 0.08f, 0.02f);
@@ -7331,6 +7327,15 @@ int daAlink_c::setSingleAnime(daAlink_c::daAlink_ANM i_anmID, f32 i_speed, f32 i
     #endif
 
     getUnderUpperAnime(i_anmID, &under_bck, &upper_bck, 0, 0x10800);
+
+#if TARGET_PC
+    if (dusk::coop::isEnabled()) {
+        const auto pid = dusk::coop::alink::ownerOf(this);
+        OSReport("[coop-anim] P%u setSingleAnime id=%d under=%p upper=%p\n",
+                 pid, (int)i_anmID, (void*)under_bck, (void*)upper_bck);
+    }
+#endif
+
     commonSingleAnime(under_bck, upper_bck, i_speed, i_start, i_end);
 
     if (i_morf >= 0.0f) {
@@ -7360,6 +7365,15 @@ void daAlink_c::allAnimePlay() {
     J3DAnmTransform* under1_bck = getNowAnmPackUnder(UNDER_1);
     J3DAnmTransform* upper0_bck = getNowAnmPackUpper(UPPER_0);
     J3DAnmTransform* upper1_bck = getNowAnmPackUpper(UPPER_1);
+
+#if TARGET_PC
+    // DEBUG: log animation pack pointer to detect sharing
+    if (dusk::coop::isEnabled()) {
+        const auto pid = dusk::coop::alink::ownerOf(this);
+        OSReport("[coop-anim] P%u mNowAnmPackUnder[0]=%p upper[0]=%p procID=%d stick=%f\n",
+                 pid, (void*)under0_bck, (void*)upper0_bck, mProcID, mStickValue);
+    }
+#endif
 
     if (checkWolf()) {
         setWolfAnmVoice();
@@ -8351,7 +8365,7 @@ void daAlink_c::setFaceBtk(u16 i_resIdx, BOOL i_isPriIdx, u16 i_arcNo) {
         mpFaceBtk = btk;
         mpFaceBtk->searchUpdateMaterialID(field_0x06c0);
         field_0x06c0->entryTexMtxAnimator(mpFaceBtk);
-        daAlink_matAnm_c::setMorfFrame(3);
+        field_0x2180[0]->setMorfFrame(3);
         mpFaceBtk->setFrame(0.0f);
     }
 }
@@ -9547,6 +9561,9 @@ void daAlink_c::setStickData() {
                             && (checkCanoeRide() || mProcID == PROC_FISHING_CAST);
 #if TARGET_PC
         bool usedIndexedInput = false;
+
+        // DEBUG: log input routing
+        f32 dbg_stick_before = mStickValue;
 #endif
 
         if (usingFishRod) {
@@ -9558,11 +9575,18 @@ void daAlink_c::setStickData() {
         else if (dusk::coop::isEnabled() &&
                  (usedIndexedInput = dusk::coop::alink::applyInputSnapshot(this))) {
             // Stick + item buttons come from the owning player's indexed input snapshot.
+            const auto dbg_pid = dusk::coop::alink::ownerOf(this);
+            OSReport("[coop-input] P%u stick=%f angle=%d enabled=%d usedIndexed=%d\n",
+                     dbg_pid, mStickValue, mStickAngle, dusk::coop::isEnabled(), usedIndexedInput);
         }
 #endif
         else {
             mStickValue = mDoCPd_c::getStickValue(PAD_1);
             mStickAngle = mDoCPd_c::getStickAngle3D(PAD_1) - -0x8000;
+#if TARGET_PC
+            OSReport("[coop-input] PAD_1 fallback: stick=%f (enabled=%d)\n",
+                     mStickValue, dusk::coop::isEnabled());
+#endif
         }
 
         mMoveValue = mStickValue;
@@ -15089,7 +15113,17 @@ void daAlink_c::setLight() {
             var_f26 = cM_sht2d(-shape_angle.y);
         }
 
+        // Co-op: use per-player light slot so each Link has an independent
+        // eye/lantern light. field_0x0c18[] has 8 slots.
+#if TARGET_PC
+        int lightSlot = 0;
+        if (dusk::coop::isEnabled()) {
+            lightSlot = dusk::coop::alink::ownerOf(this);
+        }
+        dKy_WolfEyeLight_set(&spB8, var_f27 + light_m->mXAngle, var_f26, (light_m->mWidth * field_0x33fc) / light_m->mPower, &sp30, field_0x33fc, light_m->mAngleAttenuationType, light_m->mDistanceAttenuationType, lightSlot);
+#else
         dKy_WolfEyeLight_set(&spB8, var_f27 + light_m->mXAngle, var_f26, (light_m->mWidth * field_0x33fc) / light_m->mPower, &sp30, field_0x33fc, light_m->mAngleAttenuationType, light_m->mDistanceAttenuationType);
+#endif
     }
 }
 
@@ -18057,7 +18091,7 @@ int daAlink_c::execute() {
     mResetFlg0 = 0;
     mResetFlg1 = 0;
 
-    daAlink_matAnm_c::decMorfFrame();
+    field_0x2180[0]->decMorfFrame();
     field_0x2180[0]->offSetFlg();
     field_0x2180[1]->offSetFlg();
 

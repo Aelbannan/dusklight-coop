@@ -1028,6 +1028,8 @@ void dKy_actor_addcol_amb_set(s16 r, s16 g, s16 b, f32 ratio);
 void dKy_bg_addcol_amb_set(s16 r, s16 g, s16 b, f32 ratio);
 int dKy_WolfEyeLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXColor* color_p,
                          f32 ref_dist, u8 spot_type, u8 distattn_type);
+int dKy_WolfEyeLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXColor* color_p,
+                         f32 ref_dist, u8 spot_type, u8 distattn_type, int slot);
 BOOL dKy_TeachWind_existence_chk();
 u8 dKy_darkworld_stage_check(char const* stageName, int roomNo);
 BOOL dKy_withwarp_capture_check();

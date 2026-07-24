@@ -44,21 +44,21 @@ public:
     virtual ~daAlink_matAnm_c() {}
     virtual void calc(J3DMaterial* i_material) const;
 
-    static void decMorfFrame() { cLib_calcTimer<u8>(&m_morf_frame); }
-    static void setMorfFrame(u8 i_frame) { m_morf_frame = i_frame; }
-    static u8 getMorfFrame() { return m_morf_frame; }
+    void decMorfFrame() { cLib_calcTimer<u8>(&m_morf_frame); }
+    void setMorfFrame(u8 i_frame) { m_morf_frame = i_frame; }
+    u8 getMorfFrame() const { return m_morf_frame; }
 
-    static void onEyeMoveFlg() { m_eye_move_flg = true; }
-    static void offEyeMoveFlg() { m_eye_move_flg = false; }
-    static bool getEyeMoveFlg() { return m_eye_move_flg; }
+    void onEyeMoveFlg() { m_eye_move_flg = true; }
+    void offEyeMoveFlg() { m_eye_move_flg = false; }
+    bool getEyeMoveFlg() const { return m_eye_move_flg; }
 
     f32* getNowOffsetXP() { return &mNowOffsetX; }
     f32* getNowOffsetYP() { return &mNowOffsetY; }
     void setNowOffsetX(f32 i_offset) { mNowOffsetX = i_offset; }
     void setNowOffsetY(f32 i_offset) { mNowOffsetY = i_offset; }
 
-    static DUSK_GAME_DATA bool m_eye_move_flg;
-    static DUSK_GAME_DATA u8 m_morf_frame;
+    DUSK_GAME_DATA bool m_eye_move_flg;
+    DUSK_GAME_DATA u8 m_morf_frame;
 
     /* 0x0F4 */ mutable f32 field_0xf4;
     /* 0x0F8 */ mutable f32 field_0xf8;

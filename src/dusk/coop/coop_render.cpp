@@ -468,12 +468,11 @@ dDlst_window_c* resolveWindow(ViewId view) {
 }
 
 camera_process_class* resolveCamera(ViewId view) {
-    // Gate A same-camera PoC: camera 0 unless Gate B has a *fully initialized* secondary.
-    // Never return an incomplete cam1 body, and never silently fall back to cam0 for
-    // view>0 while dual composite is attempting — that stomps P0 lookat / stick yaw.
-    if (isEnabled() && view > 0 && secondaryCameraInitialized(view)) {
-        if (camera_class* secondary = getCameraProcess(view)) {
-            return reinterpret_cast<camera_process_class*>(secondary);
+    // All cameras are generic — just return the camera registered for this view.
+    // Falls back to camera 0 only when co-op is off or the requested view has no camera.
+    if (isEnabled() && isMultiViewActive()) {
+        if (camera_class* cam = getCameraProcess(view)) {
+            return reinterpret_cast<camera_process_class*>(cam);
         }
     }
     return dComIfGp_getCamera(0);
@@ -638,9 +637,9 @@ void bindPainterCameraView(ViewId view, camera_process_class* camera) {
         return;
     }
 
-    // Rebuild proj/view matrices for this painter pass only.
-    // Do NOT rewrite lookat here — that fought dCamera_c::Run chase every frame
-    // (vibration) and pinned eye distance so secondary cams looked-at but never followed.
+    // Rebuild proj/view matrices for this painter pass from the camera's current
+    // lookat state. Every camera now runs the same vanilla chase pipeline, so the
+    // eye/center/direction are always up-to-date from dCamera_c::Run().
     (void)view;
 
     const f32 aspect =

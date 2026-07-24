@@ -1031,12 +1031,10 @@ DUSK_GAME_DATA cull_sphere l_cullSizeSphere[fopAc_CULLSPHERE_MAX_e] = {
 
 s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
 #if TARGET_PC
-    // Dual/multi-view draw-prep is single-pass; the last camera's frustum (usually cam1)
-    // would NODRAW actors only visible to earlier views. Disable clip while split/co-op
-    // multi-view is active — cheap enough for this title.
-    if (dusk::coop::isEnabled() &&
-        (dusk::coop::render::usesHorizontalSplitPresent() ||
-         dusk::coop::render::isMultiViewActive() || dusk::coop::render::forcedViewCount() > 1)) {
+    // Co-op: never cull actors — the single draw pass only tests against one camera's
+    // frustum, so actors outside that frustum (e.g. P2's Link, objects near P2, etc.)
+    // would incorrectly be culled. This also covers ALL objects, not just player actors.
+    if (dusk::coop::isEnabled()) {
         (void)i_actor;
         return 0;
     }

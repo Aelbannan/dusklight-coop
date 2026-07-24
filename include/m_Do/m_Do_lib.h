@@ -22,10 +22,12 @@ struct mDoLib_clipper {
     }
 
     static int clip(const Mtx m, const Vec* param_1, const Vec* param_2) {
+        if (sCullingDisabled) return 0;
         return mClipper.clip(m, (Vec*)param_1, (Vec*)param_2);
     }
 
     static s32 clip(const Mtx m, Vec param_1, f32 param_2) {
+        if (sCullingDisabled) return 0;
         return mClipper.clip(m, param_1, param_2);
     }
 
@@ -37,9 +39,13 @@ struct mDoLib_clipper {
         mClipper.calcViewFrustum();
     }
 
+    static void setCullingDisabled(bool disabled) { sCullingDisabled = disabled; }
+    static bool isCullingDisabled() { return sCullingDisabled; }
+
     static DUSK_GAME_DATA J3DUClipper mClipper;
     static DUSK_GAME_DATA f32 mSystemFar;
     static DUSK_GAME_DATA f32 mFovyRate;
+    static DUSK_GAME_DATA bool sCullingDisabled;
 };
 
 void mDoLib_project(Vec* src, Vec* dst);

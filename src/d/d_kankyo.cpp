@@ -10157,15 +10157,24 @@ int dKy_BossSpotLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXC
 
 int dKy_WolfEyeLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXColor* color_p,
                          f32 ref_dist, u8 spot_type, u8 distattn_type) {
+    return dKy_WolfEyeLight_set(pos_p, angle_x, angle_y, cutoff, color_p, ref_dist, spot_type, distattn_type, 0);
+}
+
+int dKy_WolfEyeLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXColor* color_p,
+                         f32 ref_dist, u8 spot_type, u8 distattn_type, int slot) {
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+
+    if (slot < 0 || slot >= 8) {
+        slot = 0;
+    }
 
     int sp28 = 0;
     int sp24 = 0;
     f32 var_f28 = -100000000.0f;
     f32 var_f27 = 0.0f;
-    int var_r29 = 0;
+    int var_r29 = slot;
 
     kankyo->field_0x0c18[var_r29].mPos = *pos_p;
 
