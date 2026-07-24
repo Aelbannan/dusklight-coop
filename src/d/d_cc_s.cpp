@@ -542,14 +542,12 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
 
 #if TARGET_PC
     bool coop_contact_only = false;
-    if (dusk::coop::isEnabled()) {
-        // Re-evaluate so ContactNoDamage sets suppress flag for this hit.
-        (void)dusk::coop::combat::filterAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(),
-                                                &coop_contact_only);
-        dusk::coop::combat::noteAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(), i_atObj);
-        if (dusk::coop::combat::consumeSuppressPlusDmg()) {
-            coop_contact_only = true;
-        }
+    // Re-evaluate so ContactNoDamage sets suppress flag for this hit.
+    (void)dusk::coop::combat::filterAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(),
+                                            &coop_contact_only);
+    dusk::coop::combat::noteAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(), i_atObj);
+    if (dusk::coop::combat::consumeSuppressPlusDmg()) {
+        coop_contact_only = true;
     }
 #endif
 
@@ -629,9 +627,7 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
     }
 
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
-        dusk::coop::combat::popAttackCutType();
-    }
+    dusk::coop::combat::popAttackCutType();
 #endif
 }
 
@@ -925,10 +921,8 @@ bool dCcS::ChkNoHitGAtTg(cCcD_GObjInf const* i_atObjInf, cCcD_GObjInf const* i_t
     dCcD_GObjInf* tgObjInf = (dCcD_GObjInf*)i_tgObjInf;
 
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
-        if (dusk::coop::combat::shouldBlockAtTgCompletely(atObjInf->GetAc(), tgObjInf->GetAc())) {
-            return true;  // FriendlyFireMode::Ignore
-        }
+    if (dusk::coop::combat::shouldBlockAtTgCompletely(atObjInf->GetAc(), tgObjInf->GetAc())) {
+        return true;  // FriendlyFireMode::Ignore
     }
 #endif
 

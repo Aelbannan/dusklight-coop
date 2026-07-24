@@ -31,7 +31,7 @@ static bool coopRoomStillHasEnemies(s8 roomNo) {
         return true;
     }
 #if TARGET_PC
-    if (dusk::coop::isEnabled() && dusk::coop::enemy::roomClearBlocked()) {
+    if (dusk::coop::enemy::roomClearBlocked()) {
         return true;
     }
 #endif

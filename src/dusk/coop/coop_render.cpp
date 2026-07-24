@@ -137,7 +137,7 @@ bool secondaryCameraInitialized(ViewId view) {
 
 bool camerasReadyForDual() {
 #if TARGET_PC
-    return g_dualCameraComposite && isEnabled() && secondaryCameraInitialized(1);
+    return g_dualCameraComposite && secondaryCameraInitialized(1);
 #else
     return false;
 #endif
@@ -186,9 +186,6 @@ constexpr ActorClassEntry kActorClassTable[] = {
 };
 
 uint8_t effectiveViewCount() {
-    if (!isEnabled()) {
-        return 1;
-    }
     if (g_forcedViewCount > 1) {
         return g_forcedViewCount;
     }
@@ -311,9 +308,6 @@ ContextFrame makeFrame(ViewId view) {
 }  // namespace
 
 ScopedWorldDrawPass::ScopedWorldDrawPass(ViewId view) : context_(makeFrame(view)) {
-    if (!isEnabled()) {
-        return;
-    }
 
     prevWindow_ = g_dComIfG_gameInfo.play.mCurrentWindow;
     prevPlayView_ = g_dComIfG_gameInfo.play.mCurrentView;
@@ -415,9 +409,6 @@ void init() {
 void reset() { init(); }
 
 void beginFrame() {
-    if (!isEnabled()) {
-        return;
-    }
     // Simulation advances once per game tick elsewhere; render must not bump counters.
     if (isMultiViewActive()) {
         syncViewports();
@@ -427,21 +418,15 @@ void beginFrame() {
 }
 
 void endFrame() {
-    if (!isEnabled()) {
-        return;
-    }
     g_lastHash = computeFrameStateHash();
 }
 
 void noteSimulationTick() {
-    if (!isEnabled()) {
-        return;
-    }
     ++g_simTicks;
 }
 
 bool drawViews() {
-    if (!isEnabled() || effectiveViewCount() <= 1) {
+    if (effectiveViewCount() <= 1) {
         restorePrimaryViewportIfNeeded();
         g_lastPassCount = 1;
         return false;  // caller uses original single-view path
@@ -451,16 +436,13 @@ bool drawViews() {
 }
 
 uint8_t worldDrawPassCount() {
-    if (!isEnabled()) {
-        return 1;
-    }
     return effectiveViewCount();
 }
 
-bool isMultiViewActive() { return isEnabled() && effectiveViewCount() > 1; }
+bool isMultiViewActive() { return effectiveViewCount() > 1; }
 
 dDlst_window_c* resolveWindow(ViewId view) {
-    if (!isEnabled() || !isMultiViewActive()) {
+    if (!isMultiViewActive()) {
         return dComIfGp_getWindow(0);
     }
     COOP_ASSERT(view < MAX_LOCAL_VIEWS);
@@ -470,7 +452,7 @@ dDlst_window_c* resolveWindow(ViewId view) {
 camera_process_class* resolveCamera(ViewId view) {
     // All cameras are generic — just return the camera registered for this view.
     // Falls back to camera 0 only when co-op is off or the requested view has no camera.
-    if (isEnabled() && isMultiViewActive()) {
+    if (isMultiViewActive()) {
         if (camera_class* cam = getCameraProcess(view)) {
             return reinterpret_cast<camera_process_class*>(cam);
         }
@@ -588,12 +570,10 @@ void setForcedViewCount(uint8_t count) {
         count = static_cast<uint8_t>(MAX_LOCAL_VIEWS);
     }
     g_forcedViewCount = count;
-    if (!isEnabled() || count <= 1) {
+    if (count <= 1) {
         // Leaving multi-view: put window 0 back to the pre-tile full framebuffer.
         restorePrimaryViewportIfNeeded();
-        if (isEnabled()) {
-            runtime().activeViewCount = 1;
-        }
+        runtime().activeViewCount = 1;
         g_lastPassCount = 1;
         return;
     }
@@ -605,13 +585,13 @@ uint8_t forcedViewCount() { return g_forcedViewCount; }
 void setSameCameraSplitEnabled(bool enabled) { g_sameCameraSplit = enabled; }
 
 bool sameCameraSplitEnabled() {
-    return isEnabled() && g_sameCameraSplit && runtime().joinedPlayerCount >= 2;
+    return g_sameCameraSplit && runtime().joinedPlayerCount >= 2;
 }
 
 void setDualCameraCompositeEnabled(bool enabled) { g_dualCameraComposite = enabled; }
 
 bool dualCameraCompositeEnabled() {
-    return isEnabled() && g_dualCameraComposite && runtime().joinedPlayerCount >= 2;
+    return g_dualCameraComposite && runtime().joinedPlayerCount >= 2;
 }
 
 bool dualCameraCompositeReady() { return camerasReadyForDual() && dualCameraCompositeEnabled(); }

@@ -6,9 +6,6 @@ namespace dusk::coop {
 
 Runtime& runtime();
 
-bool isCompiledIn();
-bool isEnabled();
-void setEnabled(bool enabled);
 
 void init();
 void reset();

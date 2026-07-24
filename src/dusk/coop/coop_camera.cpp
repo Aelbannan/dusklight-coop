@@ -168,9 +168,6 @@ void init() {
 void reset() { init(); }
 
 void tick() {
-    if (!isEnabled()) {
-        return;
-    }
     syncPrimaryRoute();
     for (ViewId i = 1; i < MAX_LOCAL_VIEWS; ++i) {
         if (g_active[i] && g_createRequested[i]) {
@@ -195,9 +192,6 @@ void tick() {
 }
 
 bool ensureCameras(uint8_t count) {
-    if (!isEnabled()) {
-        return false;
-    }
     if (count == 0 || count > MAX_LOCAL_VIEWS) {
         return false;
     }
@@ -362,7 +356,7 @@ bool isCameraActive(ViewId id) { return isValidView(id) && g_active[id]; }
 
 bool isSecondaryCameraBody(const void* dCameraBody) {
 #if TARGET_PC
-    if (dCameraBody == nullptr || !isEnabled()) {
+    if (dCameraBody == nullptr) {
         return false;
     }
     // dCamera_c::CameraID() is stored at the documented offset; prefer walking active routes.

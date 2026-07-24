@@ -45,31 +45,6 @@ void initPlayer0() {
 
 Runtime& runtime() { return g_runtime; }
 
-bool isCompiledIn() {
-#if TARGET_PC
-    return true;
-#else
-    return false;
-#endif
-}
-
-bool isEnabled() { return isCompiledIn() && g_runtime.enabled; }
-
-void setEnabled(bool enabled) {
-    if (!isCompiledIn()) {
-        g_runtime.enabled = false;
-        mDoLib_clipper::setCullingDisabled(false);
-        return;
-    }
-    if (g_runtime.enabled == enabled) {
-        return;
-    }
-    g_runtime.enabled = enabled;
-    mDoLib_clipper::setCullingDisabled(enabled);
-    if (!enabled) {
-        onCoopDisable();
-    }
-}
 
 void init() {
 #if !TARGET_PC
@@ -124,9 +99,6 @@ void tick() {
 #else
     // Input always ticks when compiled in so Press-Start can enable co-op.
     input::tick();
-    if (!isEnabled()) {
-        return;
-    }
     debug::drawOverlay();
     camera::tick();
     player::tick();
@@ -141,9 +113,6 @@ void tick() {
 }
 
 void onRoomUnload() {
-    if (!isCompiledIn()) {
-        return;
-    }
     player::onRoomUnload();
     horses::onRoomUnload();
     enemy::onRoomUnload();

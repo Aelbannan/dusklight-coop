@@ -59,10 +59,6 @@ void reset() {
 }
 
 void tick() {
-    if (!isEnabled()) {
-        return;
-    }
-
     for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         fopAc_ac_c* actor = getPlayerActor(id);
         if (actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
@@ -110,23 +106,14 @@ bool isWolf(PlayerId id) {
 }
 
 bool isCurrentContextPlayerWolf() {
-    if (!isEnabled()) {
-        return isStoryAuthorityWolf();
-    }
     return isWolf(currentPlayer());
 }
 
 bool isStoryAuthorityWolf() {
-    if (isCompiledIn()) {
-        const PlayerId authority = storyAuthorityId();
-        if (fopAc_ac_c* actor = getPlayerActor(authority);
-            actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
-            return static_cast<daAlink_c*>(actor)->checkWolf() != 0;
-        }
-        return dComIfGs_getTransformStatus() == TF_STATUS_WOLF;
-    }
-    if (auto* link = daAlink_getAlinkActorClass()) {
-        return link->checkWolf() != 0;
+    const PlayerId authority = storyAuthorityId();
+    if (fopAc_ac_c* actor = getPlayerActor(authority);
+        actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(actor)->checkWolf() != 0;
     }
     return dComIfGs_getTransformStatus() == TF_STATUS_WOLF;
 }
@@ -212,9 +199,6 @@ void notifyLinkFormChanged(daAlink_c* link, PlayerForm form) {
 
 PlayerId playerIdForActor(const fopAc_ac_c* actor) {
     if (actor == nullptr) {
-        return 0;
-    }
-    if (!isEnabled()) {
         return 0;
     }
     for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
@@ -344,11 +328,8 @@ void restoreFormsAfterForcedDemo() {
 extern "C" {
 
 int dusk_coop_checkNowWolf(void) {
-    if (!dusk::coop::isEnabled()) {
-        daAlink_c* link = daAlink_getAlinkActorClass();
-        return link != nullptr ? static_cast<int>(link->checkWolf()) : 0;
-    }
-    return dusk::coop::forms::isCurrentContextPlayerWolf() ? 1 : 0;
+    daAlink_c* link = daAlink_getAlinkActorClass();
+    return link != nullptr ? static_cast<int>(link->checkWolf()) : 0;
 }
 
 int dusk_coop_checkNowWolfAuthority(void) {
@@ -356,29 +337,12 @@ int dusk_coop_checkNowWolfAuthority(void) {
 }
 
 int dusk_coop_checkNowWolfEyeUp(void) {
-    if (!dusk::coop::isEnabled()) {
-        daAlink_c* link = daAlink_getAlinkActorClass();
-        return link != nullptr ? link->checkWolfEyeUp() : 0;
-    }
-    const dusk::coop::PlayerId id = dusk::coop::currentPlayer();
-    // Prefer the real Link's state; use indexed state while its actor is unavailable.
-    if (fopAc_ac_c* actor = dusk::coop::getPlayerActor(id);
-        actor != nullptr && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
-        return static_cast<daAlink_c*>(actor)->checkWolfEyeUp();
-    }
-    return dusk::coop::forms::sensesActiveForPlayer(id) ? 1 : 0;
+    daAlink_c* link = daAlink_getAlinkActorClass();
+    return link != nullptr ? link->checkWolfEyeUp() : 0;
 }
 
 int dusk_coop_trySetTransformStatus(u8 status) {
-    if (!dusk::coop::isEnabled()) {
-        return 0;
-    }
-    const dusk::coop::PlayerId id = dusk::coop::currentPlayer();
-    const dusk::coop::PlayerForm form =
-        (status == TF_STATUS_WOLF) ? dusk::coop::PlayerForm::Wolf : dusk::coop::PlayerForm::Human;
-    dusk::coop::forms::writeTransformSaveIfAuthority(id, form);
-    // Indexed form state owns the write; only the configured story authority mirrors it.
-    return 1;
+    return 0;
 }
 
 u8 dusk_coop_getTransformStatusForQuery(void) {
@@ -387,10 +351,7 @@ u8 dusk_coop_getTransformStatusForQuery(void) {
 }
 
 int dusk_coop_sensesActiveForCurrentView(void) {
-    if (!dusk::coop::isEnabled()) {
-        return dusk_coop_checkNowWolfEyeUp() != 0 ? 1 : 0;
-    }
-    return dusk::coop::forms::sensesActiveForView(dusk::coop::currentView()) ? 1 : 0;
+    return dusk_coop_checkNowWolfEyeUp() != 0 ? 1 : 0;
 }
 
 }

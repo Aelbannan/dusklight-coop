@@ -4900,11 +4900,9 @@ int daAlink_c::create() {
     // Every Link uses the create state belonging to its indexed player slot.
     dusk::coop::PlayerId coopOwner = 0;
     bool usesStoryStart = true;
-    if (dusk::coop::isCompiledIn()) {
-        coopOwner = dusk::coop::alink::resolveOwner(this);
-        if (const auto* slot = dusk::coop::playerSlot(coopOwner)) {
-            usesStoryStart = slot->transitionAuthority;
-        }
+    coopOwner = dusk::coop::alink::resolveOwner(this);
+    if (const auto* slot = dusk::coop::playerSlot(coopOwner)) {
+        usesStoryStart = slot->transitionAuthority;
     }
     BOOL& createWaitFlg = dusk::coop::alink::bgWaitFlag(coopOwner);
 #else
@@ -7335,7 +7333,7 @@ int daAlink_c::setSingleAnime(daAlink_c::daAlink_ANM i_anmID, f32 i_speed, f32 i
     getUnderUpperAnime(i_anmID, &under_bck, &upper_bck, 0, 0x10800);
 
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
+    {
         const auto pid = dusk::coop::alink::ownerOf(this);
         OSReport("[coop-anim] P%u setSingleAnime id=%d under=%p upper=%p\n",
                  pid, (int)i_anmID, (void*)under_bck, (void*)upper_bck);
@@ -7374,7 +7372,7 @@ void daAlink_c::allAnimePlay() {
 
 #if TARGET_PC
     // DEBUG: log animation pack pointer to detect sharing
-    if (dusk::coop::isEnabled()) {
+    {
         const auto pid = dusk::coop::alink::ownerOf(this);
         OSReport("[coop-anim] P%u mNowAnmPackUnder[0]=%p upper[0]=%p procID=%d stick=%f\n",
                  pid, (void*)under0_bck, (void*)upper0_bck, mProcID, mStickValue);
@@ -9578,20 +9576,19 @@ void daAlink_c::setStickData() {
             mStickAngle = cM_atan2s(-mg_rod->getRodStickX(), mg_rod->getRodStickY());
         }
 #if TARGET_PC
-        else if (dusk::coop::isEnabled() &&
-                 (usedIndexedInput = dusk::coop::alink::applyInputSnapshot(this))) {
+        else if ((usedIndexedInput = dusk::coop::alink::applyInputSnapshot(this))) {
             // Stick + item buttons come from the owning player's indexed input snapshot.
             const auto dbg_pid = dusk::coop::alink::ownerOf(this);
-            OSReport("[coop-input] P%u stick=%f angle=%d enabled=%d usedIndexed=%d\n",
-                     dbg_pid, mStickValue, mStickAngle, dusk::coop::isEnabled(), usedIndexedInput);
+            OSReport("[coop-input] P%u stick=%f angle=%d usedIndexed=%d\n",
+                     dbg_pid, mStickValue, mStickAngle, usedIndexedInput);
         }
 #endif
         else {
             mStickValue = mDoCPd_c::getStickValue(PAD_1);
             mStickAngle = mDoCPd_c::getStickAngle3D(PAD_1) - -0x8000;
 #if TARGET_PC
-            OSReport("[coop-input] PAD_1 fallback: stick=%f (enabled=%d)\n",
-                     mStickValue, dusk::coop::isEnabled());
+            OSReport("[coop-input] PAD_1 fallback: stick=%f\n",
+                     mStickValue);
 #endif
         }
 
@@ -9599,11 +9596,9 @@ void daAlink_c::setStickData() {
 #if TARGET_PC
         // Resolve camera ownership at the point movement is calculated.
         int moveCameraId = field_0x317c;
-        if (dusk::coop::isEnabled()) {
-            const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
-            moveCameraId = dComIfGp_getPlayerCameraID(owner);
-            field_0x317c = moveCameraId;
-        }
+        const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+        moveCameraId = dComIfGp_getPlayerCameraID(owner);
+        field_0x317c = moveCameraId;
         camera_process_class* moveCamera = dComIfGp_getCamera(moveCameraId);
         mMoveAngle = mStickAngle +
                      (moveCamera != nullptr ? dCam_getControledAngleY(moveCamera) : 0);
@@ -15122,10 +15117,7 @@ void daAlink_c::setLight() {
         // Co-op: use per-player light slot so each Link has an independent
         // eye/lantern light. field_0x0c18[] has 8 slots.
 #if TARGET_PC
-        int lightSlot = 0;
-        if (dusk::coop::isEnabled()) {
-            lightSlot = dusk::coop::alink::ownerOf(this);
-        }
+        int lightSlot = dusk::coop::alink::ownerOf(this);
         dKy_WolfEyeLight_set(&spB8, var_f27 + light_m->mXAngle, var_f26, (light_m->mWidth * field_0x33fc) / light_m->mPower, &sp30, field_0x33fc, light_m->mAngleAttenuationType, light_m->mDistanceAttenuationType, lightSlot);
 #else
         dKy_WolfEyeLight_set(&spB8, var_f27 + light_m->mXAngle, var_f26, (light_m->mWidth * field_0x33fc) / light_m->mPower, &sp30, field_0x33fc, light_m->mAngleAttenuationType, light_m->mDistanceAttenuationType);
@@ -18028,12 +18020,8 @@ int daAlink_c::execute() {
 #if TARGET_PC
     // Every Link keeps its owner's camera id; resetting to camera 0 made Links share
     // look/attention and froze movement yaw until another player moved.
-    if (dusk::coop::isEnabled()) {
-        const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
-        field_0x317c = dComIfGp_getPlayerCameraID(owner);
-    } else {
-        field_0x317c = dComIfGp_getPlayerCameraID(0);
-    }
+    const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+    field_0x317c = dComIfGp_getPlayerCameraID(owner);
 #else
     field_0x317c = dComIfGp_getPlayerCameraID(0);
 #endif

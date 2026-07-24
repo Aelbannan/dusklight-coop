@@ -246,11 +246,6 @@ void pruneDeadClones() {
 }
 
 void processNotedSources() {
-    if (!isEnabled()) {
-        g_notedSources.clear();
-        return;
-    }
-
     // Gate H: snapshot once when eligible originals are first seen this room.
     if (!g_notedSources.empty() && !drops::encounterActive()) {
         // Count all known eligible originals (noted + already augmented).
@@ -346,9 +341,6 @@ void tick() {
 #if !TARGET_PC
     return;
 #else
-    if (!isEnabled()) {
-        return;
-    }
     resolvePending();
     pruneDeadClones();
     // Periodic room scan + Create-hook notes share the same queue.
@@ -382,7 +374,7 @@ void noteEligibleSource(fopAc_ac_c* source) {
     (void)source;
     return;
 #else
-    if (!isEnabled() || source == nullptr) {
+    if (source == nullptr) {
         return;
     }
     const fpc_ProcID id = fopAcM_GetID(source);
@@ -409,7 +401,7 @@ fpc_ProcID spawnClone(fopAc_ac_c* source, PlayerId /*reasonPlayer*/) {
     (void)source;
     return fpcM_ERROR_PROCESS_ID_e;
 #else
-    if (!isEnabled() || source == nullptr) {
+    if (source == nullptr) {
         return fpcM_ERROR_PROCESS_ID_e;
     }
     const fpc_ProcID sourceId = fopAcM_GetID(source);

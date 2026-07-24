@@ -14,9 +14,6 @@ thread_local ContextFrame g_default{};
 }  // namespace
 
 ScopedContext::ScopedContext(ContextFrame frame) {
-    if (!isEnabled()) {
-        return;
-    }
     previous_ = currentContext();
     g_stack.push_back(frame);
     auto& rt = runtime();

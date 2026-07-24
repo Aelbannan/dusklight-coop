@@ -99,8 +99,7 @@ u16 cc_pl_cut_bit_get() {
 #if TARGET_PC
     // Prefer attributed attacking cut type over always-P0 when co-op is active.
     const u8 cut =
-        dusk::coop::isEnabled() ? static_cast<u8>(dusk::coop::combat::resolvedCutType())
-                                : player_p->getCutType();
+        static_cast<u8>(dusk::coop::combat::resolvedCutType());
 #else
     const u8 cut = player_p->getCutType();
 #endif
@@ -386,7 +385,7 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
 
 #if TARGET_PC
     // Attribute cut type from the actual attacking actor when co-op is on.
-    if (dusk::coop::isEnabled() && i_AtInfo->mpActor != nullptr) {
+    if (i_AtInfo->mpActor != nullptr) {
         const u16 cut = dusk::coop::combat::cutTypeForActor(i_AtInfo->mpActor);
         dusk::coop::combat::pushAttackCutType(cut);
     }
@@ -537,9 +536,7 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
     }
 
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
-        dusk::coop::combat::popAttackCutType();
-    }
+    dusk::coop::combat::popAttackCutType();
 #endif
 
     return i_AtInfo->mpActor;

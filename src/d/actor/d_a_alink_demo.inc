@@ -1252,8 +1252,7 @@ BOOL daAlink_c::checkRestartDead(int i_dmgAmount, BOOL i_checkZoraMag) {
         !dComIfGs_checkBottle(dItemNo_FAIRY_e))
     {
 #if TARGET_PC
-        if (dusk::coop::isEnabled() &&
-            dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
+        if (dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
         {
             dusk::coop::combat::markPlayerDowned(dusk::coop::currentPlayer());
             dusk::coop::combat::triggerGameOverIfNeeded();
@@ -1283,8 +1282,7 @@ void daAlink_c::setDeadRideSyncPos() {
 
 BOOL daAlink_c::checkDeadHP() {
 #if TARGET_PC
-    if (dusk::coop::isEnabled() &&
-        dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
+    if (dusk::coop::combat::shouldSuppressGameOver(dusk::coop::currentPlayer()))
     {
         // Teammates alive: zero HP does not count as global dead for game-over.
         if (dComIfGs_getLife() == 0 && !checkResetFlg0(RFLG0_UNK_400) &&
@@ -1310,7 +1308,7 @@ BOOL daAlink_c::checkDeadAction(int param_0) {
     if (!checkEventRun()) {
 #if TARGET_PC
         // Per-player fairy via Gate E bottles when co-op is on.
-        if (dusk::coop::isEnabled() && dComIfGs_getLife() == 0 &&
+        if (dComIfGs_getLife() == 0 &&
             !checkResetFlg0(RFLG0_UNK_400))
         {
             const dusk::coop::PlayerId id = dusk::coop::currentPlayer();

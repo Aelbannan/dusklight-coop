@@ -2932,17 +2932,15 @@ bool dCamera_c::bumpCheck(u32 i_flags) {
     // Co-op: never widen orbit to keep another player's Link in frame.
     // mpAuxTargetActor1/2 come from the global attention system which can
     // include P2, causing P1's camera to zoom out when P2 moves far away.
-    if (dusk::coop::isEnabled()) {
-        if (mpAuxTargetActor1 != nullptr &&
-            fopAcM_GetName(mpAuxTargetActor1) == fpcNm_ALINK_e &&
-            mpAuxTargetActor1 != mpPlayerActor) {
-            mpAuxTargetActor1 = nullptr;
-        }
-        if (mpAuxTargetActor2 != nullptr &&
-            fopAcM_GetName(mpAuxTargetActor2) == fpcNm_ALINK_e &&
-            mpAuxTargetActor2 != mpPlayerActor) {
-            mpAuxTargetActor2 = nullptr;
-        }
+    if (mpAuxTargetActor1 != nullptr &&
+        fopAcM_GetName(mpAuxTargetActor1) == fpcNm_ALINK_e &&
+        mpAuxTargetActor1 != mpPlayerActor) {
+        mpAuxTargetActor1 = nullptr;
+    }
+    if (mpAuxTargetActor2 != nullptr &&
+        fopAcM_GetName(mpAuxTargetActor2) == fpcNm_ALINK_e &&
+        mpAuxTargetActor2 != mpPlayerActor) {
+        mpAuxTargetActor2 = nullptr;
     }
 #endif
 

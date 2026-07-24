@@ -247,7 +247,7 @@ bool trySpendDropCredit(DropCategory category, u16 units) {
 
 bool gateEnemyDropCandidate(u8 itemNo) {
     // One-player / inactive: leave native behavior (≈ vanilla).
-    if (!isEnabled() || !g_encounter.active) {
+    if (!g_encounter.active) {
         return true;
     }
     // 1-player Normal must remain indistinguishable from vanilla drop rolls.
@@ -380,7 +380,7 @@ u32 desiredTotalEnemies() {
 }
 
 u32 clonesPerEligibleSource() {
-    if (!isEnabled() || !g_encounter.active) {
+    if (!g_encounter.active) {
         return 0;
     }
     if (g_encounter.partySize < 2) {

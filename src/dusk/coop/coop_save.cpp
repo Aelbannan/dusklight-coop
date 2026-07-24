@@ -269,7 +269,7 @@ bool loadCompanion(const char* path) {
 }
 
 bool saveCompanion(const char* path) {
-    if (!isEnabled() || path == nullptr) {
+    if (path == nullptr) {
         return false;
     }
 

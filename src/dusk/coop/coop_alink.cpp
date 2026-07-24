@@ -281,7 +281,7 @@ bool applyInputSnapshot(daAlink_c* link) {
     (void)link;
     return false;
 #else
-    if (link == nullptr || !isEnabled()) {
+    if (link == nullptr) {
         return false;
     }
     const PlayerId id = ownerOf(link);

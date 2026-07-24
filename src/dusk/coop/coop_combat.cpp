@@ -118,7 +118,7 @@ void resolveSameFrameHits() {
 }  // namespace
 
 u8 peekCutTypeOverride(u8 nativeCutType) {
-    if (!isEnabled() || !g_cutOverrideActive) {
+    if (!g_cutOverrideActive) {
         return nativeCutType;
     }
     return static_cast<u8>(g_cutOverrideValue);
@@ -131,7 +131,7 @@ bool consumeSuppressPlusDmg() {
 }
 
 void noteAtTgHit(fopAc_ac_c* atActor, fopAc_ac_c* tgActor, cCcD_Obj* atObj) {
-    if (!isEnabled() || atActor == nullptr || tgActor == nullptr) {
+    if (atActor == nullptr || tgActor == nullptr) {
         return;
     }
     HitEvent ev{};
@@ -164,15 +164,11 @@ void beginFrame() {
     g_cutOverrideActive = false;
     g_cutOverrideValue = 0;
     g_cutOverrideDepth = 0;
-    if (isEnabled()) {
-        syncJoinedOwners();
-    }
+    syncJoinedOwners();
 }
 
 void endFrame() {
-    if (isEnabled()) {
-        resolveSameFrameHits();
-    }
+    resolveSameFrameHits();
     g_frameHits.clear();
     g_cutOverrideActive = false;
     g_cutOverrideValue = 0;
@@ -308,9 +304,6 @@ HitReactionStrength reactionFromAt(cCcD_Obj* atObj) {
 }
 
 bool registerHit(const HitEvent& hit) {
-    if (!isEnabled()) {
-        return false;
-    }
     g_frameHits.push_back(hit);
     return true;
 }
@@ -325,7 +318,7 @@ const SameFrameVictimResult* strongestHitForVictim(fpc_ProcID victim) {
 }
 
 bool shouldBlockAtTgCompletely(fopAc_ac_c* atActor, fopAc_ac_c* tgActor) {
-    if (!isEnabled() || atActor == nullptr || tgActor == nullptr) {
+    if (atActor == nullptr || tgActor == nullptr) {
         return false;
     }
     const auto atPlayer = playerIdForActor(atActor);
@@ -341,7 +334,7 @@ bool filterAtTgHit(fopAc_ac_c* atActor, fopAc_ac_c* tgActor, bool* outContactOnl
         *outContactOnly = false;
     }
     g_suppressPlusDmg = false;
-    if (!isEnabled() || atActor == nullptr || tgActor == nullptr) {
+    if (atActor == nullptr || tgActor == nullptr) {
         return true;
     }
 
@@ -442,9 +435,6 @@ bool tryConsumeFairy(PlayerId id) {
 }
 
 bool allPlayersDowned() {
-    if (!isEnabled()) {
-        return false;
-    }
     bool any = false;
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
         if (!isJoined(i)) {
@@ -485,7 +475,7 @@ void triggerGameOverIfNeeded() {
 }
 
 bool shouldSuppressGameOver(PlayerId id) {
-    if (!isEnabled() || !isJoined(id)) {
+    if (!isJoined(id)) {
         return false;
     }
     for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {

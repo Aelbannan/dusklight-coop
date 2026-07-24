@@ -35,15 +35,9 @@ void logToDusk(AuroraLogLevel level, const char* prefix, const char* fmt, va_lis
 void init() {}
 void reset() {}
 void drawOverlay() {
-    if (!isCompiledIn()) {
-        return;
-    }
     // Compact stdout telemetry for Gate C/I bring-up (ImGui overlay later).
     static int s_frameCounter = 0;
     if ((++s_frameCounter % 60) != 0) {
-        return;
-    }
-    if (!isEnabled()) {
         return;
     }
     const u8 globalTf = dComIfGs_getTransformStatus();

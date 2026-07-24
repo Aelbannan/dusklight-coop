@@ -1034,10 +1034,7 @@ s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
     // Co-op: never cull actors — the single draw pass only tests against one camera's
     // frustum, so actors outside that frustum (e.g. P2's Link, objects near P2, etc.)
     // would incorrectly be culled. This also covers ALL objects, not just player actors.
-    if (dusk::coop::isEnabled()) {
-        (void)i_actor;
-        return 0;
-    }
+
 #endif
     MtxP mtx_p;
 #if AVOID_UB
@@ -1538,8 +1535,7 @@ fpc_ProcID fopAcM_createItemFromEnemyID(u8 i_enemyID, cXyz const* i_pos, int i_i
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         tableNo = fopAcM_getItemNoFromTableNo(tableNo);
 #if TARGET_PC
-        if (dusk::coop::isEnabled() &&
-            !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(tableNo))) {
+        if (!dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(tableNo))) {
             return fpcM_ERROR_PROCESS_ID_e;
         }
 #endif
@@ -1582,8 +1578,7 @@ fpc_ProcID fopAcM_createItemFromTable(cXyz const* i_pos, int i_itemNo, int i_ite
     }
 
 #if TARGET_PC
-    if (g_coopGateEnemyDrop && dusk::coop::isEnabled() &&
-        !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(i_itemNo))) {
+    if (g_coopGateEnemyDrop && !dusk::coop::drops::gateEnemyDropCandidate(static_cast<u8>(i_itemNo))) {
         return fpcM_ERROR_PROCESS_ID_e;
     }
 #endif

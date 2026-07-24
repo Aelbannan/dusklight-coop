@@ -186,9 +186,6 @@ void tick() {
 #if !TARGET_PC
     return;
 #else
-    if (!isEnabled()) {
-        return;
-    }
     resolvePendingCreates();
     recreatePendingHorses();
 #endif
@@ -233,7 +230,7 @@ bool spawnOwnedHorse(PlayerId id, const cXyz& pos, s16 yaw) {
     (void)yaw;
     return false;
 #else
-    if (!isEnabled() || !isValidPlayer(id)) {
+    if (!isValidPlayer(id)) {
         return false;
     }
 
@@ -522,9 +519,6 @@ void setRestart(PlayerId id, const char* stage, const cXyz& pos, s16 yaw, s8 roo
 
 ScopedHorseOwnerContext::ScopedHorseOwnerContext(const daHorse_c& horse) {
 #if TARGET_PC
-    if (!isEnabled()) {
-        return;
-    }
     const PlayerId owner = ownerOf(&horse);
     ContextFrame frame{};
     frame.player = owner;

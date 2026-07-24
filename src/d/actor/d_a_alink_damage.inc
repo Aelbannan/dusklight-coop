@@ -216,7 +216,7 @@ int daAlink_c::setDamagePoint(int i_dmgAmount, BOOL i_checkZoraMag, BOOL i_setDm
     }
 
 #if TARGET_PC
-    if (dusk::coop::isEnabled() && i_dmgAmount > 0) {
+    if (i_dmgAmount > 0) {
         dusk::coop::combat::onPlayerDamaged(dusk::coop::currentPlayer(),
                                             static_cast<s16>(i_dmgAmount));
     }

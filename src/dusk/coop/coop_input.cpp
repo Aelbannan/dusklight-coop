@@ -332,10 +332,6 @@ void tick() {
 #if !TARGET_PC
     return;
 #else
-    if (!isCompiledIn()) {
-        return;
-    }
-
     reconcilePrimaryDevice();
     detectDisconnectsAndReconnects();
 
@@ -363,10 +359,6 @@ bool tryJoinFromStartPress() {
 #if !TARGET_PC
     return false;
 #else
-    if (!isCompiledIn()) {
-        return false;
-    }
-
     auto tryJoinDevice = [&](s32 instance, const char* source) -> bool {
         if (instance < 0) {
             return false;
@@ -395,10 +387,6 @@ bool tryJoinFromStartPress() {
         if (slot >= MAX_LOCAL_PLAYERS) {
             debug::logWarn("Start on device %d (%s): no free co-op slots", instance, source);
             return false;
-        }
-
-        if (!isEnabled()) {
-            setEnabled(true);
         }
 
         if (!assignDevice(slot, instance)) {

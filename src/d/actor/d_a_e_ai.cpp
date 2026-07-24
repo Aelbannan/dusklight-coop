@@ -941,9 +941,7 @@ int e_ai_class::Create() {
 
 #if TARGET_PC
         // Gate G spawn choke: queue this vanilla Armos for co-op augmentation.
-        if (dusk::coop::isEnabled()) {
-            dusk::coop::enemy::noteEligibleSource(this);
-        }
+        dusk::coop::enemy::noteEligibleSource(this);
 #endif
     }
 

@@ -348,10 +348,6 @@ void tick() {
 #if !TARGET_PC
     return;
 #else
-    if (!isEnabled()) {
-        return;
-    }
-
     resolvePendingCreates();
     recreatePendingLinks();
 
@@ -386,7 +382,7 @@ bool spawnPlayerLink(PlayerId id, const cXyz& pos, s16 yaw) {
     (void)yaw;
     return false;
 #else
-    if (!isEnabled() || !isValidPlayer(id) || isStoryAuthority(id)) {
+    if (!isValidPlayer(id) || isStoryAuthority(id)) {
         return false;
     }
     if (isPlayerAlive(id) || g_meta[id].createRequested) {
@@ -516,7 +512,7 @@ bool softSeparate(PlayerId a, PlayerId b) {
     (void)b;
     return false;
 #else
-    if (!isEnabled() || a == b || !isValidPlayer(a) || !isValidPlayer(b)) {
+    if (a == b || !isValidPlayer(a) || !isValidPlayer(b)) {
         return false;
     }
     fopAc_ac_c* actorA = getPlayerActor(a);
@@ -558,9 +554,6 @@ void onRoomUnload() {
     return;
 #else
     // Stage teardown owns the story-authority actor; recreate every other joined actor.
-    if (!isEnabled()) {
-        return;
-    }
     for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         if (isStoryAuthority(id)) {
             continue;
@@ -600,9 +593,6 @@ bool onPlayerJoined(PlayerId id) {
 #else
     if (!isValidPlayer(id) || isStoryAuthority(id)) {
         return false;
-    }
-    if (!isEnabled()) {
-        setEnabled(true);
     }
     const bool spawned = spawnPlayerLinkNearAuthority(id);
     syncCamerasForJoined();

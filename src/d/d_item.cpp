@@ -892,11 +892,9 @@ void item_func_JEWEL_WORM_ROD() {}
 
 void item_func_EMPTY_BOTTLE() {
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
-        if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
-                                                   dItemNo_EMPTY_BOTTLE_e)) {
-            return;
-        }
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_EMPTY_BOTTLE_e)) {
+        return;
     }
 #endif
     dComIfGs_setEmptyBottle();
@@ -920,11 +918,9 @@ void item_func_MILK_BOTTLE() {
 
 void item_func_HALF_MILK_BOTTLE() {
 #if TARGET_PC
-    if (dusk::coop::isEnabled()) {
-        if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
-                                                   dItemNo_HALF_MILK_BOTTLE_e)) {
-            return;
-        }
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_HALF_MILK_BOTTLE_e)) {
+        return;
     }
 #endif
     dComIfGs_setEmptyBottle(dItemNo_HALF_MILK_BOTTLE_e);
