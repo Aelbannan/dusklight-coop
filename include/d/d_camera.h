@@ -1135,14 +1135,12 @@ public:
         dAttention_c* attn = dComIfGp_getAttention();
         mpLockonTarget = attn->LockonTruth() ? attn->LockonTarget(0) : NULL;
         attn->LockSoundOn();
-#if TARGET_PC
         // Never lock onto another player's Link.
         if (mpLockonTarget != nullptr &&
             fopAcM_GetName(mpLockonTarget) == fpcNm_ALINK_e &&
             mpLockonTarget != mpPlayerActor) {
             mpLockonTarget = nullptr;
         }
-#endif
     }
 
     void SetWindow(f32 param_0, f32 param_1) {

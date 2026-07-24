@@ -3063,11 +3063,7 @@ inline int dComIfGp_evmng_checkStartDemo() {
 }
 
 inline dAttention_c* dComIfGp_getAttention() {
-#if TARGET_PC
     return dusk::coop::attention::forContext();
-#else
-    return g_dComIfG_gameInfo.play.getAttention();
-#endif
 }
 
 inline fopAc_ac_c* dComIfGp_att_getZHint() {

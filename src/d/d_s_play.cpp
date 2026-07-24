@@ -835,9 +835,6 @@ static int dScnPly_Execute(dScnPly_c* i_this) {
 
         dComIfGp_getEvent()->Step();
         // Attention is ticked per-player by coop::attention::tick().
-#if !TARGET_PC
-        dComIfGp_getAttention()->Run();
-#endif
     }
 
     #if DEBUG

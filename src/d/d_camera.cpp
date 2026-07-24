@@ -70,11 +70,7 @@ static void hideActor(fopAc_ac_c* actor, int cameraId = 0) {
         dComIfGp_onCameraAttentionStatus(cameraId, 2);
         daPy_py_c* player = (daPy_py_c*)actor;
         if (player->checkHorseRide()) {
-#if TARGET_PC
             daHorse_c* horse = dComIfGp_getHorseActor(cameraId);
-#else
-            daHorse_c* horse = dComIfGp_getHorseActor();
-#endif
             fopAcM_OnStatus(horse, fopAcStts_NODRAW_e);
         }
     } else {
@@ -442,16 +438,11 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     specialType[CAM_TYPE_PEEP] = GetCameraTypeFromCameraName("Peep");
     field_0x698 = 0xFF;
     field_0x69c = 0;
-#if TARGET_PC
-    if (dusk::coop::isEnabled() && i_player != nullptr) {
+    {
         dusk::coop::ContextFrame frame;
         frame.player = static_cast<dusk::coop::PlayerId>(i_cameraID);
         frame.view = static_cast<dusk::coop::ViewId>(i_cameraID);
         dusk::coop::ScopedContext ctx(frame);
-        mIsWolf = daPy_py_c::checkNowWolf() != 0 ? TRUE : FALSE;
-    } else
-#endif
-    {
         mIsWolf = daPy_py_c::checkNowWolf() != 0 ? TRUE : FALSE;
     }
     mCurMode = 0;
@@ -1068,7 +1059,6 @@ void dCamera_c::debugDrawInit() {
 }
 
 bool dCamera_c::Run() {
-#if TARGET_PC
     ResetView();
     if (executeDebugFlyCam()) {
         mFrameCounter++;
@@ -1084,7 +1074,6 @@ bool dCamera_c::Run() {
             dComIfGp_getPlayer(dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)))) {
         mpPlayerActor = tracked;
     }
-#endif
 
     // ── All cameras (P0–P7) run the identical vanilla chase pipeline ──
     // Each camera uses its own mpPlayerActor via linkActor() / playerActor().
@@ -1102,32 +1091,16 @@ bool dCamera_c::Run() {
 #endif
     int iVar8 = mIsWolf;
 
-#if TARGET_PC
     // Scoped coop context for the entire camera pipeline.
     // checkNowWolf(), Att(), and all attention queries use this camera's player.
     dusk::coop::ContextFrame camFrame;
-    bool haveCoopCtx = false;
-    if (dusk::coop::isEnabled() && mpPlayerActor != nullptr) {
+    if (mpPlayerActor != nullptr) {
         camFrame.player = static_cast<dusk::coop::PlayerId>(
             dComIfGp_getCameraPlayer1ID(static_cast<int>(mCameraID)));
         camFrame.view = static_cast<dusk::coop::ViewId>(mCameraID);
-        haveCoopCtx = true;
     }
-    dusk::coop::ScopedContext ctx(camFrame);  // always constructed, but only meaningful when haveCoopCtx
-    (void)haveCoopCtx;  // ctx manages its own lifecycle; haveCoopCtx signals intent
+    dusk::coop::ScopedContext ctx(camFrame);
     mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
-#else
-    mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
-#endif
-#if TARGET_PC
-    // Snap camera center to the tracked actor before any camera math,
-    // so every camera's chase starts from the correct position.
-    if (dusk::coop::isEnabled() && mpPlayerActor != nullptr &&
-        !dComIfGp_getEvent()->runCheck()) {
-        const cXyz p = positionOf(mpPlayerActor);
-        mCenter.set(p.x, p.y + 150.0f, p.z);
-    }
-#endif
 
     mFocusLine.Off();
     clrFlag(0x10168C21);
@@ -1309,11 +1282,11 @@ bool dCamera_c::Run() {
     mBank = mViewCache.mBank;
     bumpCheck(mBumpCheckFlags);
 
-#if TARGET_PC
-    // Co-op: after all camera math (chase, bump, shake), re-snap the camera
-    // so it tracks the tracked actor's live position. The orbit/obstacle offset
-    // is preserved.
-    if (dusk::coop::isEnabled() && mpPlayerActor != nullptr &&
+    // After all camera math, re-snap the center to the tracked actor's live position
+    // so chase mode keeps up.  Skip when locked onto a target — lock-on mode manages
+    // its own center.
+    if (mpLockonTarget == nullptr &&
+        mpPlayerActor != nullptr &&
         !dComIfGp_getEvent()->runCheck()) {
         const cXyz playerPos = positionOf(mpPlayerActor);
         const cXyz desiredCenter(playerPos.x, playerPos.y + 150.0f, playerPos.z);
@@ -1321,7 +1294,6 @@ bool dCamera_c::Run() {
         mCenter = mViewCache.mCenter = desiredCenter;
         mEye = mViewCache.mEye = desiredCenter + eyeOffset;
     }
-#endif
 
     cSAngle angle = mPadInfo.mMainStick.mAngle - mFakeAngleSys.field_0x4;
     if (mPadInfo.mMainStick.mLastValue < mCamSetup.USOValue()
