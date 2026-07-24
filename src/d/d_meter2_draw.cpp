@@ -676,7 +676,19 @@ void dMeter2Draw_c::exec(u32 i_status) {
 #endif
 }
 
+#if TARGET_PC
+// Declared in dusk::coop::hud, set when per-view HUD drawing is active.
+namespace dusk::coop::hud {
+extern bool g_perViewHudActive;
+}
+#endif
+
 void dMeter2Draw_c::draw() {
+#if TARGET_PC
+    if (dusk::coop::hud::g_perViewHudActive) {
+        return;
+    }
+#endif
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();
     graf_ctx->setup2D();
 

@@ -59,6 +59,7 @@
 #include "dusk/logging.h"
 #include "dusk/settings.h"
 #if TARGET_PC
+#include "dusk/coop/coop_hud.h"
 #include "dusk/coop/coop_render.h"
 #endif
 #endif
@@ -2810,6 +2811,10 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::stopCpuTimer("カラーフェード描画（レンダリング）");
                 #endif
                 }  // coopLastPass
+
+                // Per-view HUD draw for this viewport.
+                // Runs after bloom/fade for correct draw order.
+                dusk::coop::hud::drawView(coopViewPass);
             }
         }
         }  // coopViewPass

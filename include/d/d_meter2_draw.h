@@ -152,6 +152,7 @@ public:
     constexpr f32 getButtonZAlpha() const {
         return mButtonZAlpha;
     }
+    CPaneMgr* getRootPane() { return mpParent; }
 #endif
 
 private:

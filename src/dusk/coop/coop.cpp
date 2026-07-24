@@ -14,6 +14,7 @@
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_gate_h_selfcheck.h"
 #include "dusk/coop/coop_horses.h"
+#include "dusk/coop/coop_hud.h"
 #include "dusk/coop/coop_input.h"
 #include "dusk/coop/coop_inventory.h"
 #include "dusk/coop/coop_player.h"
@@ -59,6 +60,7 @@ void init() {
     player::init();
     inventory::init();
     bottles::init();
+    hud::init();
     save::init();
     combat::init();
     enemy::init();
@@ -83,6 +85,7 @@ void reset() {
     player::reset();
     inventory::reset();
     bottles::reset();
+    hud::reset();
     save::reset();
     combat::reset();
     enemy::reset();
@@ -106,6 +109,7 @@ void tick() {
     horses::tick();
     attention::tick();
     enemy::tick();
+    hud::tick();
     combat::endFrame();
     combat::beginFrame();
     assertContextStackEmpty();
