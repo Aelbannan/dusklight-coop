@@ -27,6 +27,8 @@
 #if TARGET_PC
 #include "dusk/memory.h"
 #include "dusk/settings.h"
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_hud.h"
 
 namespace {
 
@@ -36,6 +38,134 @@ f32 dGetUserHudScale() {
 }
 
 }  // namespace
+
+// Unified emphasis-button processing — reads emphasis from the draw
+// object's isEmphasisX() fields, which were set per-player by the
+// per-player patching in dMeter2Draw_c::draw() (drawButtonA/B/R calls).
+// This avoids duplicating the emphasis logic from those functions.
+static void processEmphasisButton(dMeterButton_c* btn, dMeter2Draw_c* draw,
+                                   const EmphasisButtonParams& p) {
+    u8 setA = 0, setB = 0, setR = 0, setZ = 0, set3D = 0, setC = 0;
+    u8 setS = 0, setX = 0, setY = 0, set3DB = 0, setBin = 0;
+    u8 prio = 2;
+
+    // S button (slot 6) — eats all priority
+    // Emphasis from drawButtonS: any non-zero action is emphasis.
+    if (draw->isEmphasisS() && btn->isSetButton(6)) {
+        char* s = draw->getActionString(p.sButtonStatus, 0, NULL);
+        btn->setString(s, 6, 0, 0);
+        setS = 1;
+        prio = 0;
+    }
+
+    // B+3D combo (slot 13)
+    if (prio != 0) {
+        if (draw->isEmphasisB() && draw->isEmphasis3D() && p.aStatus == p.m3dStatus) {
+            btn->setString(draw->getActionString(p.aStatus, 0, NULL), 13, 2 - prio, 0);
+            set3DB = 1;
+            prio -= 2;
+        }
+    }
+
+    // 3D standalone (slot 4)
+    if (set3DB == 0 && prio != 0) {
+        // Emphasis from drawButton3D: any non-zero action is emphasis.
+        if (draw->isEmphasis3D() && btn->isSetButton(4)) {
+            char* s = draw->getActionString(p.m3dStatus, 0, NULL);
+            btn->setString(s, 4, 2 - prio, 0);
+            set3D = 1;
+            prio -= 1;
+        }
+    }
+
+    // C-stick (slot 5)
+    if (prio != 0) {
+        if (draw->isEmphasisC() && btn->isSetButton(5)) {
+            char* s = draw->getActionString(p.cStickStatus, 0, NULL);
+            btn->setString(s, 5, 2 - prio, 0);
+            setC = 1;
+            prio -= 1;
+        }
+    }
+
+    // B button (slot 1)
+    if (set3DB == 0 && prio != 0) {
+        if (draw->isEmphasisB() && btn->isSetButton(1)) {
+            char* s = draw->getActionString(p.aStatus, 0, NULL);
+            btn->setString(s, 1, 2 - prio, p.aStatus == 0x4F ? true : false);
+            setB = 1;
+            prio -= 1;
+        }
+    }
+
+    // Y button (slot 8)
+    if (prio != 0) {
+        if (draw->isEmphasisY() && btn->isSetButton(8)) {
+            char* s = draw->getActionString(p.yItemStatus, 0, NULL);
+            btn->setString(s, 8, 2 - prio, 0);
+            setY = 1;
+            prio -= 1;
+        }
+    }
+
+    // A button (slot 0)
+    if (prio != 0) {
+        if (draw->isEmphasisA() && btn->isSetButton(0)) {
+            char* s = draw->getActionString(p.doStatus, 0, NULL);
+            btn->setString(s, 0, 2 - prio, 0);
+            setA = 1;
+            prio -= 1;
+        }
+    }
+
+    // Z button (slot 3)
+    if (prio != 0 && btn->isSetButton(3)) {
+        if (draw->isEmphasisZ()) {
+            char* s;
+            if (p.zStatus == 8) {
+                s = draw->getActionString(100, 0, NULL);
+            } else {
+                s = draw->getActionString(p.zStatus, 0, NULL);
+            }
+            btn->setString(s, 3, 2 - prio, 0);
+            setZ = 1;
+            prio -= 1;
+        }
+    }
+
+    // R button (slot 2)
+    if (prio != 0) {
+        if (draw->isEmphasisR() && btn->isSetButton(2)) {
+            char* s = draw->getActionString(p.rStatus, 0, NULL);
+            btn->setString(s, 2, 2 - prio, 0);
+            setR = 1;
+            prio -= 1;
+        }
+    }
+
+    // X button (slot 7)
+    if (prio != 0) {
+        if (draw->isEmphasisX() && btn->isSetButton(7)) {
+            char* s = draw->getActionString(p.xItemStatus, 0, NULL);
+            btn->setString(s, 7, 2 - prio, 0);
+            setX = 1;
+            prio -= 1;
+        }
+    }
+
+    // Bottle (slot 21)
+    if (prio != 0 && btn->isSetButton(21) && !dMeter2Info_is2DActiveTouchArea()) {
+        if (draw->isEmphasisBin()) {
+            char* s = draw->getActionString(p.bottleStatus, 0, NULL);
+            btn->setString(s, 21, 2 - prio, 0);
+            setBin = 1;
+        }
+    }
+
+    btn->_execute(p.mStatus, setA, setB, setR, setZ, set3D, setC, setS, setX, setY,
+                  false, false, false, false, set3DB,
+                  false, false, false, false, false, false, false, setBin);
+}
 #endif
 
 int dMeter2_c::_create() {
@@ -332,12 +462,21 @@ int dMeter2_c::_draw() {
     {
         return 1;
     }
+
     #endif
 
+    // ── Minimap ──
+    // On PC: still call _draw() for state updates (mMap->_draw()), then
+    // coop_hud::drawView() calls draw() in each viewport.  The draw-list
+    // submission inside _draw() causes a second render in the default
+    // viewport, but that's harmless and keeps the map logic simple.
     if (mpMap != NULL) {
         mpMap->_draw();
     }
 
+    // ── Sub-contents (full-screen overlays like item wheel) ──
+    // Always submitted to the draw list — they cover the entire screen
+    // and don't need per-view treatment.
     if (mpSubContents != NULL) {
         dComIfGd_set2DOpaTop(mpSubContents);
     }
@@ -352,15 +491,26 @@ int dMeter2_c::_draw() {
         }
     }
 
+    // ── Main HUD ──
+    // On PC: drawn per-view by coop_hud::drawView() calling
+    // g_hudDraw->draw() directly.  On Wii/GC: submitted to draw list.
+#if TARGET_PC
+    // Don't submit — drawView handles it.
+#else
     if (dMeter2Info_getWindowStatus() == 2) {
         dComIfGd_set2DOpa(mpMeterDraw);
     } else {
         dComIfGd_set2DOpaTop(mpMeterDraw);
     }
+#endif
 
+    // ── Emphasis button (floating button prompts) ──
+    // On PC: drawn per-view by coop_hud::drawView().
+#if !TARGET_PC
     if (mpEmpButton != NULL) {
         dComIfGd_set2DOpaTop(mpEmpButton);
     }
+#endif
 
     return 1;
 }
@@ -2258,21 +2408,16 @@ void dMeter2_c::move2DContents() {
         field_0x108 = mDoExt_setCurrentHeap(temp_r3);
     }
 
+    // Emphasis button processing:
+    // On PC: handled by coop_hud::tick() per-player — nothing to do here.
+    // On non-PC: the original singleton path via mpEmpButton.
+#if !TARGET_PC
     check2DContents();
-
     if (mpEmpButton != NULL) {
-        var_r19 = 0;
-        var_r27 = 0;
-        var_r20 = 0;
-        var_r28 = 0;
-        var_r21 = 0;
-        var_r22 = 0;
-        var_r23 = 0;
-        var_r24 = 0;
-        var_r25 = 0;
-        var_r29 = 0;
-        var_r26 = 0;
-        var_r30 = 2;
+        u8 var_r19 = 0, var_r27 = 0, var_r20 = 0, var_r28 = 0;
+        u8 var_r21 = 0, var_r22 = 0, var_r23 = 0, var_r24 = 0;
+        u8 var_r25 = 0, var_r29 = 0, var_r26 = 0;
+        u8 var_r30 = 2;
 
         if (mpMeterDraw->isEmphasisS() && mpEmpButton->isSetButton(6)) {
             mpEmpButton->setString(mpMeterDraw->getActionString(mSButtonStatus, 0, NULL), 6, 0, 0);
@@ -2336,7 +2481,6 @@ void dMeter2_c::move2DContents() {
                 mpEmpButton->setString(mpMeterDraw->getActionString(mZStatus, 0, NULL), 3,
                                        2 - var_r30, 0);
             }
-
             var_r28 = 1;
             var_r30 -= 1;
         }
@@ -2374,6 +2518,7 @@ void dMeter2_c::move2DContents() {
             field_0x201 = 1;
         }
     }
+#endif
 
     if (field_0x108 != NULL) {
         mDoExt_setCurrentHeap(field_0x108);
@@ -2476,6 +2621,11 @@ void dMeter2_c::checkSubContents() {
 }
 
 void dMeter2_c::check2DContents() {
+#if TARGET_PC
+    // On PC, per-player emphasis buttons are managed in
+    // coop_hud::tick() — suppress the shared single instance.
+    return;
+#endif
     if (mpEmpButton == NULL) {
         if ((dComIfGp_isHeapLockFlag() == 0 || dComIfGp_isHeapLockFlag() == 5) &&
             (dMeter2Info_isFloatingMessageVisible() || mpMeterDraw->isEmphasisA() ||
@@ -2513,6 +2663,57 @@ void dMeter2_c::check2DContents() {
         }
     }
 }
+
+
+#if TARGET_PC
+// ── Per-player emphasis button lifecycle helpers ──
+// These are called from coop_hud and live here so they can access the
+// full dMeterButton_c definition (which coop_hud cannot include).
+
+// ── Per-player emphasis button lifecycle helpers ──
+// Defined at global scope (not in any namespace) to match the extern
+// declarations in coop_hud.h.  Then called from dusk::coop::hud::tick()
+// and drawView() via unqualified lookup that finds the global version.
+
+static JKRHeap* s_empButtonPrevHeap = nullptr;
+
+void dusk_coop_createEmpButton(dMeterButton_c** outBtn) {
+    if (outBtn == nullptr || *outBtn != nullptr) return;
+    dComIfGp_setHeapLockFlag(8);
+    s_empButtonPrevHeap = mDoExt_setCurrentHeap(dComIfGp_getSubHeap2D(8));
+    *outBtn = JKR_NEW dMeterButton_c();
+    // Note: do NOT restore yet — caller must pair with finalizeEmpButton.
+}
+
+void dusk_coop_finalizeEmpButton() {
+    if (s_empButtonPrevHeap != nullptr) {
+        (void)mDoExt_setCurrentHeap(s_empButtonPrevHeap);
+        s_empButtonPrevHeap = nullptr;
+    }
+    dComIfGp_offHeapLockFlag(8);
+}
+
+void dusk_coop_destroyEmpButton(dMeterButton_c** outBtn) {
+    if (outBtn == nullptr || *outBtn == nullptr) return;
+    JKR_DELETE(*outBtn);
+    *outBtn = nullptr;
+    dComIfGp_getSubHeap2D(8)->freeAll();
+    if (s_empButtonPrevHeap != nullptr) {
+        (void)mDoExt_setCurrentHeap(s_empButtonPrevHeap);
+        s_empButtonPrevHeap = nullptr;
+    }
+}
+
+void dusk_coop_processEmphasisButton(dMeterButton_c* btn, dMeter2Draw_c* draw,
+                                      const EmphasisButtonParams& params) {
+    if (btn == nullptr || draw == nullptr) return;
+    processEmphasisButton(btn, draw, params);
+}
+
+void dusk_coop_drawEmpButton(dMeterButton_c* btn) {
+    if (btn != nullptr) btn->draw();
+}
+#endif
 
 void dMeter2_c::moveBombNum() {
     u8 temp_r28;

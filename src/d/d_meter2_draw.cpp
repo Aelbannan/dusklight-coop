@@ -678,19 +678,8 @@ void dMeter2Draw_c::exec(u32 i_status) {
 #endif
 }
 
-#if TARGET_PC
-// Declared in dusk::coop::hud, set when per-view HUD drawing is active.
-namespace dusk::coop::hud {
-extern bool g_perViewHudActive;
-}
-#endif
-
 void dMeter2Draw_c::draw() {
 #if TARGET_PC
-    if (dusk::coop::hud::g_perViewHudActive) {
-        return;
-    }
-
     // Per-view HUD: patch button-text panes from the current player's
     // button state before rendering.  Called from coop_hud::drawView().
     if (dusk::coop::hud::g_patchPlayerForDraw >= 0) {
@@ -698,9 +687,9 @@ void dMeter2Draw_c::draw() {
             dusk::coop::hud::g_patchPlayerForDraw);
         const auto& btn = dusk::coop::hud::g_playerButtonState[pid];
 
-        // A button: update text content AND visibility.
-        // The vanilla _execute() may have hidden the pane because a
-        // different player's action was NONE or matched their B status.
+        // A button: update text content, visibility, AND emphasis field.
+        // The emphasis field (field_0x761, read by isEmphasisA()) is set from
+        // the per-player status so processEmphasisButton sees the right value.
         {
             u8 emph = 0;
             char* str = getActionString(btn.doStatus, 1, &emph);
@@ -715,6 +704,12 @@ void dMeter2Draw_c::draw() {
                     static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(),
                     str);
             }
+            // Emphasis: message output_type OR per-player set flag override.
+            // field_0x761 was set by getActionString above (the &emph writes to
+            // emph, but getActionString also writes to field_0x761 when called
+            // with &field_0x761 — so use emph as the base, then apply override).
+            field_0x761 = emph;
+            if (btn.doSetFlag & (2|4)) field_0x761 = 7;
         }
 
         // B button
@@ -732,10 +727,35 @@ void dMeter2Draw_c::draw() {
                     static_cast<J2DTextBox*>(mpBText[i]->getPanePtr())->getStringPtr(),
                     str);
             }
+            field_0x762 = emph;
+            if (btn.aSetFlag & (2|4)) field_0x762 = 7;
         }
 
         // R button (text + emphasis tracking)
         drawButtonR(0, btn.rStatus, false, false);
+        // Override R emphasis with per-player set flag
+        if (btn.rSetFlag & (2|4)) field_0x768[2] = 7;
+
+        // X/Y item textures — override the player-0 textures set during
+        // _execute() with this player's assigned loadout items.
+        // (The per-player drawXxx calls in coop_hud.cpp also do this,
+        //  but doing it here keeps all per-player pane mutation in one
+        //  place and guarantees the textures are current.)
+        changeTextureItemXY(0, btn.itemSlotX);
+        changeTextureItemXY(1, btn.itemSlotY);
+
+        // B-button item icon — show sword, fishing rod, or nothing.
+        const bool isSwordAction = (btn.aStatus == 0x26 || btn.aStatus == 0x2E);
+        const bool isRodAction   = (btn.aStatus == 0x4F);
+        if (isSwordAction && btn.equipSword != 0xFF) {
+            mpScreen->search(MULTI_CHAR('item_b_n'))->show();
+            changeTextureItemB(btn.equipSword);
+        } else if (isRodAction) {
+            mpScreen->search(MULTI_CHAR('item_b_n'))->show();
+            changeTextureItemB(dItemNo_LURE_ROD_e);
+        } else {
+            mpScreen->search(MULTI_CHAR('item_b_n'))->hide();
+        }
     }
 #endif
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();

@@ -54,6 +54,7 @@ void init() {
 #else
     g_runtime = {};
     initPlayer0();
+    mDoLib_clipper::setCullingDisabled(true);
     render::init();
     camera::init();
     input::init();

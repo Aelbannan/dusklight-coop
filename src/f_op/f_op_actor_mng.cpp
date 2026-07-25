@@ -1034,7 +1034,7 @@ s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
     // Co-op: never cull actors — the single draw pass only tests against one camera's
     // frustum, so actors outside that frustum (e.g. P2's Link, objects near P2, etc.)
     // would incorrectly be culled. This also covers ALL objects, not just player actors.
-
+    return FALSE;
 #endif
     MtxP mtx_p;
 #if AVOID_UB

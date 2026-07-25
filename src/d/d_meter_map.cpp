@@ -610,6 +610,18 @@ void dMeterMap_c::_move(u32 param_0) {
 }
 
 void dMeterMap_c::_draw() {
+    #if TARGET_PC
+    // On PC the minimap is drawn per-view by coop_hud::drawView() calling
+    // draw() directly, so we only update state here and skip the draw list.
+    #if DEBUG
+    if (!g_meter_mapHIO.mMapRenderingProhibited) {
+        mMap->_draw();
+    }
+    #else
+    mMap->_draw();
+    #endif
+    return;
+#endif
     #if DEBUG
     if (!g_meter_mapHIO.mMapRenderingProhibited) {
         mMap->_draw();

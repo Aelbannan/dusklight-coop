@@ -78,6 +78,9 @@ public:
     bool pointerMove();
 #endif
 
+    void setPlayer(u8 id);
+    u8 getPlayer() const { return mPlayerId; }
+
     virtual void draw() { _draw(); }
     virtual ~dMenu_Ring_c();
 
@@ -208,6 +211,18 @@ private:
     /* 0x6D2 */ u8 field_0x6d2;
     /* 0x6D3 */ u8 field_0x6d3;
 #if TARGET_PC
+    // Per-player data access helpers — route to inventory when mPlayerId
+    // identifies a valid joined player, fall back to dComIfGs_* otherwise.
+    u8  ringSelectItemIndex(int idx) const;
+    void ringSetSelectItemIndex(int idx, u8 val);
+    u16 ringArrowNum() const;
+    u16 ringArrowMax() const;
+    u8  ringBombNum(int bagIdx) const;
+    u8  ringBombMax(u8 item) const;
+    u8  ringPachinkoNum() const;
+    u16 ringOil() const;
+
+    u8 mPlayerId = 0xFF;
     f32 mSelectItemSlideElapsed[4];
     f32 mCursorInterpPrevX;
     f32 mCursorInterpPrevY;

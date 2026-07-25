@@ -28,6 +28,9 @@
 
 #ifdef TARGET_PC
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_types.h"
+#include "dusk/coop/coop_input.h"
 #endif
 
 class dDlst_MENU_CAPTURE_c : public dDlst_base_c {
@@ -208,6 +211,22 @@ void dMw_offMenuRing() {
         menu_window->offShowFlag();
     }
 }
+
+#if TARGET_PC
+void dMw_setRingPlayer(u8 id) {
+    dMw_c* menu_window = dMeter2Info_getMenuWindowClass();
+    if (menu_window != NULL) {
+        menu_window->setRingPlayer(id);
+    }
+}
+u8 dMw_getRingPlayer() {
+    dMw_c* menu_window = dMeter2Info_getMenuWindowClass();
+    if (menu_window != NULL) {
+        return menu_window->getRingPlayer();
+    }
+    return 0xFF;
+}
+#endif
 
 static BOOL dMw_isMenuRing() {
     dMw_c* menu_window = dMeter2Info_getMenuWindowClass();
@@ -650,29 +669,83 @@ void dMw_c::key_wait_proc() {
                 mMenuProc = DMAP_OPEN;
                 dMw_dmap_create();
             }
-        } else if ((((dMw_UP_TRIGGER() || dMw_DOWN_TRIGGER()) && !dMw_LEFT_TRIGGER() && !dMw_RIGHT_TRIGGER()) || dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) &&
-                   dMeter2Info_isWindowAccept(2) &&
+        } else if ((dMeter2Info_isWindowAccept(2) || dMeter2Info_isTouchKeyCheck(2)) &&
                    (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1) &&
                    dMeter2Info_isItemOpenCheck() &&
                    !dComIfGp_isEnableNextStage())
         {
-            dMsgObject_setKillMessageFlag();
+            // Detect which player triggered the item wheel.
+            // On PC: scan all joined players' D-pad input.
+            // On Wii/GC: only PAD_1 (existing behaviour).
+#if TARGET_PC
+            bool anyTrigger = false;
+            for (int pi = 0; pi < dusk::coop::MAX_LOCAL_PLAYERS; ++pi) {
+                const auto pid = static_cast<dusk::coop::PlayerId>(pi);
+                if (!dusk::coop::isValidPlayer(pid)) continue;
+                const auto* slot = dusk::coop::playerSlot(pid);
+                if (slot == nullptr || !slot->joined) continue;
 
-            if (dComIfGp_isHeapLockFlag() == 5) {
-                dMeter2Info_getMeterClass()->emphasisButtonDelete();
+                // Read D-pad from this player's assigned legacy pad port.
+                // Fall back to PAD_1 if no port is assigned.
+                const u32 pad = slot->legacyPadPort.value_or(PAD_1);
+                const bool up    = mDoCPd_c::getTrigUp(pad) != 0;
+                const bool down  = mDoCPd_c::getTrigDown(pad) != 0;
+                const bool left  = mDoCPd_c::getTrigLeft(pad) != 0;
+                const bool right = mDoCPd_c::getTrigRight(pad) != 0;
+
+                if (!up && !down) continue;
+                if (left || right) continue;   // left/right = map, not wheel
+                if (dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) {
+                    // forced/touch open — use player 0
+                    mRingPlayerId = 0;
+                } else {
+                    mRingPlayerId = static_cast<u8>(pid);
+                }
+
+                dMsgObject_setKillMessageFlag();
+                if (dComIfGp_isHeapLockFlag() == 5) {
+                    dMeter2Info_getMeterClass()->emphasisButtonDelete();
+                }
+
+                if (down) {
+                    field_0x14B = 1;
+                    dMw_ring_create(2);
+                } else {
+                    field_0x14B = 2;
+                    dMw_ring_create(0);
+                }
+
+                mMenuProc = RING_OPEN;
+                field_0x14B = 0;
+                dComIfGp_setHeapLockFlag(1);
+                anyTrigger = true;
+                break;
             }
-
-            if (dMw_DOWN_TRIGGER()) {
-                field_0x14B = 1;
-                dMw_ring_create(2);
-            } else {
-                field_0x14B = 2;
-                dMw_ring_create(0);
+            if (!anyTrigger)
+#endif
+            {
+                // Original PAD_1 path (Wii/GC, or PC fallback when no player matches).
+                const bool pad1_up    = mDoCPd_c::getTrigUp(PAD_1) != 0;
+                const bool pad1_down  = mDoCPd_c::getTrigDown(PAD_1) != 0;
+                const bool pad1_left  = mDoCPd_c::getTrigLeft(PAD_1) != 0;
+                const bool pad1_right = mDoCPd_c::getTrigRight(PAD_1) != 0;
+                if ((pad1_up || pad1_down) && !pad1_left && !pad1_right) {
+                    dMsgObject_setKillMessageFlag();
+                    if (dComIfGp_isHeapLockFlag() == 5) {
+                        dMeter2Info_getMeterClass()->emphasisButtonDelete();
+                    }
+                    if (pad1_down) {
+                        field_0x14B = 1;
+                        dMw_ring_create(2);
+                    } else {
+                        field_0x14B = 2;
+                        dMw_ring_create(0);
+                    }
+                    mMenuProc = RING_OPEN;
+                    field_0x14B = 0;
+                    dComIfGp_setHeapLockFlag(1);
+                }
             }
-
-            mMenuProc = RING_OPEN;
-            field_0x14B = 0;
-            dComIfGp_setHeapLockFlag(1);
         }
     }
 }
@@ -1084,6 +1157,9 @@ void dMw_c::dMw_ring_create(u8 i_origin) {
 
     mpMenuRing = JKR_NEW dMenu_Ring_c(mpHeap, mpStick, mpCStick, i_origin);
     JUT_ASSERT(2038, mpMenuRing != NULL);
+#if TARGET_PC
+    mpMenuRing->setPlayer(mRingPlayerId);
+#endif
     mpMenuRing->_create();
 
     if (mpCapture == NULL) {

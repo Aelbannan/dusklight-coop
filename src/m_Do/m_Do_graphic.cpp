@@ -2681,6 +2681,14 @@ int mDoGph_Painter() {
                 if (dusk::coop::render::isMultiViewActive()) {
                     GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
                 }
+                // Per-view trim bars (lock-on letterbox).  The viewport's scissor
+                // still holds the trim offsets set by widezoom_correction() because
+                // beginMultiViewCapture() no longer overrides it.  GX scissor was
+                // set to full-FB at line 2330 so the black quad vertices drawn by
+                // trimming() are not clipped.
+                if (coopMultiView) {
+                    trimming(&camera_p->view, view_port);
+                }
                 // Capture full-frame EFB for this camera before any fullscreen effects.
                 if (coopMultiView) {
                     dusk::coop::render::captureView(coopViewPass);

@@ -37,7 +37,107 @@
 #include "dusk/menu_pointer.h"
 #include "dusk/settings.h"
 #include "dusk/ui/touch_controls.hpp"
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_inventory.h"
 #endif
+
+// Per-player data access helpers — route to per-player inventory when
+// mPlayerId identifies a valid joined player, otherwise fall back to
+// the global dComIfGs_* save-data accessors.
+namespace {
+    bool ringValidPlayer(u8 pid) {
+#if TARGET_PC
+        return dusk::coop::isValidPlayer(pid) && dusk::coop::playerSlot(pid) != nullptr &&
+               dusk::coop::playerSlot(pid)->joined;
+#else
+        (void)pid;
+        return false;
+#endif
+    }
+}
+
+u8 dMenu_Ring_c::ringSelectItemIndex(int idx) const {
+    if (ringValidPlayer(mPlayerId)) {
+#if TARGET_PC
+        const auto& loadout = dusk::coop::inventory::loadout(mPlayerId);
+        switch (idx) {
+        case 0: return loadout.itemX;
+        case 1: return loadout.itemY;
+        default: break;
+        }
+#endif
+    }
+    return dComIfGs_getSelectItemIndex(idx);
+}
+
+void dMenu_Ring_c::ringSetSelectItemIndex(int idx, u8 val) {
+    if (ringValidPlayer(mPlayerId) && idx < 2) {
+#if TARGET_PC
+        auto& loadout = dusk::coop::inventory::loadout(mPlayerId);
+        if (idx == 0) {
+            loadout.itemX = val;
+        } else {
+            loadout.itemY = val;
+        }
+#endif
+        return;
+    }
+    dComIfGs_setSelectItemIndex(idx, val);
+}
+
+u16 dMenu_Ring_c::ringArrowNum() const {
+    if (ringValidPlayer(mPlayerId)) {
+#if TARGET_PC
+        return dusk::coop::inventory::resources(mPlayerId).arrows;
+#endif
+    }
+    return dComIfGs_getArrowNum();
+}
+
+u16 dMenu_Ring_c::ringArrowMax() const {
+    if (ringValidPlayer(mPlayerId)) {
+#if TARGET_PC
+        return dusk::coop::inventory::resources(mPlayerId).maxArrows;
+#endif
+    }
+    return dComIfGs_getArrowMax();
+}
+
+u8 dMenu_Ring_c::ringBombNum(int bagIdx) const {
+    if (ringValidPlayer(mPlayerId) && bagIdx >= 0 && bagIdx < 3) {
+#if TARGET_PC
+        return dusk::coop::inventory::resources(mPlayerId).bombCounts[bagIdx];
+#endif
+    }
+    return dComIfGs_getBombNum(bagIdx);
+}
+
+u8 dMenu_Ring_c::ringBombMax(u8 item) const {
+    // Bomb capacity is a property of the bag item, which is global.
+    return dComIfGs_getBombMax(item);
+}
+
+u8 dMenu_Ring_c::ringPachinkoNum() const {
+    if (ringValidPlayer(mPlayerId)) {
+#if TARGET_PC
+        return dusk::coop::inventory::resources(mPlayerId).pachinko;
+#endif
+    }
+    return dComIfGs_getPachinkoNum();
+}
+
+u16 dMenu_Ring_c::ringOil() const {
+    if (ringValidPlayer(mPlayerId)) {
+#if TARGET_PC
+        return dusk::coop::inventory::resources(mPlayerId).oil;
+#endif
+    }
+    return dComIfGs_getOil();
+}
+
+void dMenu_Ring_c::setPlayer(u8 id) {
+    mPlayerId = id;
+}
 
 typedef void (dMenu_Ring_c::*initFunc)();
 static initFunc stick_init[] = {
@@ -245,13 +345,13 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
     }
     for (int i = 0; i < mItemsTotal; i++) {
         mItemSlots[i] = dComIfGs_getLineUpItem(i);
-        if (dComIfGs_getSelectItemIndex(0) == dComIfGs_getLineUpItem(i)) {
+        if (ringSelectItemIndex(0) == dComIfGs_getLineUpItem(i)) {
             mXButtonSlot = i;
         }
-        if (dComIfGs_getSelectItemIndex(1) == dComIfGs_getLineUpItem(i)) {
+        if (ringSelectItemIndex(1) == dComIfGs_getLineUpItem(i)) {
             mYButtonSlot = i;
         }
-        if (dComIfGs_getSelectItemIndex(2) == dComIfGs_getWolfAbility(i)) {
+        if (ringSelectItemIndex(2) == dComIfGs_getWolfAbility(i)) {
             field_0x6ac = i;
         }
     }
@@ -1099,9 +1199,9 @@ void dMenu_Ring_c::setItem() {
 
     checkExplainForce();
     if (field_0x6b3 == 0) {
-        uVar1 = dComIfGs_getSelectItemIndex(1);
+        uVar1 = ringSelectItemIndex(1);
         if (mItemSlots[mCurrentSlot] == uVar1) {
-            uVar2 = dComIfGs_getSelectItemIndex(0);
+            uVar2 = ringSelectItemIndex(0);
             mixItemIndex1 = dComIfGs_getMixItemIndex(0);
             if (uVar2 == dItemNo_NONE_e) {
                 mYButtonSlot = dItemNo_NONE_e;
@@ -1113,7 +1213,7 @@ void dMenu_Ring_c::setItem() {
             mixItemIndex0 = dItemNo_NONE_e;
         } else {
             if (dComIfGs_getMixItemIndex(1) == mItemSlots[mCurrentSlot]) {
-                uVar2 = dComIfGs_getSelectItemIndex(0);
+                uVar2 = ringSelectItemIndex(0);
                 mixItemIndex1 = dItemNo_NONE_e;
                 if (uVar2 == dItemNo_NONE_e) {
                     mYButtonSlot = dItemNo_NONE_e;
@@ -1130,8 +1230,8 @@ void dMenu_Ring_c::setItem() {
             }
         }
     } else if (field_0x6b3 == 1) {
-        if (mItemSlots[mCurrentSlot] == dComIfGs_getSelectItemIndex(0)) {
-            u8 temp = dComIfGs_getSelectItemIndex(1);
+        if (mItemSlots[mCurrentSlot] == ringSelectItemIndex(0)) {
+            u8 temp = ringSelectItemIndex(1);
             uVar1 = temp;
             mixItemIndex0 = dComIfGs_getMixItemIndex(1);
             if (temp == dItemNo_NONE_e) {
@@ -1144,7 +1244,7 @@ void dMenu_Ring_c::setItem() {
             mixItemIndex1 = dItemNo_NONE_e;
         } else {
             if (dComIfGs_getMixItemIndex(0) == mItemSlots[mCurrentSlot]) {
-                uVar1 = dComIfGs_getSelectItemIndex(1);
+                uVar1 = ringSelectItemIndex(1);
                 mixItemIndex0 = dItemNo_NONE_e;
                 if (uVar1 == dItemNo_NONE_e) {
                     mXButtonSlot = dItemNo_NONE_e;
@@ -1202,7 +1302,7 @@ void dMenu_Ring_c::setJumpItem(bool i_useVibrationM) {
     if (field_0x6b3 == 0) {
         field_0x538[0] = g_ringHIO.mSelectItemScale;
         field_0x538[1] = g_ringHIO.mUnselectItemScale;
-        if (field_0x6b4[0] != dComIfGs_getSelectItemIndex(0) ||
+        if (field_0x6b4[0] != ringSelectItemIndex(0) ||
             field_0x6b8[0] != dComIfGs_getMixItemIndex(0))
         {
             field_0x674[0] = 1;
@@ -1213,7 +1313,7 @@ void dMenu_Ring_c::setJumpItem(bool i_useVibrationM) {
     } else if (field_0x6b3 == 1) {
         field_0x538[0] = g_ringHIO.mUnselectItemScale;
         field_0x538[1] = g_ringHIO.mSelectItemScale;
-        if (field_0x6b4[1] != dComIfGs_getSelectItemIndex(1) ||
+        if (field_0x6b4[1] != ringSelectItemIndex(1) ||
             field_0x6b8[1] != dComIfGs_getMixItemIndex(1))
         {
             field_0x674[1] = 1;
@@ -1368,12 +1468,12 @@ void dMenu_Ring_c::setActiveCursor() {
 void dMenu_Ring_c::setMixItem() {
     u8 item = dComIfGs_getItem(mItemSlots[mCurrentSlot], false);
     bool bVar1 = false;
-    u8 selectItemIndex0 = dComIfGs_getSelectItemIndex(0);
-    u8 selectItemIndex1 = dComIfGs_getSelectItemIndex(1);
+    u8 selectItemIndex0 = ringSelectItemIndex(0);
+    u8 selectItemIndex1 = ringSelectItemIndex(1);
     u8 local_28[4] = {dItemNo_NONE_e, dItemNo_NONE_e, dItemNo_NONE_e, dItemNo_NONE_e};
 
     if (dComIfGs_getMixItemIndex(0) == SLOT_4 &&
-        mItemSlots[mCurrentSlot] == dComIfGs_getSelectItemIndex(0))
+        mItemSlots[mCurrentSlot] == ringSelectItemIndex(0))
     {
         Z2GetAudioMgr()->seStart(Z2SE_SY_ITEM_COMBINE_OFF, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
         field_0x6cb = selectItemIndex0;
@@ -1384,7 +1484,7 @@ void dMenu_Ring_c::setMixItem() {
         field_0x6cd = 0;
         bVar1 = true;
     } else if (dComIfGs_getMixItemIndex(1) == 4 &&
-               mItemSlots[mCurrentSlot] == dComIfGs_getSelectItemIndex(1))
+               mItemSlots[mCurrentSlot] == ringSelectItemIndex(1))
     {
         Z2GetAudioMgr()->seStart(Z2SE_SY_ITEM_COMBINE_OFF, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
         field_0x6cb = selectItemIndex1;
@@ -1400,7 +1500,7 @@ void dMenu_Ring_c::setMixItem() {
         case dItemNo_WATER_BOMB_e:
         case dItemNo_POKE_BOMB_e:
         case dItemNo_HAWK_EYE_e:
-            if ((dComIfGs_getSelectItemIndex(0) == 4 && dComIfGs_getMixItemIndex(0) == dItemNo_NONE_e) ||
+            if ((ringSelectItemIndex(0) == 4 && dComIfGs_getMixItemIndex(0) == dItemNo_NONE_e) ||
                 (dComIfGs_getMixItemIndex(0) == 4))
             {
                 Z2GetAudioMgr()->seStart(Z2SE_SY_ITEM_COMBINE_ON, NULL, 0, 0, 1.0f, 1.0f, -1.0f,
@@ -1415,7 +1515,7 @@ void dMenu_Ring_c::setMixItem() {
                     selectItemIndex1 = 0xff;
                     mYButtonSlot = 0xff;
                 }
-            } else if ((dComIfGs_getSelectItemIndex(1) == 4 &&
+            } else if ((ringSelectItemIndex(1) == 4 &&
                         dComIfGs_getMixItemIndex(1) == dItemNo_NONE_e) ||
                        (dComIfGs_getMixItemIndex(1) == 4))
             {
@@ -1494,7 +1594,16 @@ void dMenu_Ring_c::drawItem() {
                     if (j == 0 && item == dItemNo_KANTERA_e /* Lantern */) {
                         setKanteraPos(x + 24.0f + 15.0f, y + 48.0f + 10.0f);
                         mpKanteraMeter->setScale(0.64f, 0.64f);
-                        mpKanteraMeter->setNowGauge(dComIfGs_getMaxOil(), dComIfGs_getOil());
+                        mpKanteraMeter->setNowGauge(
+#if TARGET_PC
+                            ringValidPlayer(mPlayerId)
+                                ? dusk::coop::inventory::resources(mPlayerId).maxOil
+                                : dComIfGs_getMaxOil(),
+                            ringOil()
+#else
+                            dComIfGs_getMaxOil(), dComIfGs_getOil()
+#endif
+                        );
                         u8 alpha = mpItemTex[i][j]->getAlpha();
                         mpKanteraMeter->setAlphaRate(alpha / 255.0f);
                         mpKanteraMeter->drawSelf();
@@ -1536,7 +1645,16 @@ void dMenu_Ring_c::drawItem2() {
                 if (i == 0 && item == dItemNo_KANTERA_e) {
                     setKanteraPos(x + 24.0f + 15.0f, y + 48.0f + 10.0f);
                     mpKanteraMeter->setScale(0.64f, 0.64f);
-                    mpKanteraMeter->setNowGauge(dComIfGs_getMaxOil(), dComIfGs_getOil());
+                    mpKanteraMeter->setNowGauge(
+#if TARGET_PC
+                        ringValidPlayer(mPlayerId)
+                            ? dusk::coop::inventory::resources(mPlayerId).maxOil
+                            : dComIfGs_getMaxOil(),
+                        ringOil()
+#else
+                        dComIfGs_getMaxOil(), dComIfGs_getOil()
+#endif
+                    );
                     u8 alpha = mpItemTex[idx][i]->getAlpha();
                     mpKanteraMeter->setAlphaRate(alpha / 255.0f);
                     mpKanteraMeter->drawSelf();
@@ -1878,7 +1996,7 @@ void dMenu_Ring_c::drawSelectItem() {
 void dMenu_Ring_c::setSelectItemForce(int i_idx) {
     if (i_idx == 2) {
         if (field_0x674[i_idx] != 0) {
-            dComIfGs_setSelectItemIndex(i_idx, field_0x6b4[i_idx]);
+            ringSetSelectItemIndex(i_idx, field_0x6b4[i_idx]);
             field_0x674[i_idx] = 0;
 #if TARGET_PC
             mSelectItemSlideElapsed[i_idx] = 0.0f;
@@ -1887,7 +2005,7 @@ void dMenu_Ring_c::setSelectItemForce(int i_idx) {
     } else if (field_0x674[i_idx] != 0) {
         for (int i = 0; i < 2; i++) {
             dComIfGs_setMixItemIndex(i, field_0x6b8[i]);
-            dComIfGs_setSelectItemIndex(i, field_0x6b4[i]);
+            ringSetSelectItemIndex(i, field_0x6b4[i]);
         }
         field_0x674[i_idx] = 0;
 #if TARGET_PC
@@ -1924,7 +2042,7 @@ u8 dMenu_Ring_c::getItemNum(u8 i_slotNo) {
     case dItemNo_NORMAL_BOMB_e:
     case dItemNo_WATER_BOMB_e:
     case dItemNo_POKE_BOMB_e:
-        ret = dComIfGs_getBombNum(i_slotNo - 0xF);
+        ret = ringBombNum(i_slotNo - 0xF);
         break;
 
     case dItemNo_BEE_CHILD_e:
@@ -1935,10 +2053,10 @@ u8 dMenu_Ring_c::getItemNum(u8 i_slotNo) {
     case dItemNo_ARROW_LV1_e:
     case dItemNo_ARROW_LV2_e:
     case dItemNo_ARROW_LV3_e:
-        ret = dComIfGs_getArrowNum();
+        ret = ringArrowNum();
         break;
     case dItemNo_PACHINKO_e:
-        ret = dComIfGs_getPachinkoNum();
+        ret = ringPachinkoNum();
         break;
     }
     return ret;
@@ -1963,7 +2081,7 @@ u8 dMenu_Ring_c::getItemMaxNum(u8 i_slotNo) {
     case dItemNo_NORMAL_BOMB_e:
     case dItemNo_WATER_BOMB_e:
     case dItemNo_POKE_BOMB_e:
-        ret = dComIfGs_getBombMax(item);
+        ret = ringBombMax(item);
         break;
 
     case dItemNo_BEE_CHILD_e:
@@ -1974,7 +2092,7 @@ u8 dMenu_Ring_c::getItemMaxNum(u8 i_slotNo) {
     case dItemNo_ARROW_LV1_e:
     case dItemNo_ARROW_LV2_e:
     case dItemNo_ARROW_LV3_e:
-        ret = dComIfGs_getArrowMax();
+        ret = ringArrowMax();
         break;
     case dItemNo_PACHINKO_e:
         ret = dComIfGs_getPachinkoMax();
@@ -1986,10 +2104,10 @@ u8 dMenu_Ring_c::getItemMaxNum(u8 i_slotNo) {
 bool dMenu_Ring_c::checkExplainForce() {
     u8 local_18[4];
 
-    u8 item0 = dComIfGs_getItem(dComIfGs_getSelectItemIndex(0), false);
-    u8 item1 = dComIfGs_getItem(dComIfGs_getSelectItemIndex(1), false);
-    u8 item2 = dComIfGs_getItem(dComIfGs_getSelectItemIndex(2), false);
-    u8 item3 = dComIfGs_getItem(dComIfGs_getSelectItemIndex(3), false);
+    u8 item0 = dComIfGs_getItem(ringSelectItemIndex(0), false);
+    u8 item1 = dComIfGs_getItem(ringSelectItemIndex(1), false);
+    u8 item2 = dComIfGs_getItem(ringSelectItemIndex(2), false);
+    u8 item3 = dComIfGs_getItem(ringSelectItemIndex(3), false);
     u8 item = dComIfGs_getItem(mItemSlots[mCurrentSlot], true);
 
     for (int i = 0; i < 4; i++) {
@@ -2198,12 +2316,12 @@ bool dMenu_Ring_c::isMixItemOn() {
         case dItemNo_NORMAL_BOMB_e:
         case dItemNo_WATER_BOMB_e:
         case dItemNo_POKE_BOMB_e:
-            if ((dComIfGs_getSelectItemIndex(0) == SLOT_4) && (dComIfGs_getMixItemIndex(0) == dItemNo_NONE_e) ||
+            if ((ringSelectItemIndex(0) == SLOT_4) && (dComIfGs_getMixItemIndex(0) == dItemNo_NONE_e) ||
                 (dComIfGs_getMixItemIndex(0) == SLOT_4))
             {
                 return true;
             }
-            if ((dComIfGs_getSelectItemIndex(1) == SLOT_4) && (dComIfGs_getMixItemIndex(1) == dItemNo_NONE_e) ||
+            if ((ringSelectItemIndex(1) == SLOT_4) && (dComIfGs_getMixItemIndex(1) == dItemNo_NONE_e) ||
                 (dComIfGs_getMixItemIndex(1) == SLOT_4))
             {
                 return true;
@@ -2217,12 +2335,12 @@ bool dMenu_Ring_c::isMixItemOn() {
 bool dMenu_Ring_c::isMixItemOff() {
     if ((!mPlayerIsWolf) && (dComIfGs_getItem(mItemSlots[mCurrentSlot], 0) != dItemNo_NONE_e)) {
         if ((dComIfGs_getMixItemIndex(0) == SLOT_4) &&
-            (mItemSlots[mCurrentSlot] == dComIfGs_getSelectItemIndex(0)))
+            (mItemSlots[mCurrentSlot] == ringSelectItemIndex(0)))
         {
             return 1;
         }
         if ((dComIfGs_getMixItemIndex(1) == SLOT_4) &&
-            (mItemSlots[mCurrentSlot] == dComIfGs_getSelectItemIndex(1)))
+            (mItemSlots[mCurrentSlot] == ringSelectItemIndex(1)))
         {
             return 1;
         }

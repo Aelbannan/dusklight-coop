@@ -402,13 +402,16 @@ void beginMultiViewCapture() {
 
     // Set every active window to full-frame viewport.  Each view renders
     // full-frame for capture — no tiled scissors.
+    // NOTE: scissor is intentionally NOT overridden here — widezoom_correction()
+    // already set it per-camera during camera_execute to reflect each camera's
+    // trim height (lock-on black bars / letterbox).  Preserving it lets
+    // trimming() draw the correct per-view black bars later.
     for (ViewId v = 0; v < count; ++v) {
         dDlst_window_c* window = dComIfGp_getWindow(v);
         if (window == nullptr) {
             continue;
         }
         window->setViewPort(0.0f, 0.0f, fbW, fbH, 0.0f, 1.0f);
-        window->setScissor(0.0f, 0.0f, fbW, fbH);
         window->setCameraID(static_cast<int>(v));
         window->setMode(2);
     }

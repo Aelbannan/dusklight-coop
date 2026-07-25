@@ -34,6 +34,10 @@ void dMw_onPauseWindow();
 void dMw_offPauseWindow();
 void dMw_onMenuRing();
 void dMw_offMenuRing();
+#if TARGET_PC
+void dMw_setRingPlayer(u8 id);
+u8 dMw_getRingPlayer();
+#endif
 
 class dDlst_MENU_CAPTURE_c;
 
@@ -185,6 +189,8 @@ public:
     int _draw();
     int _delete();
 
+    void setRingPlayer(u8 id) { mRingPlayerId = id; }
+    u8 getRingPlayer() const { return mRingPlayerId; }
     void onPauseWindow() { mPauseWindow = true; }
     void offPauseWindow() { mPauseWindow = false; }
     bool isPauseWindow() { return mPauseWindow != false; }
@@ -229,6 +235,9 @@ private:
     /* 0x152 */ u8 field_0x152;
     /* 0x153 */ u8 field_0x153;
     /* 0x154 */ bool mPauseWindow;
+#if TARGET_PC
+    /* 0x155 */ u8 mRingPlayerId = 0xFF;
+#endif
 };
 
 #endif /* D_MENU_D_MENU_WINDOW_H */

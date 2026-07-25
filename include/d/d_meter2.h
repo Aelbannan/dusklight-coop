@@ -100,6 +100,13 @@ public:
     bool isShowFlag(int i_no) { return field_0x1e6 & (1 << i_no); }
     void onShowFlag(int i_no) { field_0x1e6 |= (1 << i_no); }
 
+#if TARGET_PC
+    dMeterMap_c* getMap() { return mpMap; }
+    dMeterButton_c* getEmphasisButton() { return mpEmpButton; }
+    dMeterSub_c* getSubContentsPtr() { return mpSubContents; }
+    dMeterString_c* getSubSubContentsPtr() { return mpSubSubContents; }
+#endif
+
 private:
     /* 0x0FC */ int field_0xfc;
     /* 0x100 */ JKRExpHeap* mpHeap;

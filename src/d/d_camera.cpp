@@ -1282,18 +1282,7 @@ bool dCamera_c::Run() {
     mBank = mViewCache.mBank;
     bumpCheck(mBumpCheckFlags);
 
-    // After all camera math, re-snap the center to the tracked actor's live position
-    // so chase mode keeps up.  Skip when locked onto a target — lock-on mode manages
-    // its own center.
-    if (mpLockonTarget == nullptr &&
-        mpPlayerActor != nullptr &&
-        !dComIfGp_getEvent()->runCheck()) {
-        const cXyz playerPos = positionOf(mpPlayerActor);
-        const cXyz desiredCenter(playerPos.x, playerPos.y + 150.0f, playerPos.z);
-        const cXyz eyeOffset = mEye - mCenter;
-        mCenter = mViewCache.mCenter = desiredCenter;
-        mEye = mViewCache.mEye = desiredCenter + eyeOffset;
-    }
+
 
     cSAngle angle = mPadInfo.mMainStick.mAngle - mFakeAngleSys.field_0x4;
     if (mPadInfo.mMainStick.mLastValue < mCamSetup.USOValue()
