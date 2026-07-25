@@ -169,6 +169,11 @@ static void syncCamerasForJoined() {
         return;
     }
 
+    // Already in the correct multi-view mode — nothing to do.
+    if (runtime().activeViewCount == span) {
+        return;
+    }
+
     // ── Multi-view capture+grid path (all player counts) ──
     // Each view renders full-frame into a capture buffer, then the grid present
     // blits them side-by-side.  No tiled scissors, no separate composite paths.
@@ -213,7 +218,12 @@ static void syncCamerasForJoined() {
     }
 
     runtime().activeViewCount = span;
-    debug::logInfo("Co-op join: %u-view capture+grid mode", span);
+    // One-shot log once multi-view is fully set up.
+    static bool sLoggedMultiView = false;
+    if (!sLoggedMultiView) {
+        debug::logInfo("Co-op join: %u-view capture+grid mode", span);
+        sLoggedMultiView = true;
+    }
 }
 
 static void resolvePendingCreates() {

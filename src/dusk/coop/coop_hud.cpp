@@ -18,6 +18,7 @@
 #include "d/d_meter_map.h"
 #include "m_Do/m_Do_graphic.h"
 #include "d/d_meter_HIO.h"
+#include "d/d_meter_button.h"
 #include "d/d_menu_window.h"
 
 // g_playerEmpButton defined at global scope to match the extern declaration.
@@ -330,6 +331,15 @@ void drawView(ViewId view) {
         params.bottleStatus  = btnState.bottleStatus;
 
         dusk_coop_processEmphasisButton(empView, g_hudDraw, params);
+        // Bottom-anchor the emphasis button position.
+        // updateButton() reads g_drawHIO.mEmpButton.mEmpButtonPosY but is
+        // only called from _execute() — not run for per-view buttons on PC.
+        if (bottomAnchor > 0.0f) {
+            empView->paneTrans(empView->mpParent,
+                               empView->mParentCenterX,
+                               g_drawHIO.mEmpButton.mEmpButtonPosY + bottomAnchor,
+                               0xFF);
+        }
         dusk_coop_drawEmpButton(empView);
     }
 
