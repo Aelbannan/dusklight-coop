@@ -210,7 +210,21 @@ void drawView(ViewId view) {
     J2DGrafContext* prevGraf = dComIfGp_getCurrentGrafPort();
 
     J2DOrthoGraph viewportOrtho(vpX, vpY, vpW, vpH, -1.0f, 1.0f);
-    viewportOrtho.setOrtho(0.0f, 0.0f, fbW, fbH, -1.0f, 1.0f);
+#if TARGET_PC
+    if (dusk::coop::render::isMultiViewActive()) {
+        // Scale ortho height to match viewport aspect, preventing HUD squish.
+        // Combined X scale after J2DPane scaling & projection = vpW/608.
+        // Setting orthoH = 608 * vpH / vpW makes combined Y scale match.
+        const f32 orthoH = (608.0f * vpH) / vpW;
+        viewportOrtho.setOrtho(mDoGph_gInf_c::getMinXF(),
+                               mDoGph_gInf_c::getMinYF(),
+                               mDoGph_gInf_c::getWidthF(), orthoH,
+                               -1.0f, 1.0f);
+    } else
+#endif
+    {
+        viewportOrtho.setOrtho(0.0f, 0.0f, fbW, fbH, -1.0f, 1.0f);
+    }
     viewportOrtho.setPort();
     dComIfGp_setCurrentGrafPort(&viewportOrtho);
 
