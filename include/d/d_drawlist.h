@@ -303,6 +303,18 @@ public:
 
     static DUSK_GAME_DATA TGXTexObj mSimpleTexObj;
 
+#if TARGET_PC
+    // Co-op: vanilla's 8-slot budget was sized for one camera's worth of shadows.
+    // With up to 8 players (plus enemies/NPCs/objects in all views) and the PC path
+    // no longer rejecting off-camera shadows in setReal, raise the cap so other
+    // players' shadows don't get evicted.
+    // u8 mRealNum caps this at 255; 252 stays a multiple of 4 (texture channels).
+    enum { REAL_SHADOW_MAX = 252 };
+#else
+    enum { REAL_SHADOW_MAX = 8 };
+#endif
+    enum { SHADOW_TEX_MAX = REAL_SHADOW_MAX / 4 };
+
 private:
     /* 0x00000 */ u8 field_0x0;
     /* 0x00001 */ u8 mRealNum;
@@ -311,9 +323,9 @@ private:
     /* 0x00008 */ dDlst_shadowReal_c* field_0x8;
     /* 0x0000C */ dDlst_shadowSimple_c mSimple[128];
     /* 0x0340C */ int mNextID;
-    /* 0x03410 */ dDlst_shadowReal_c mReal[8];
-    /* 0x15EB0 */ TGXTexObj mShadowTexObj[2];
-    /* 0x15EF0 */ void* mShadowTexData[2];
+    /* 0x03410 */ dDlst_shadowReal_c mReal[REAL_SHADOW_MAX];
+    /* 0x15EB0 */ TGXTexObj mShadowTexObj[SHADOW_TEX_MAX];
+    /* 0x15EF0 */ void* mShadowTexData[SHADOW_TEX_MAX];
     #if TARGET_PC
     int mTexResScale;
     #endif

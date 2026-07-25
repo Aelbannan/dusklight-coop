@@ -1485,18 +1485,16 @@ void dDlst_shadowSimple_c::set(cXyz* param_0, f32 param_1, f32 param_2, cXyz* pa
 void dDlst_shadowControl_c::init() {
 #if TARGET_PC
     mTexResScale = dusk::getSettings().game.shadowResolutionMultiplier;
-    // Increase shadow map resolution
-    u16 l_realImageSize[2] =
-    {
-        static_cast<u16>(192 * mTexResScale),
-        static_cast<u16>(64 * mTexResScale)
-    };
-#else
-    static u16 l_realImageSize[2] = {192, 64};
 #endif
 
-    for (int i = 0; i < 2; i++) {
-        u16 size = l_realImageSize[i];
+    for (int i = 0; i < SHADOW_TEX_MAX; i++) {
+        // Increase shadow map resolution. The first texture (nearest 4 shadows)
+        // gets a larger map, matching vanilla's 192/64 split.
+#if TARGET_PC
+        u16 size = static_cast<u16>((i == 0 ? 192 : 64) * mTexResScale);
+#else
+        u16 size = (i == 0) ? 192 : 64;
+#endif
 
 #ifdef TARGET_PC
         u32 buffer_size = 0x20; // No need to allocate memory for texture
@@ -1518,7 +1516,7 @@ void dDlst_shadowControl_c::init() {
 void dDlst_shadowControl_c::reset() {
     dDlst_shadowReal_c* shadowReal = mReal;
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < REAL_SHADOW_MAX; i++) {
         shadowReal->reset();
         shadowReal++;
     }
@@ -1707,6 +1705,13 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     }
     cXyz acStack_94;
     cMtx_multVec(j3dSys.getViewMtx(), param_4, &acStack_94);
+#ifdef TARGET_PC
+    // Co-op: shadows register against whichever view matrix is active at draw
+    // time, so the behind-camera/depth culls below would incorrectly drop
+    // shadows that are visible in another player's viewport. Skip them and use
+    // a neutral camera-z for sorting.
+    f32 dVar17 = (param_2 == 0) ? FLT_MAX : -1000.0f;
+#else
     if ((acStack_94.z - param_5) >= 0.0f) {
         return 0;
     }
@@ -1721,6 +1726,7 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     if (param_2 == 0) {
         dVar17 = FLT_MAX;
     }
+#endif
     dDlst_shadowReal_c* pdVar11;
     dDlst_shadowReal_c* pdVar10 = NULL;
     dDlst_shadowReal_c* local_98 = field_0x4;
@@ -1735,7 +1741,7 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
         }
     }
     dDlst_shadowReal_c* pdVar12;
-    if (mRealNum >= 8) {
+    if (mRealNum >= REAL_SHADOW_MAX) {
         if (pdVar10 == NULL) {
             return 0;
         }
@@ -1750,7 +1756,7 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
         mRealNum--;
     } else {
         pdVar12 = mReal;
-        for (int i = 0; i < 8; i++, pdVar12++) {
+        for (int i = 0; i < REAL_SHADOW_MAX; i++, pdVar12++) {
             if (pdVar12->isNoUse()) {
                 break;
             }
