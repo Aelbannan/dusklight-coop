@@ -210,6 +210,8 @@ void drawView(ViewId view) {
     J2DGrafContext* prevGraf = dComIfGp_getCurrentGrafPort();
 
     J2DOrthoGraph viewportOrtho(vpX, vpY, vpW, vpH, -1.0f, 1.0f);
+
+    f32 bottomAnchor = 0.0f;
 #if TARGET_PC
     if (dusk::coop::render::isMultiViewActive()) {
         // Scale ortho height to match viewport aspect, preventing HUD squish.
@@ -220,6 +222,7 @@ void drawView(ViewId view) {
                                mDoGph_gInf_c::getMinYF(),
                                mDoGph_gInf_c::getWidthF(), orthoH,
                                -1.0f, 1.0f);
+        bottomAnchor = orthoH - fbH;
     } else
 #endif
     {
@@ -236,17 +239,37 @@ void drawView(ViewId view) {
     // Life, magic, rupees, oil — use the per-player animated display values
     // so the HUD animates smoothly toward actual inventory values.
     const auto& anim = g_hudAnim[player];
+    // Temporarily patch bottom-anchored HIO Y positions BEFORE drawRupee,
+    // drawKey, drawButtonCross and draw() read them (they call paneTrans
+    // immediately at call time). mLifeGaugePosY is NOT patched — top elements
+    // stay at the top. mMagicMeterPosY/mLanternMeterPosY are passed explicitly
+    // with bottomAnchor, so drawMagic/drawKantera don't read HIO for Y.
+    // Restored after draw() so other viewports / single-view unaffected.
+    const f32 savedMainBtnY = g_drawHIO.mMainHUDButtonsPosY;
+    const f32 savedRingBtnY = g_drawHIO.mRingHUDButtonsPosY;
+    const f32 savedCrossOffY = g_drawHIO.mButtonCrossOFFPosY;
+    const f32 savedCrossOnY = g_drawHIO.mButtonCrossONPosY;
+    const f32 savedRupeeKeyY = g_drawHIO.mRupeeKeyPosY;
+    const f32 savedKeyY = g_drawHIO.mKeyPosY;
+    if (bottomAnchor > 0.0f) {
+        g_drawHIO.mMainHUDButtonsPosY += bottomAnchor;
+        g_drawHIO.mRingHUDButtonsPosY += bottomAnchor;
+        g_drawHIO.mButtonCrossOFFPosY += bottomAnchor;
+        g_drawHIO.mButtonCrossONPosY += bottomAnchor;
+        g_drawHIO.mRupeeKeyPosY += bottomAnchor;
+        g_drawHIO.mKeyPosY += bottomAnchor;
+    }
+
     g_hudDraw->drawLife(anim.displayMaxLife, anim.displayLife,
                          g_drawHIO.mLifeGaugePosX,
                          g_drawHIO.mLifeGaugePosY);
     g_hudDraw->drawMagic(anim.displayMaxMagic, anim.displayMagic,
                           g_drawHIO.mMagicMeterPosX,
-                          g_drawHIO.mMagicMeterPosY);
+                          g_drawHIO.mMagicMeterPosY + bottomAnchor);
     g_hudDraw->drawRupee(anim.displayRupees);
     g_hudDraw->drawKantera(anim.displayMaxOil, anim.displayOil,
                             g_drawHIO.mLanternMeterPosX,
-                            g_drawHIO.mLanternMeterPosY);
-    // Keys remain shared (dungeon-wide progression)
+                            g_drawHIO.mLanternMeterPosY + bottomAnchor);
     g_hudDraw->drawKey(dComIfGs_getKeyNum());
 
     // Signal dMeter2Draw_c::draw() to patch button-text panes for this
@@ -255,13 +278,30 @@ void drawView(ViewId view) {
 
     g_hudDraw->draw();
 
+    // Restore global HIO Y positions.
+    if (bottomAnchor > 0.0f) {
+        g_drawHIO.mMainHUDButtonsPosY = savedMainBtnY;
+        g_drawHIO.mRingHUDButtonsPosY = savedRingBtnY;
+        g_drawHIO.mButtonCrossOFFPosY = savedCrossOffY;
+        g_drawHIO.mButtonCrossONPosY = savedCrossOnY;
+        g_drawHIO.mRupeeKeyPosY = savedRupeeKeyY;
+        g_drawHIO.mKeyPosY = savedKeyY;
+    }
+
     // Draw per-view minimap (if available).
     // (Suppressed from the global draw list in dMeter2_c::_draw() on PC.)
     dMeter2_c* meter = dMeter2Info_getMeterClass();
     if (meter != nullptr) {
         dMeterMap_c* map = meter->getMap();
         if (map != nullptr) {
+            const f32 savedMapY = map->getDrawPosY();
+            if (bottomAnchor > 0.0f) {
+                map->addDrawPosY(bottomAnchor);
+            }
             map->draw();
+            // Restore so the next viewport or global draw list gets the
+            // correct original position (mDrawPosY was set by _move()).
+            map->setDrawPosY(savedMapY);
         }
     }
 

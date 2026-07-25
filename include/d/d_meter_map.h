@@ -93,6 +93,9 @@ public:
     dMeterMap_c* getMapPointer() { return (dMeterMap_c*)mMap; }
     void setSizeW(f32 w) { mSizeW = w; }
     void setSizeH(f32 h) { mSizeH = h; }
+    f32 getDrawPosY() const { return mDrawPosY; }
+    void setDrawPosY(f32 y) { mDrawPosY = y; }
+    void addDrawPosY(f32 offset) { mDrawPosY += offset; }
 
     enum { MAP_SIZE_TYPE_BIG = 2, MAP_SIZE_TYPE_SMALL = 3, MAP_SIZE_TYPE_MEDIUM = 4, MAP_SIZE_TYPE_STAGE = 7 };
 
