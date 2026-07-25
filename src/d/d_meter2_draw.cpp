@@ -28,6 +28,8 @@
 #if TARGET_PC
 #include "dusk/settings.h"
 #include "dusk/ui/icon_provider.hpp"
+#include "dusk/coop/coop_hud.h"
+#include "dusk/coop/coop_types.h"
 #include <algorithm>
 
 namespace {
@@ -687,6 +689,53 @@ void dMeter2Draw_c::draw() {
 #if TARGET_PC
     if (dusk::coop::hud::g_perViewHudActive) {
         return;
+    }
+
+    // Per-view HUD: patch button-text panes from the current player's
+    // button state before rendering.  Called from coop_hud::drawView().
+    if (dusk::coop::hud::g_patchPlayerForDraw >= 0) {
+        const auto pid = static_cast<dusk::coop::PlayerId>(
+            dusk::coop::hud::g_patchPlayerForDraw);
+        const auto& btn = dusk::coop::hud::g_playerButtonState[pid];
+
+        // A button: update text content AND visibility.
+        // The vanilla _execute() may have hidden the pane because a
+        // different player's action was NONE or matched their B status.
+        {
+            u8 emph = 0;
+            char* str = getActionString(btn.doStatus, 1, &emph);
+            const bool hasAction = (btn.doStatus != 0 && *str != 0);
+            if (hasAction) {
+                mpTextA->show();
+            } else {
+                mpTextA->hide();
+            }
+            for (int i = 0; i < 5; i++) {
+                SAFE_STRCPY(
+                    static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(),
+                    str);
+            }
+        }
+
+        // B button
+        {
+            u8 emph = 0;
+            char* str = getActionString(btn.aStatus, 1, &emph);
+            const bool hasAction = (btn.aStatus != 0 && *str != 0);
+            if (hasAction) {
+                mpTextB->show();
+            } else {
+                mpTextB->hide();
+            }
+            for (int i = 0; i < 5; i++) {
+                SAFE_STRCPY(
+                    static_cast<J2DTextBox*>(mpBText[i]->getPanePtr())->getStringPtr(),
+                    str);
+            }
+        }
+
+        // R button (text + emphasis tracking)
+        drawButtonR(0, btn.rStatus, false, false);
     }
 #endif
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();

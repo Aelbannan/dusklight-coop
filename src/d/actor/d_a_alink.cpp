@@ -44,6 +44,7 @@
 #include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_hud.h"
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_player.h"
 #endif
@@ -9830,26 +9831,86 @@ void daAlink_c::setAtnList() {
 
 void daAlink_c::setRStatus(u8 i_status) {
     dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.rStatus = i_status;
+            s.rSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
 }
 
 void daAlink_c::setRStatusEmphasys(u8 i_status) {
     dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.rStatus = i_status;
+            s.rSetFlag = BUTTON_STATUS_FLAG_EMPHASIS;
+        }
+    }
+#endif
 }
 
 void daAlink_c::setDoStatus(u8 i_status) {
     dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.doStatus = i_status;
+            s.doSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
 }
 
 void daAlink_c::setDoStatusEmphasys(u8 i_status) {
     dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.doStatus = i_status;
+            s.doSetFlag = BUTTON_STATUS_FLAG_EMPHASIS;
+        }
+    }
+#endif
 }
 
 void daAlink_c::setDoStatusContinuation(u8 i_status) {
     dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_CONTINUATION);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.doStatus = i_status;
+            s.doSetFlag = BUTTON_STATUS_FLAG_CONTINUATION;
+        }
+    }
+#endif
 }
 
 void daAlink_c::setBStatus(u8 i_status) {
     dComIfGp_setAStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.aStatus = i_status;
+            s.aSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
 }
 
 BOOL daAlink_c::checkAtnWaitAnime() {

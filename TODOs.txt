@@ -1,0 +1,12 @@
+TODO
+Black bars on z target
+z target cursor per view
+what is incompatible with grid mode? (render) coopMultiView check
+frustum culling on world/items/npcs/enemies
+
+DON'T USE DRAW METHODS!!!
+
+
+
+
+Keep grabbing and matching batches from claim-smallest.py until there's no more left

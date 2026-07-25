@@ -14,20 +14,16 @@
 #include "d/d_meter2_info.h"
 #include "d/d_meter2_draw.h"
 #include "d/d_meter2.h"
-#include "d/d_meter_HIO.h"
 #include "m_Do/m_Do_graphic.h"
-#include "d/d_pane_class.h"
-
-#include <algorithm>
-#include <cmath>
 
 namespace dusk::coop::hud {
 
 bool g_perViewHudActive = false;
+PlayerHudButtonState g_playerButtonState[MAX_LOCAL_PLAYERS]{};
+s16 g_patchPlayerForDraw = -1;
 
 namespace {
 
-// Reference to the vanilla HUD draw object (found once after it's created).
 dMeter2Draw_c* g_hudDraw = nullptr;
 
 }  // namespace
@@ -35,6 +31,10 @@ dMeter2Draw_c* g_hudDraw = nullptr;
 void init() {
     g_perViewHudActive = false;
     g_hudDraw = nullptr;
+    g_patchPlayerForDraw = -1;
+    for (auto& s : g_playerButtonState) {
+        s = PlayerHudButtonState{};
+    }
 }
 
 void reset() {
@@ -45,12 +45,8 @@ void tick() {
 #if !TARGET_PC
     return;
 #else
-    // Always use the per-view HUD path for all views (single and multi).
     g_perViewHudActive = true;
 
-    // Refresh the HUD draw pointer every frame — the dMeter2_c process can get
-    // destroyed and recreated during scene transitions / camera init when a new
-    // player joins.  The old pointer would dangle and calling draw() on it is UB.
     dMeter2_c* meter = dMeter2Info_getMeterClass();
     if (meter != nullptr) {
         g_hudDraw = meter->getMeterDrawPtr();
@@ -58,6 +54,18 @@ void tick() {
 
     if (g_hudDraw == nullptr) {
         g_perViewHudActive = false;
+    }
+
+    // Push loadout items (X/Y slots) into per-player button state.
+    for (PlayerId p = 0; p < MAX_LOCAL_PLAYERS; ++p) {
+        if (!isValidPlayer(p) || !playerSlot(p)->joined) {
+            continue;
+        }
+        auto* pr = playerRuntime(p);
+        if (pr == nullptr) continue;
+        auto& btn = g_playerButtonState[p];
+        btn.itemSlotX = pr->loadout.itemX;
+        btn.itemSlotY = pr->loadout.itemY;
     }
 #endif
 }
@@ -71,10 +79,11 @@ void drawView(ViewId view) {
         return;
     }
 
-    // --- Compute the viewport rectangle for this view ---
-    render::ViewportRect vpRect = render::gridCellViewport(view);
+    const PlayerId player = currentPlayer();
 
-    // Convert to pixel coordinates in the internal FB coordinate space.
+    // Viewport rect for this view.
+    const render::ViewportRect vpRect = render::gridCellViewport(view);
+
     const f32 fbW = mDoGph_gInf_c::getWidthF();
     const f32 fbH = mDoGph_gInf_c::getHeightF();
     const f32 vpX = vpRect.x * fbW;
@@ -86,34 +95,25 @@ void drawView(ViewId view) {
         return;
     }
 
-    // --- Set up a 2D ortho graph that maps the full FB coordinate space
-    //     into the viewport.  HUD elements are positioned in FB coordinates
-    //     (e.g. mLifeGaugePosX = 5).  Without root-pane scaling, those
-    //     positions stay correct and dAnchorHudScale shifts remain consistent
-    //     regardless of viewport width.
     J2DGrafContext* prevGraf = dComIfGp_getCurrentGrafPort();
 
-    // The ortho bounds cover the full FB space (0,0)-(fbW,fbH), and the
-    // viewport is set to the grid cell.  The GX backend maps from FB
-    // coordinates to display pixels, so an element at FB position (5,18)
-    // appears at the same physical location in both full-screen and
-    // split-screen modes.
     J2DOrthoGraph viewportOrtho(vpX, vpY, vpW, vpH, -1.0f, 1.0f);
-    // Override the ortho bounds to cover the full FB so layout coords map
-    // directly without scaling the pane hierarchy.
     viewportOrtho.setOrtho(0.0f, 0.0f, fbW, fbH, -1.0f, 1.0f);
     viewportOrtho.setPort();
     dComIfGp_setCurrentGrafPort(&viewportOrtho);
 
-    // --- Allow the vanilla HUD draw to execute ---
+    // Signal dMeter2Draw_c::draw() to patch button-text panes for this
+    // player before rendering the normal HUD content.
+    g_patchPlayerForDraw = static_cast<s16>(player);
+
     const bool prevActive = g_perViewHudActive;
     g_perViewHudActive = false;
 
     g_hudDraw->draw();
 
     g_perViewHudActive = prevActive;
+    g_patchPlayerForDraw = -1;
 
-    // Restore the previous graf port.
     dComIfGp_setCurrentGrafPort(reinterpret_cast<J2DOrthoGraph*>(prevGraf));
 #endif
 }
