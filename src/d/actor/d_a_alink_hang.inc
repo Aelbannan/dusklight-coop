@@ -1330,7 +1330,12 @@ int daAlink_c::procLadderUpStartInit() {
 
     field_0x2f99 = 0x10;
     field_0x3588 = l_waitBaseAnime;
+    #if TARGET_PC
+    // Co-op: set the climb status on the owning player's slot, not global slot 0.
+    dComIfGp_setPlayerStatus0(dusk::coop::alink::ownerOf(this), 0x2000000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000000);
+#endif
 
     f32 var_f31 = cM_ssin(field_0x306e);
     f32 var_f30 = cM_scos(field_0x306e);
@@ -1395,7 +1400,12 @@ int daAlink_c::procLadderUpEndInit(BOOL param_0) {
     field_0x33f4 = -1.0f;
     mProcVar2.field_0x300c = 1;
     mProcVar4.field_0x3010 = 1;
+    #if TARGET_PC
+    // Co-op: set the climb status on the owning player's slot, not global slot 0.
+    dComIfGp_setPlayerStatus0(dusk::coop::alink::ownerOf(this), 0x2000000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000000);
+#endif
     return 1;
 }
 
@@ -1451,7 +1461,12 @@ int daAlink_c::procLadderDownStartInit() {
 
     field_0x2f99 = 0x10;
     field_0x3588 = l_waitBaseAnime;
+    #if TARGET_PC
+    // Co-op: set the climb status on the owning player's slot, not global slot 0.
+    dComIfGp_setPlayerStatus0(dusk::coop::alink::ownerOf(this), 0x2000000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000000);
+#endif
     setOldRootQuaternion(0, 0x8000, 0);
 
     ANGLE_ADD_2(shape_angle.y, 0x8000);
@@ -1518,7 +1533,12 @@ int daAlink_c::procLadderDownEndInit(BOOL param_0) {
     field_0x33f4 = 1.0f;
     mProcVar2.field_0x300c = 0;
     mProcVar4.field_0x3010 = 0;
+    #if TARGET_PC
+    // Co-op: set the climb status on the owning player's slot, not global slot 0.
+    dComIfGp_setPlayerStatus0(dusk::coop::alink::ownerOf(this), 0x2000000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000000);
+#endif
     return 1;
 }
 
@@ -1612,7 +1632,12 @@ int daAlink_c::procLadderMoveInit(BOOL param_0, BOOL param_1, cXyz* param_2) {
     speedF = 0.0f;
     mProcVar2.field_0x300c = 1;
     mProcVar4.field_0x3010 = 1;
+    #if TARGET_PC
+    // Co-op: set the climb status on the owning player's slot, not global slot 0.
+    dComIfGp_setPlayerStatus0(dusk::coop::alink::ownerOf(this), 0x2000000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000000);
+#endif
     return 1;
 }
 

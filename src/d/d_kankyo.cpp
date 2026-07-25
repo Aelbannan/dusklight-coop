@@ -37,6 +37,8 @@
 #include "dusk/settings.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/game_clock.h"
+#include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_context.h"
 static f32 timeScale = 1.0f;
 #endif
 
@@ -3638,9 +3640,30 @@ void dScnKy_env_light_c::settingTevStruct_plightcol_plus(cXyz* pos_p, dKy_tevstr
                 }
             }
 
-            if ((tevstr_p->Type == 9 || tevstr_p->Type == 10) &&
-                (player->checkSinkDead() || dComIfGp_checkPlayerStatus0(0, 0x02000308) ||
-                 dComIfGp_checkPlayerStatus1(0, 0x02000000) || player->checkMagneBootsOn()))
+            bool fadeShadow = false;
+            if (tevstr_p->Type == 9 || tevstr_p->Type == 10) {
+#if TARGET_PC
+                // Co-op: Type 9/10 tevstrs belong to the Link currently drawing (set
+                // from daAlink_c::draw under that player's ScopedContext). Check the
+                // OWNING player's state instead of global slot 0, so one player
+                // climbing/hookshotting/etc. doesn't fade every player's shadow.
+                const dusk::coop::PlayerId tevOwner = dusk::coop::currentPlayer();
+                daPy_py_c* tevPlayer =
+                    static_cast<daPy_py_c*>(dusk::coop::getPlayerActor(tevOwner));
+                fadeShadow = tevPlayer != NULL &&
+                             (tevPlayer->checkSinkDead() ||
+                              dComIfGp_checkPlayerStatus0(tevOwner, 0x02000308) ||
+                              dComIfGp_checkPlayerStatus1(tevOwner, 0x02000000) ||
+                              tevPlayer->checkMagneBootsOn());
+#else
+                fadeShadow = player->checkSinkDead() ||
+                             dComIfGp_checkPlayerStatus0(0, 0x02000308) ||
+                             dComIfGp_checkPlayerStatus1(0, 0x02000000) ||
+                             player->checkMagneBootsOn();
+#endif
+            }
+
+            if (fadeShadow)
             {
                 cLib_addCalc(&tevstr_p->field_0x344, 0.0f, 0.75f, 0.21f, 0.0001f);
             } else if (tevstr_p->Type == 9 && player->getSinkShapeOffset() < -35.0f) {

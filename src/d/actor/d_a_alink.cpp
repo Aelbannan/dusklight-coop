@@ -15556,6 +15556,19 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTOFF);
     }
 
+#if TARGET_PC
+    // Co-op: clear the owning player's status slots, not global slot 0 — otherwise
+    // any player starting a new proc clears every other player's status bits
+    // (including the climb bit that gates shadow fading).
+    const dusk::coop::PlayerId procOwner = dusk::coop::alink::ownerOf(this);
+    if (checkUpperReadyThrowAnime() && mEquipItem != 0x102) {
+        dComIfGp_clearPlayerStatus0(procOwner, 0xfeb5ab0f);
+    } else {
+        dComIfGp_clearPlayerStatus0(procOwner, 0xffbfffcf);
+    }
+
+    dComIfGp_clearPlayerStatus1(procOwner, 0x7fb7b78);
+#else
     if (checkUpperReadyThrowAnime() && mEquipItem != 0x102) {
         dComIfGp_clearPlayerStatus0(0, 0xfeb5ab0f);
     } else {
@@ -15563,6 +15576,7 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
     }
 
     dComIfGp_clearPlayerStatus1(0, 0x7fb7b78);
+#endif
 
     cancelHookshotShot();
     if (mEquipItem == 0x109) {
