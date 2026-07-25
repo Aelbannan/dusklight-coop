@@ -9885,6 +9885,34 @@ void daAlink_c::setBStatus(u8 i_status) {
 #endif
 }
 
+void daAlink_c::setMidnaTalkStatus(u8 status) {
+    dComIfGp_setZStatus(status, 0);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.zStatus = status;
+            s.zSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
+}
+
+void daAlink_c::set3DStatus(u8 status, u8 direction) {
+    dComIfGp_set3DStatus(status, direction, 0);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.m3dStatus = status;
+            s.m3dSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
+}
+
 BOOL daAlink_c::checkAtnWaitAnime() {
     if ((mTargetedActor != NULL
         && (checkEnemyGroup(mTargetedActor)
@@ -18137,6 +18165,25 @@ int daAlink_c::execute() {
     set3DStatus(BUTTON_STATUS_NONE, 0);
     setMidnaTalkStatus(BUTTON_STATUS_NONE);
 
+#if TARGET_PC
+    // Per-player clears for statuses that have no vanilla per-frame alink
+    // reset (X/Y are wolf-only setters, bottle is cleared by the meter
+    // globally). Without this, stale values would linger in this player's
+    // HUD state after the context ends (e.g. wolf -> human form change).
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.xStatus = BUTTON_STATUS_NONE;
+            s.xSetFlag = BUTTON_STATUS_FLAG_NONE;
+            s.yStatus = BUTTON_STATUS_NONE;
+            s.ySetFlag = BUTTON_STATUS_FLAG_NONE;
+            s.bottleStatus = BUTTON_STATUS_NONE;
+            s.bottleSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
+
     if (checkWolf()) {
         setBStatus(BUTTON_STATUS_ATTACK);
         setWolfDigStatus(BUTTON_STATUS_NONE);
@@ -19068,6 +19115,16 @@ int daAlink_c::execute() {
     if (dComIfGp_att_getCatghTarget() != NULL && !checkWolf()) {
         if (!checkRideOn() && checkCastleTownUseItem(dItemNo_EMPTY_BOTTLE_e)) {
             dComIfGp_setBottleStatus(BUTTON_STATUS_SCOOP, 0);
+#if TARGET_PC
+            {
+                dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+                if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+                    auto& s = dusk::coop::hud::g_playerButtonState[pid];
+                    s.bottleStatus = BUTTON_STATUS_SCOOP;
+                    s.bottleSetFlag = BUTTON_STATUS_FLAG_NONE;
+                }
+            }
+#endif
         }
     }
 

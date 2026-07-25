@@ -7,6 +7,7 @@
 #include "dusk/coop/coop_render.h"
 #include "dusk/coop/coop_camera.h"
 
+
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
@@ -312,7 +313,6 @@ void drawView(ViewId view) {
     if (empView == nullptr) {
         // Lazy-create on first draw of this view.
         dusk_coop_createEmpButton(&empView);
-        dusk_coop_finalizeEmpButton();
     }
 
     if (empView != nullptr) {
@@ -325,7 +325,9 @@ void drawView(ViewId view) {
         params.zStatus       = btnState.zStatus;
         params.m3dStatus     = btnState.m3dStatus;
         params.cStickStatus  = btnState.cStickStatus;
-        params.sButtonStatus = btnState.sButtonStatus;
+        // S status stays global — it is force-set by the event system and
+        // field_0x767 is deliberately not re-patched per player.
+        params.sButtonStatus = dComIfGp_getSButtonStatus();
         params.xItemStatus   = btnState.xStatus;
         params.yItemStatus   = btnState.yStatus;
         params.bottleStatus  = btnState.bottleStatus;

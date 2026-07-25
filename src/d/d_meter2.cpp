@@ -2681,33 +2681,25 @@ void dMeter2_c::check2DContents() {
 // declarations in coop_hud.h.  Then called from dusk::coop::hud::tick()
 // and drawView() via unqualified lookup that finds the global version.
 
-static JKRHeap* s_empButtonPrevHeap = nullptr;
-
 void dusk_coop_createEmpButton(dMeterButton_c** outBtn) {
     if (outBtn == nullptr || *outBtn != nullptr) return;
-    dComIfGp_setHeapLockFlag(8);
-    s_empButtonPrevHeap = mDoExt_setCurrentHeap(dComIfGp_getSubHeap2D(8));
+    // Per-view buttons are persistent (created lazily on first draw, only
+    // destroyed on coop reset), so allocate from the main 2D exp heap.
+    // Do NOT use the vanilla subheap2D(8) + heap-lock dance here:
+    // dComIfGp_offHeapLockFlag(8) destroys the subheap once the lock count
+    // reaches zero, which freed the button instance after creation and left
+    // every view's slot aliasing the same reallocated address — both views
+    // then processed one shared dMeterButton_c with alternating params,
+    // which is what made the emphasis prompt flicker in co-op.
+    JKRHeap* prevHeap = mDoExt_setCurrentHeap(dComIfGp_getExpHeap2D());
     *outBtn = JKR_NEW dMeterButton_c();
-    // Note: do NOT restore yet — caller must pair with finalizeEmpButton.
-}
-
-void dusk_coop_finalizeEmpButton() {
-    if (s_empButtonPrevHeap != nullptr) {
-        (void)mDoExt_setCurrentHeap(s_empButtonPrevHeap);
-        s_empButtonPrevHeap = nullptr;
-    }
-    dComIfGp_offHeapLockFlag(8);
+    (void)mDoExt_setCurrentHeap(prevHeap);
 }
 
 void dusk_coop_destroyEmpButton(dMeterButton_c** outBtn) {
     if (outBtn == nullptr || *outBtn == nullptr) return;
     JKR_DELETE(*outBtn);
     *outBtn = nullptr;
-    dComIfGp_getSubHeap2D(8)->freeAll();
-    if (s_empButtonPrevHeap != nullptr) {
-        (void)mDoExt_setCurrentHeap(s_empButtonPrevHeap);
-        s_empButtonPrevHeap = nullptr;
-    }
 }
 
 void dusk_coop_processEmphasisButton(dMeterButton_c* btn, dMeter2Draw_c* draw,

@@ -1842,10 +1842,8 @@ public:
     BOOL checkWolfEnemyThrowAnime() const {
         return checkUpperAnime(0x2BD) || checkUpperAnime(0x2BE);
     }
-    void setMidnaTalkStatus(u8 status) { dComIfGp_setZStatus(status, 0); }
-    void set3DStatus(u8 status, u8 direction) {
-        dComIfGp_set3DStatus(status, direction, 0);
-    }
+    void setMidnaTalkStatus(u8 status);
+    void set3DStatus(u8 status, u8 direction);
     void checkCutTurnCharge();
     void checkLightSwordMtrl();
     BOOL checkSwordEquipAnime() const;

@@ -638,6 +638,16 @@ BOOL daAlink_c::wolfSenseTrigger() {
 
 void daAlink_c::setWolfSenceStatus(u8 i_status) {
     dComIfGp_setXStatus(i_status, 0);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.xStatus = i_status;
+            s.xSetFlag = BUTTON_STATUS_FLAG_NONE;
+        }
+    }
+#endif
 }
 
 BOOL daAlink_c::wolfClawTrigger() {
@@ -646,6 +656,16 @@ BOOL daAlink_c::wolfClawTrigger() {
 
 void daAlink_c::setWolfDigStatus(u8 i_flag) {
     dComIfGp_setYStatus(BUTTON_STATUS_DIG, i_flag);
+#if TARGET_PC
+    {
+        dusk::coop::PlayerId pid = dusk::coop::alink::ownerOf(this);
+        if (pid < dusk::coop::MAX_LOCAL_PLAYERS) {
+            auto& s = dusk::coop::hud::g_playerButtonState[pid];
+            s.yStatus = BUTTON_STATUS_DIG;
+            s.ySetFlag = i_flag;
+        }
+    }
+#endif
 }
 
 BOOL daAlink_c::checkWolfShapeReverse() const {

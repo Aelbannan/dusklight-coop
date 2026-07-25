@@ -736,6 +736,56 @@ void dMeter2Draw_c::draw() {
         // Override R emphasis with per-player set flag
         if (btn.rSetFlag & (2|4)) field_0x768[2] = 7;
 
+        // Z (Midna) emphasis — recompute per player. The shared field was
+        // written by dMeter2_c::_execute from the global (last-writer)
+        // status; without this override another player's Z emphasis would
+        // leak into this view's emphasis-button priority resolution.
+        {
+            u8 emph = 0;
+            getActionString(btn.zStatus, 1, &emph);
+            field_0x764 = emph;
+            if (btn.zSetFlag & (2|4)) field_0x764 = 7;
+        }
+
+        // 3D emphasis — per player (same leak as Z).
+        {
+            u8 emph = 0;
+            getActionString(btn.m3dStatus, 1, &emph);
+            field_0x765 = emph;
+            if (btn.m3dSetFlag & (2|4)) field_0x765 = 7;
+        }
+
+        // C-stick emphasis — no per-player source is captured in co-op, so
+        // force non-emphasis. Otherwise a global C emphasis (scope/fishing)
+        // would steal a priority slot on every view with an empty string.
+        field_0x766 = 1;
+
+        // S emphasis (field_0x767) is intentionally left global: it is only
+        // force-set by the event system (cutscene skip/give-up prompts)
+        // and should behave the same on all views.
+
+        // X/Y item emphasis — per player (wolf sense/dig).
+        {
+            u8 emph = 0;
+            getActionString(btn.xStatus, 1, &emph);
+            field_0x768[0] = emph;
+            if (btn.xSetFlag & (2|4)) field_0x768[0] = 7;
+        }
+        {
+            u8 emph = 0;
+            getActionString(btn.yStatus, 1, &emph);
+            field_0x768[1] = emph;
+            if (btn.ySetFlag & (2|4)) field_0x768[1] = 7;
+        }
+
+        // Bottle emphasis — per player (scoop prompt).
+        {
+            u8 emph = 0;
+            getActionString(btn.bottleStatus, 1, &emph);
+            field_0x763 = emph;
+            if (btn.bottleSetFlag & (2|4)) field_0x763 = 7;
+        }
+
         // X/Y item textures — override the player-0 textures set during
         // _execute() with this player's assigned loadout items.
         // (The per-player drawXxx calls in coop_hud.cpp also do this,

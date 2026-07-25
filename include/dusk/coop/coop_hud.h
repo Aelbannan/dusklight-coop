@@ -9,8 +9,11 @@ class dMeter2Draw_c;
 // Emphasis-button lifecycle helpers (defined in d_meter2.cpp).
 // Out-of-line helpers are needed because coop_hud cannot include
 // d_meter_button.h (deep include chain conflicts).
+// Buttons are allocated from the main 2D exp heap and are persistent
+// (created lazily, destroyed only on coop reset) — the vanilla
+// subheap2D(8) heap-lock dance destroys the heap on release and must
+// not be used for these.
 void dusk_coop_createEmpButton(dMeterButton_c** outBtn);
-void dusk_coop_finalizeEmpButton();
 void dusk_coop_destroyEmpButton(dMeterButton_c** outBtn);
 void dusk_coop_drawEmpButton(dMeterButton_c* btn);
 
@@ -66,6 +69,11 @@ struct PlayerHudButtonState {
     u8 doSetFlag = 0;
     u8 aSetFlag = 0;
     u8 rSetFlag = 0;
+    u8 zSetFlag = 0;      // Z (Midna) emphasis flag
+    u8 m3dSetFlag = 0;    // 3D emphasis flag
+    u8 xSetFlag = 0;      // X (wolf sense) emphasis flag
+    u8 ySetFlag = 0;      // Y (wolf dig) emphasis flag
+    u8 bottleSetFlag = 0; // Bottle emphasis flag
     u8 equipSword = 0;
     u8 itemSlotX = 0xFF;   // X-item slot
     u8 itemSlotY = 0xFF;   // Y-item slot
