@@ -27,6 +27,8 @@
 
 #if TARGET_PC
 #include "dusk/menu_pointer.h"
+#include "dusk/main.h"
+#include "dusk/coop/coop_save.h"
 #include "helpers/string.hpp"
 
 namespace {
@@ -1387,6 +1389,10 @@ void dFile_select_c::menuSelectStart() {
 
     if (mSelectMenuNum == 1) {
         dComIfGs_setCardToMemory((u8*)mSaveData, mSelectNum);
+#if TARGET_PC
+        dusk::coop::save::loadCompanion(
+            (dusk::ConfigPath / "coop_save.coop").string().c_str());
+#endif
         mIsSelectEnd = true;
         mDataSelProc = DATASELPROC_NEXT_MODE_WAIT;
         dComIfGs_setDataNum(mSelectNum);
@@ -5149,6 +5155,10 @@ void dFile_select_c::MemCardErrMsgWaitNoSaveSel() {
     if (field_0x0268 != 0) {
         setInitSaveData();
         dComIfGs_setCardToMemory((u8*)mSaveData, 0);
+#if TARGET_PC
+        dusk::coop::save::loadCompanion(
+            (dusk::ConfigPath / "coop_save.coop").string().c_str());
+#endif
         dComIfGs_setNoFile(1);
         dComIfGs_setDataNum(0);
 

@@ -50,6 +50,21 @@ void dusk_coop_setBottleNum(u8 bottleIdx, u8 num);
 u8 dusk_coop_getBottleItem(u8 bottleIdx);
 void dusk_coop_setBottleItem(u8 bottleIdx, u8 itemNo);
 
+// Per-player item counter bridging (bypasses global mItemInfo counters).
+void dusk_coop_addRupee(s32 amount);
+void dusk_coop_addLifeCount(f32 hearts);
+
+// Per-player bottle operation bridging (mirrors dSv_player_item_c on currentPlayer).
+u8 dusk_coop_checkBottle(u8 itemNo);
+u8 dusk_coop_checkEmptyBottle(void);
+int dusk_coop_checkInsectBottle(void);
+void dusk_coop_setBottleItemIn(u8 curItem, u8 newItem);
+void dusk_coop_setEmptyBottleItemIn(u8 itemNo);
+void dusk_coop_setEmptyBottle(void);
+void dusk_coop_setEmptyBottleWithItem(u8 itemNo);
+void dusk_coop_setEquipBottleItemIn(u8 curItem, u8 newItem);
+void dusk_coop_setEquipBottleItemEmpty(u8 curItem);
+
 #ifdef __cplusplus
 }
 #endif

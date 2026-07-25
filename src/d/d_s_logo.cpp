@@ -27,6 +27,7 @@
 #include "dusk/logging.h"
 #include "dusk/version.hpp"
 #include "dusk/main.h"
+#include "dusk/coop/coop_save.h"
 #include "m_Do/m_Do_MemCard.h"
 #endif
 
@@ -774,6 +775,9 @@ void dScnLogo_c::nextSceneChange() {
             
                 if (status == 1) {
                     dComIfGs_setCardToMemory(buf, dusk::SaveRequested - 1);
+                    // Load companion data after vanilla save is seeded.
+                    dusk::coop::save::loadCompanion(
+                        (dusk::ConfigPath / "coop_save.coop").string().c_str());
                 } else {
                     dComIfGs_init();
                 }

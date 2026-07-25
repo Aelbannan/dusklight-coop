@@ -38,6 +38,10 @@ constexpr f32 kSoftSepPush = 0.25f;
 constexpr f32 kSoftSepAuthorityMultiplier = 2.0f;
 constexpr f32 kSpawnOffset = 80.0f;
 
+// One-shot log guards — reset on co-op re-init.
+static bool sLoggedWait = false;
+static bool sLoggedMultiView = false;
+
 struct LinkMeta {
     fpc_ProcID processId = fpcM_ERROR_PROCESS_ID_e;
     bool pendingRecreate = false;
@@ -184,7 +188,6 @@ static void syncCamerasForJoined() {
         }
         if (getPlayerActor(i) == nullptr) {
             runtime().activeViewCount = 1;
-            static bool sLoggedWait = false;
             if (!sLoggedWait) {
                 debug::logInfo(
                     "Co-op join: waiting for secondary Links before ensureCameras");
@@ -219,7 +222,6 @@ static void syncCamerasForJoined() {
 
     runtime().activeViewCount = span;
     // One-shot log once multi-view is fully set up.
-    static bool sLoggedMultiView = false;
     if (!sLoggedMultiView) {
         debug::logInfo("Co-op join: %u-view capture+grid mode", span);
         sLoggedMultiView = true;
@@ -275,6 +277,8 @@ void reset() {
 #if TARGET_PC
     destroyNonAuthorityLinks();
     g_meta = {};
+    sLoggedWait = false;
+    sLoggedMultiView = false;
 #endif
 }
 

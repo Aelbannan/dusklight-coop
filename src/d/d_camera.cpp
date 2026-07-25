@@ -2118,18 +2118,6 @@ s32 dCamera_c::nextType(s32 i_curType) {
 bool dCamera_c::onTypeChange(s32 i_curType, s32 i_nextType) {
     daAlink_c* unusedPlayer = linkActor();
 
-#if TARGET_PC
-        const s32 event_type_id = specialType[CAM_TYPE_EVENT];
-        DuskLog.debug(
-            "frameInterp: onTypeChange {} -> {} (event_type_id={}, leaving_event={}, entering_event={})",
-            static_cast<int>(i_curType),
-            static_cast<int>(i_nextType),
-            static_cast<int>(event_type_id),
-            i_curType == event_type_id,
-            i_nextType == event_type_id
-        );
-#endif
-
     if (i_curType == specialType[CAM_TYPE_EVENT]) {
         if (mCamSetup.CheckFlag(0x4000)) {
             mGear = 0;

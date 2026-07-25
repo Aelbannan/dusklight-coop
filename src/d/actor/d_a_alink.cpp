@@ -4937,9 +4937,6 @@ int daAlink_c::create() {
 #endif
 
     if (!createWaitFlg) {
-#if TARGET_PC
-        dusk::coop::setPlayerActor(coopOwner, this);
-#endif
         #if DEBUG
         if (g_playerKind == 2) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_CASUAL_e);
@@ -7333,13 +7330,6 @@ int daAlink_c::setSingleAnime(daAlink_c::daAlink_ANM i_anmID, f32 i_speed, f32 i
 
     getUnderUpperAnime(i_anmID, &under_bck, &upper_bck, 0, 0x10800);
 
-#if TARGET_PC
-    {
-        const auto pid = dusk::coop::alink::ownerOf(this);
-        OSReport("[coop-anim] P%u setSingleAnime id=%d under=%p upper=%p\n",
-                 pid, (int)i_anmID, (void*)under_bck, (void*)upper_bck);
-    }
-#endif
 
     commonSingleAnime(under_bck, upper_bck, i_speed, i_start, i_end);
 
@@ -7371,14 +7361,6 @@ void daAlink_c::allAnimePlay() {
     J3DAnmTransform* upper0_bck = getNowAnmPackUpper(UPPER_0);
     J3DAnmTransform* upper1_bck = getNowAnmPackUpper(UPPER_1);
 
-#if TARGET_PC
-    // DEBUG: log animation pack pointer to detect sharing
-    {
-        const auto pid = dusk::coop::alink::ownerOf(this);
-        OSReport("[coop-anim] P%u mNowAnmPackUnder[0]=%p upper[0]=%p procID=%d stick=%f\n",
-                 pid, (void*)under0_bck, (void*)upper0_bck, mProcID, mStickValue);
-    }
-#endif
 
     if (checkWolf()) {
         setWolfAnmVoice();
@@ -9566,9 +9548,6 @@ void daAlink_c::setStickData() {
                             && (checkCanoeRide() || mProcID == PROC_FISHING_CAST);
 #if TARGET_PC
         bool usedIndexedInput = false;
-
-        // DEBUG: log input routing
-        f32 dbg_stick_before = mStickValue;
 #endif
 
         if (usingFishRod) {
@@ -9579,18 +9558,11 @@ void daAlink_c::setStickData() {
 #if TARGET_PC
         else if ((usedIndexedInput = dusk::coop::alink::applyInputSnapshot(this))) {
             // Stick + item buttons come from the owning player's indexed input snapshot.
-            const auto dbg_pid = dusk::coop::alink::ownerOf(this);
-            OSReport("[coop-input] P%u stick=%f angle=%d usedIndexed=%d\n",
-                     dbg_pid, mStickValue, mStickAngle, usedIndexedInput);
         }
 #endif
         else {
             mStickValue = mDoCPd_c::getStickValue(PAD_1);
             mStickAngle = mDoCPd_c::getStickAngle3D(PAD_1) - -0x8000;
-#if TARGET_PC
-            OSReport("[coop-input] PAD_1 fallback: stick=%f\n",
-                     mStickValue);
-#endif
         }
 
         mMoveValue = mStickValue;
@@ -20123,8 +20095,14 @@ static int daAlink_Draw(daAlink_c* i_this) {
 }
 
 daAlink_c::~daAlink_c() {
+#if TARGET_PC
+    const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
+    dComIfGp_clearPlayerStatus0(owner, ~0x400030);
+    dComIfGp_clearPlayerStatus1(owner, 0x7FB7B78);
+#else
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
     dComIfGp_clearPlayerStatus1(0, 0x7FB7B78);
+#endif
 
     #if DEBUG
     mpHIO->removeHIO();
@@ -20159,7 +20137,6 @@ daAlink_c::~daAlink_c() {
     dKy_plight_cut(&mMagneBootsPlight);
 
 #if TARGET_PC
-    const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
     dusk::coop::combat::unregisterPlayerActor(owner);
     if (dusk::coop::getPlayerActor(owner) == this) {
         dusk::coop::setPlayerActor(owner, nullptr);

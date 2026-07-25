@@ -2,6 +2,11 @@
 #include "dusk/ui/ui.hpp"
 #include "imgui/ImGuiConsole.hpp"
 
+#if TARGET_PC
+#include "dusk/main.h"
+#include "dusk/coop/coop_save.h"
+#endif
+
 bool shouldAutoSave = false;
 u8 mSaveBuffer[QUEST_LOG_SIZE * 3];
 u8 mAutoSaveProc = 0;
@@ -68,6 +73,10 @@ void autoSaving() {
             mAutoSaveProc = 1;
         } else if (cardState == 1) {
             if (writeAutoSave()) {
+#if TARGET_PC
+                dusk::coop::save::saveCompanion(
+                    (dusk::ConfigPath / "coop_save.coop").string().c_str());
+#endif
                 mAutoSaveProc = 3;
             }
         }

@@ -21,6 +21,10 @@ namespace {
 std::array<bool, MAX_LOCAL_VIEWS> g_active{};
 std::array<bool, MAX_LOCAL_VIEWS> g_createRequested{};
 
+#if TARGET_PC
+static bool sLoggedDualReady = false;
+#endif
+
 bool validIndex(int idx) { return idx >= 0 && idx < static_cast<int>(MAX_LOCAL_VIEWS); }
 
 uint8_t computeViewSpan() {
@@ -117,9 +121,14 @@ bool requestSecondaryCreate(ViewId id) {
 
     const fpc_ProcID pid = fopCamM_Create(static_cast<int>(id), fpcNm_CAMERA_e, params);
     if (pid == fpcM_ERROR_PROCESS_ID_e) {
+        // params ownership is NOT transferred to the process on failure.
+        cMl::free(params);
         debug::logError("ensureCameras: fopCamM_Create failed for view %u", id);
         return false;
     }
+    // On success, fpcBs_Create stores params in process->append and frees it
+    // via fpcBs_DeleteAppend during SubCreate (cPhs_NEXT/cPhs_COMPLEATE).
+    // We must NOT free params here.
 
     if (auto* route = cameraRoute(id)) {
         route->processId = pid;
@@ -165,7 +174,12 @@ void init() {
     }
 }
 
-void reset() { init(); }
+void reset() {
+#if TARGET_PC
+    sLoggedDualReady = false;
+#endif
+    init();
+}
 
 void tick() {
     syncPrimaryRoute();
@@ -176,7 +190,6 @@ void tick() {
     }
 
 #if TARGET_PC
-    static bool sLoggedDualReady = false;
     if (!sLoggedDualReady) {
         bool allReady = true;
         for (ViewId i = 1; i < MAX_LOCAL_VIEWS; ++i) {
@@ -246,6 +259,9 @@ void destroyCamera(ViewId id) {
     if (id == 0 || !isValidView(id)) {
         return;  // never destroy primary through this path
     }
+
+    // Release the capture buffer for this view before tearing down the camera.
+    render::releaseCaptureSlot(id);
 
     // fopCamM_Delete schedules process teardown; destructor side effects are guarded in dCamera_c.
     fopCamM_Delete(static_cast<int>(id));

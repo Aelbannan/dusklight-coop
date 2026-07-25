@@ -250,10 +250,6 @@ void processNotedSources() {
     if (!g_notedSources.empty() && !drops::encounterActive()) {
         // Count all known eligible originals (noted + already augmented).
         u32 originals = static_cast<u32>(g_notedSources.size() + g_augmentedSources.size());
-        // Also count live stage enemies of whitelisted types already present.
-        for (fpc_ProcID id : g_notedSources) {
-            (void)id;
-        }
         drops::ensureEncounter(originals, encounterSeedForRoom());
     }
 

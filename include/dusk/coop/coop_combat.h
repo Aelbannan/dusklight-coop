@@ -94,7 +94,6 @@ FriendlyFireDecision evaluateFriendlyFire(PlayerId attacker, PlayerId victim);
 bool shouldApplyFriendlyFire(PlayerId attacker, PlayerId victim);
 
 // --- Per-player damage / fairy / game-over ---
-void applyPlayerDamage(PlayerId id, s16 damage);
 void onPlayerDamaged(PlayerId id, s16 rawDamage);
 bool tryConsumeFairy(PlayerId id);
 bool allPlayersDowned();

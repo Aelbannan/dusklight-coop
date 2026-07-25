@@ -21,7 +21,6 @@ using PlayerId = uint8_t;
 using ViewId = uint8_t;
 
 constexpr size_t MAX_LOCAL_PLAYERS = 8;
-constexpr size_t MIN_REQUIRED_LOCAL_VIEWS = 8;
 constexpr size_t MAX_LOCAL_VIEWS = 8;
 
 enum class ViewAssignmentMode : uint8_t {

@@ -443,10 +443,25 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
                 }
             }
 
+#if TARGET_PC
+            if (i_AtInfo->mpActor != nullptr &&
+                fopAcM_GetName(i_AtInfo->mpActor) == fpcNm_ALINK_e)
+            {
+                daPy_py_c* atPlayer = static_cast<daPy_py_c*>(i_AtInfo->mpActor);
+                if (atPlayer->getSwordAtUpTime()) {
+                    i_AtInfo->mAttackPower *= 2;
+                    i_AtInfo->mHitStatus = 1;
+                }
+            } else if (player_p != nullptr && player_p->getSwordAtUpTime()) {
+                i_AtInfo->mAttackPower *= 2;
+                i_AtInfo->mHitStatus = 1;
+            }
+#else
             if (player_p->getSwordAtUpTime()) {
                 i_AtInfo->mAttackPower *= 2;
                 i_AtInfo->mHitStatus = 1;
             }
+#endif
         }
 
 #if TARGET_PC

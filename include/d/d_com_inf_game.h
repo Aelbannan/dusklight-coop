@@ -1671,38 +1671,89 @@ inline u8 dComIfGs_getLineUpItem(int i_slotNo) {
 }
 
 inline void dComIfGs_setBottleItemIn(u8 curItem, u8 newItem) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setBottleItemIn(curItem, newItem);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setBottleItemIn(curItem, newItem);
 }
 
 inline void dComIfGs_setEmptyBottleItemIn(u8 i_itemNo) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setEmptyBottleItemIn(i_itemNo);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setEmptyBottleItemIn(i_itemNo);
 }
 
 inline void dComIfGs_setEmptyBottle() {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setEmptyBottle();
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setEmptyBottle();
 }
 
 inline void dComIfGs_setEmptyBottle(u8 i_itemNo) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setEmptyBottleWithItem(i_itemNo);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setEmptyBottle(i_itemNo);
 }
 
 inline void dComIfGs_setEquipBottleItemIn(u8 i_curItem, u8 i_newItem) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setEquipBottleItemIn(i_curItem, i_newItem);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setEquipBottleItemIn(i_curItem, i_newItem);
 }
 
 inline void dComIfGs_setEquipBottleItemEmpty(u8 i_curItem) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_setEquipBottleItemEmpty(i_curItem);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.info.getPlayer().getItem().setEquipBottleItemEmpty(i_curItem);
 }
 
 inline u8 dComIfGs_checkBottle(u8 i_itemNo) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        return dusk_coop_checkBottle(i_itemNo);
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItem().checkBottle(i_itemNo);
 }
 
 inline u8 dComIfGs_checkInsectBottle() {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        return static_cast<u8>(dusk_coop_checkInsectBottle());
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItem().checkInsectBottle();
 }
 
 inline u8 dComIfGs_checkEmptyBottle() {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        return dusk_coop_checkEmptyBottle();
+    }
+#endif
     return g_dComIfG_gameInfo.info.getPlayer().getItem().checkEmptyBottle();
 }
 
@@ -3818,6 +3869,12 @@ inline u8 dComIfGp_getItemLifeCountType() {
 }
 
 inline void dComIfGp_setItemLifeCount(f32 amount, u8 type) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_addLifeCount(amount);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setItemLifeCount(amount, type);
 }
 
@@ -3830,6 +3887,12 @@ inline s32 dComIfGp_getItemRupeeCount() {
 }
 
 inline void dComIfGp_setItemRupeeCount(s32 amount) {
+#if TARGET_PC
+    if (dusk_coop_resourcesReady()) {
+        dusk_coop_addRupee(amount);
+        return;
+    }
+#endif
     g_dComIfG_gameInfo.play.setItemRupeeCount(amount);
 }
 

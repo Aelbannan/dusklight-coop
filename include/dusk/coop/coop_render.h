@@ -56,6 +56,11 @@ void captureView(ViewId view);
 // Blit all captured views into an N-up grid on screen.
 void presentMultiViewGrid();
 
+// Free one capture slot's buffer (allocator-aware).
+void releaseCaptureSlot(ViewId view);
+// Free all capture slot buffers.
+void releaseAllCaptureSlots();
+
 // Normalized viewport rectangle for one grid cell (for HUD positioning).
 // Returns {0,0,1,1} when only one view is active.
 struct ViewportRect {

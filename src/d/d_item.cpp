@@ -901,18 +901,42 @@ void item_func_EMPTY_BOTTLE() {
 }
 
 void item_func_RED_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_RED_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_RED_BOTTLE_e);
 }
 
 void item_func_GREEN_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_GREEN_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_GREEN_BOTTLE_e);
 }
 
 void item_func_BLUE_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_BLUE_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_BLUE_BOTTLE_e);
 }
 
 void item_func_MILK_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_MILK_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_MILK_BOTTLE_e);
 }
 
@@ -927,18 +951,42 @@ void item_func_HALF_MILK_BOTTLE() {
 }
 
 void item_func_OIL_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_OIL_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_OIL_BOTTLE_e);
 }
 
 void item_func_WATER_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_WATER_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_WATER_BOTTLE_e);
 }
 
 void item_func_OIL_BOTTLE2() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_OIL_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_OIL_BOTTLE_e);
 }
 
 void item_func_RED_BOTTLE2() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_RED_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_RED_BOTTLE_e);
 }
 
@@ -951,6 +999,12 @@ void item_func_HOT_SPRING() {
 }
 
 void item_func_FAIRY_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_FAIRY_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottleItemIn(dItemNo_FAIRY_e);
 }
 
@@ -983,6 +1037,12 @@ void item_func_FAIRY_DROP() {
 void item_func_WORM() {}
 
 void item_func_DROP_BOTTLE() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_FAIRY_DROP_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottle(dItemNo_FAIRY_DROP_e);
 }
 
@@ -1076,6 +1136,12 @@ void item_func_CHUCHU_YELLOW2() {
 }
 
 void item_func_OIL_BOTTLE3() {
+#if TARGET_PC
+    if (dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(),
+                                               dItemNo_OIL_BOTTLE_e)) {
+        return;
+    }
+#endif
     dComIfGs_setEmptyBottle(dItemNo_OIL_BOTTLE_e);
 }
 

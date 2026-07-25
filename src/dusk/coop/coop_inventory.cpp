@@ -564,6 +564,106 @@ void dusk_coop_setBottleItem(u8 bottleIdx, u8 itemNo) {
     dusk::coop::bottles::setContents(dusk::coop::currentPlayer(), bottleIdx, itemNo);
 }
 
+// Per-player item counter bridging — bypasses the global mItemInfo counters
+// so that rupees / life-flush are credited to the active player directly.
+
+void dusk_coop_addRupee(s32 amount) {
+    auto& res = dusk::coop::inventory::resources(dusk::coop::currentPlayer());
+    s32 newRupees = static_cast<s32>(res.rupees) + amount;
+    if (newRupees > res.maxRupees) {
+        newRupees = res.maxRupees;
+    }
+    if (newRupees < 0) {
+        newRupees = 0;
+    }
+    res.rupees = static_cast<s16>(newRupees);
+}
+
+void dusk_coop_addLifeCount(f32 hearts) {
+    auto& res = dusk::coop::inventory::resources(dusk::coop::currentPlayer());
+    s32 newLife = static_cast<s32>(res.life) + static_cast<s32>(hearts);
+    if (newLife > res.maxLife) {
+        newLife = res.maxLife;
+    }
+    if (newLife < 0) {
+        newLife = 0;
+    }
+    res.life = static_cast<s16>(newLife);
+}
+
+// Per-player bottle bridging — operates on currentPlayer's bottleContents.
+
+u8 dusk_coop_checkBottle(u8 itemNo) {
+    const auto pid = dusk::coop::currentPlayer();
+    u8 count = 0;
+    for (u8 i = 0; i < dSv_player_item_c::BOTTLE_MAX; ++i) {
+        if (dusk::coop::bottles::getContents(pid, i) == itemNo) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+u8 dusk_coop_checkEmptyBottle(void) {
+    return dusk_coop_checkBottle(dItemNo_EMPTY_BOTTLE_e);
+}
+
+int dusk_coop_checkInsectBottle(void) {
+    const auto pid = dusk::coop::currentPlayer();
+    for (u8 i = 0; i < dSv_player_item_c::BOTTLE_MAX; ++i) {
+        const u8 content = dusk::coop::bottles::getContents(pid, i);
+        if (content >= dItemNo_M_BEETLE_e && content <= dItemNo_F_MAYFLY_e) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void dusk_coop_setBottleItemIn(u8 curItem, u8 newItem) {
+    const auto pid = dusk::coop::currentPlayer();
+    for (u8 i = 0; i < dSv_player_item_c::BOTTLE_MAX; ++i) {
+        if (dusk::coop::bottles::getContents(pid, i) == curItem) {
+            dusk::coop::bottles::setContents(pid, i, newItem);
+            return;
+        }
+    }
+}
+
+void dusk_coop_setEmptyBottleItemIn(u8 itemNo) {
+    dusk_coop_setBottleItemIn(dItemNo_EMPTY_BOTTLE_e, itemNo);
+}
+
+void dusk_coop_setEmptyBottle(void) {
+    dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(), dItemNo_EMPTY_BOTTLE_e);
+}
+
+void dusk_coop_setEmptyBottleWithItem(u8 itemNo) {
+    dusk::coop::bottles::grantBottleUnlock(dusk::coop::currentPlayer(), itemNo);
+}
+
+void dusk_coop_setEquipBottleItemIn(u8 curItem, u8 newItem) {
+    const auto pid = dusk::coop::currentPlayer();
+    const auto& lo = dusk::coop::inventory::loadout(pid);
+
+    u8 slot = 0xFF;
+    if (curItem == 0) slot = lo.itemX;
+    else if (curItem == 1) slot = lo.itemY;
+    else if (curItem == 2) slot = lo.itemSelect;
+
+    if (slot >= SLOT_11 && slot <= SLOT_14) {
+        const u8 bottleIdx = static_cast<u8>(slot - SLOT_11);
+        dusk::coop::bottles::setContents(pid, bottleIdx, newItem);
+        // Update the save slot for the story authority (per-player routing in dComIfGs_setItem).
+        dComIfGs_setItem(slot, newItem);
+        dComIfGp_setItem(slot, newItem);
+        dComIfGp_setSelectItem(curItem);
+    }
+}
+
+void dusk_coop_setEquipBottleItemEmpty(u8 curItem) {
+    dusk_coop_setEquipBottleItemIn(curItem, dItemNo_EMPTY_BOTTLE_e);
+}
+
 }  // extern "C"
 
 #endif  // TARGET_PC

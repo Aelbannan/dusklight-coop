@@ -164,6 +164,13 @@ PlayerId storyAuthority() {
 void init() {}
 void reset() {}
 
+std::string companionPathFor(const char* mainSavePath) {
+    if (!mainSavePath || mainSavePath[0] == '\0') {
+        return std::string();
+    }
+    return std::string(mainSavePath) + ".coop";
+}
+
 bool loadCompanion(const char* path) {
     for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
         inventory::syncPlayerFromSave(id);

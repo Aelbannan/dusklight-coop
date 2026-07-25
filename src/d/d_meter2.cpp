@@ -750,6 +750,9 @@ void dMeter2_c::moveLife() {
 
     f32 item_life_count = dComIfGp_getItemLifeCount();
     f32 tmp = 0.0f;
+#if TARGET_PC
+    if (!dusk_coop_resourcesReady())
+#endif
     if (item_life_count != tmp) {
         mLifeCountType = dComIfGp_getItemLifeCountType();
         if (!draw_life) {
@@ -1199,6 +1202,9 @@ void dMeter2_c::moveRupee() {
     s16 r29 = 0;
     bool draw_rupee = false;
 
+#if TARGET_PC
+    if (!dusk_coop_resourcesReady())
+#endif
     if (dComIfGp_getItemRupeeCount() != 0) {
         r29 = dComIfGs_getRupee() + dComIfGp_getItemRupeeCount();
         if (r29 > temp_r5) {

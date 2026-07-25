@@ -26,6 +26,8 @@
 #include "dusk/frame_interpolation.h"
 #include "dusk/menu_pointer.h"
 #include "dusk/settings.h"
+#include "dusk/main.h"
+#include "dusk/coop/coop_save.h"
 #endif
 
 static int SelStartFrameTbl[3] = {
@@ -1440,6 +1442,11 @@ void dMenu_save_c::dataWrite() {
     }
 
     dataSave();
+
+#if TARGET_PC
+    dusk::coop::save::saveCompanion(
+        (dusk::ConfigPath / "coop_save.coop").string().c_str());
+#endif
 }
 
 void dMenu_save_c::memCardDataSaveWait() {

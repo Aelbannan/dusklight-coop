@@ -2,6 +2,8 @@
 
 #include "dusk/coop/coop_types.h"
 
+#include <string>
+
 namespace dusk::coop::save {
 
 constexpr u32 COMPANION_SAVE_MAGIC = 0x434F4F50;  // 'COOP'
@@ -18,6 +20,11 @@ struct CompanionHeader {
 
 void init();
 void reset();
+
+// Derive companion save path from the main save file path by appending ".coop".
+// When the main save path is not available (e.g. PC card abstraction), callers
+// may pass a path derived from dusk::ConfigPath instead.
+std::string companionPathFor(const char* mainSavePath);
 
 bool loadCompanion(const char* path);
 bool saveCompanion(const char* path);

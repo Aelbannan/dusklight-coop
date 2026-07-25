@@ -385,33 +385,6 @@ bool shouldApplyFriendlyFire(PlayerId attacker, PlayerId victim) {
     return evaluateFriendlyFire(attacker, victim) == FriendlyFireDecision::AllowFull;
 }
 
-void applyPlayerDamage(PlayerId id, s16 damage) {
-    if (!isValidPlayer(id) || damage <= 0) {
-        return;
-    }
-    auto* rt = playerRuntime(id);
-    if (rt == nullptr || rt->lifeState != PlayerLifeState::Alive) {
-        return;
-    }
-
-    inventory::setLife(id, static_cast<s16>(inventory::getLife(id) - damage));
-    onPlayerDamaged(id, damage);
-
-    if (inventory::getLife(id) > 0) {
-        return;
-    }
-
-    if (tryConsumeFairy(id)) {
-        inventory::setLife(id, inventory::resources(id).maxLife);
-        rt->lifeState = PlayerLifeState::Alive;
-        debug::logInfo("combat: P%u revived via fairy", id);
-        return;
-    }
-
-    markPlayerDowned(id);
-    triggerGameOverIfNeeded();
-}
-
 void onPlayerDamaged(PlayerId id, s16 /*rawDamage*/) {
     if (!isJoined(id)) {
         return;

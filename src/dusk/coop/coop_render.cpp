@@ -55,8 +55,16 @@ struct CaptureSlot {
 static std::array<CaptureSlot, MAX_LOCAL_VIEWS> s_captureSlots;
 
 static void freeCaptureSlot(CaptureSlot& slot) {
-    if (slot.tex != nullptr && slot.heapAllocated) {
-        std::free(slot.tex);  // allocated via aligned_alloc
+    if (slot.timg != nullptr) {
+        if (slot.heapAllocated) {
+            std::free(slot.timg);  // allocated via aligned_alloc
+        } else {
+            // JKR-heap allocated: find the owning heap and free through it.
+            JKRHeap* heap = JKRHeap::findFromRoot(slot.timg);
+            if (heap != nullptr) {
+                heap->free(slot.timg);
+            }
+        }
     }
     slot.timg = nullptr;
     slot.tex = nullptr;
@@ -93,25 +101,9 @@ static bool ensureCaptureSlot(ViewId view) {
     const u32 rawSize = GXGetTexBufferSize(w, h, format, GX_FALSE, 0) + 0x20;
     const u32 bufferSize = (rawSize + 0x1fu) & ~0x1fu;
 
-    void* mem = nullptr;
-    JKRExpHeap* heap = mDoExt_getArchiveHeap();
-    if (heap == nullptr) {
-        heap = mDoExt_getGameHeap();
-    }
-    if (heap != nullptr) {
-        mem = heap->alloc(bufferSize, 0x20);
-    }
-    if (mem == nullptr) {
-        JKRHeap* cur = JKRHeap::getCurrentHeap();
-        if (cur != nullptr) {
-            mem = cur->alloc(bufferSize, 0x20);
-        }
-    }
-    if (mem == nullptr) {
-        mem = std::aligned_alloc(0x20, bufferSize);
-        if (mem != nullptr) {
-            slot.heapAllocated = true;
-        }
+    void* mem = std::aligned_alloc(0x20, bufferSize);
+    if (mem != nullptr) {
+        slot.heapAllocated = true;
     }
     if (mem == nullptr) {
         debug::logError("multi-view capture: failed to allocate slot %u buffer (%u bytes)",
@@ -345,7 +337,10 @@ void init() {
     g_lastPassCount = 1;
 }
 
-void reset() { init(); }
+void reset() {
+    releaseAllCaptureSlots();
+    init();
+}
 
 void beginFrame() {}
 
@@ -595,6 +590,25 @@ void bindPainterCameraView(ViewId view, camera_process_class* camera) {
     camera->view.viewMtxNoTrans[2][3] = 0.0f;
     cMtx_concatProjView(camera->view.projMtx, camera->view.viewMtx, camera->view.projViewMtx);
     cMtx_inverse(camera->view.viewMtx, camera->view.invViewMtx);
+#endif
+}
+
+void releaseCaptureSlot(ViewId view) {
+#if TARGET_PC
+    if (view >= MAX_LOCAL_VIEWS) {
+        return;
+    }
+    freeCaptureSlot(s_captureSlots[view]);
+#else
+    (void)view;
+#endif
+}
+
+void releaseAllCaptureSlots() {
+#if TARGET_PC
+    for (auto& slot : s_captureSlots) {
+        freeCaptureSlot(slot);
+    }
 #endif
 }
 
