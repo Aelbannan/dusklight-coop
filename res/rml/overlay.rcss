@@ -208,6 +208,11 @@ toast.menu-notification message row {
     gap: 6dp;
 }
 
+toast.view-notification {
+    right: auto;
+    max-width: none;
+}
+
 icon {
     font-family: "Material Symbols Rounded";
     font-weight: normal;

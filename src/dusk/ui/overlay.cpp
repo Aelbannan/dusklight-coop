@@ -2,6 +2,7 @@
 
 #include "aurora/lib/logging.hpp"
 #include "controller_config.hpp"
+#include "dusk/coop/coop_render.h"
 #include "dusk/achievements.h"
 #include "dusk/action_bindings.h"
 #include "dusk/livesplit.h"
@@ -390,6 +391,8 @@ void Overlay::update() {
         mMenuNotificationStartTime = clock::now();
     }
 
+    update_view_toasts();
+
     auto& toasts = get_toasts();
     if (mCurrentToast == nullptr) {
         if (!toasts.empty()) {
@@ -421,6 +424,97 @@ void Overlay::update() {
             mCurrentToast->SetAttribute("open", "");
             mCurrentToast->SetPseudoClass("opened", true);
         }
+    }
+}
+
+void Overlay::position_view_toast(Rml::Element* element, uint8_t view) {
+    if (element == nullptr || mDocument == nullptr) {
+        return;
+    }
+
+    auto* context = mDocument->GetContext();
+    if (context == nullptr) {
+        return;
+    }
+
+    const auto dimensions = context->GetDimensions();
+    const auto viewport = dusk::coop::render::gridCellViewport(view);
+    constexpr float margin = 20.0f;
+    const float cellX = viewport.x * static_cast<float>(dimensions.x);
+    const float cellY = viewport.y * static_cast<float>(dimensions.y);
+    const float cellWidth = viewport.width * static_cast<float>(dimensions.x);
+
+    element->RemoveProperty(Rml::PropertyId::Right);
+    element->SetProperty(Rml::PropertyId::Left,
+        Rml::Property(cellX + margin, Rml::Unit::PX));
+    element->SetProperty(Rml::PropertyId::Top,
+        Rml::Property(cellY + margin, Rml::Unit::PX));
+    element->SetProperty(Rml::PropertyId::Width,
+        Rml::Property(std::max(0.0f, cellWidth - margin * 2.0f), Rml::Unit::PX));
+}
+
+void Overlay::update_view_toasts() {
+    auto& toasts = get_view_toasts();
+    const uint8_t viewCount = dusk::coop::render::worldDrawPassCount();
+
+    if (toasts.empty()) {
+        for (auto*& element : mViewToasts) {
+            remove_element(element);
+        }
+        return;
+    }
+
+    if (mViewToasts[0] == nullptr) {
+        mViewToastStartTime = clock::now();
+        for (uint8_t view = 0; view < viewCount && view < mViewToasts.size(); ++view) {
+            mViewToasts[view] = create_toast(mDocument, toasts.front());
+            if (mViewToasts[view] != nullptr) {
+                mViewToasts[view]->SetClass("view-notification", true);
+                position_view_toast(mViewToasts[view], view);
+            }
+        }
+    }
+
+    for (uint8_t view = 0; view < mViewToasts.size(); ++view) {
+        if (view >= viewCount) {
+            remove_element(mViewToasts[view]);
+            continue;
+        }
+        if (mViewToasts[view] == nullptr) {
+            mViewToasts[view] = create_toast(mDocument, toasts.front());
+            if (mViewToasts[view] != nullptr) {
+                mViewToasts[view]->SetClass("view-notification", true);
+            }
+        }
+        if (mViewToasts[view] != nullptr) {
+            position_view_toast(mViewToasts[view], view);
+        }
+    }
+
+    const float duration = std::chrono::duration<float>(toasts.front().duration).count();
+    const float elapsed =
+        std::chrono::duration<float>(clock::now() - mViewToastStartTime).count();
+    const float remaining = duration > 0.0f ? std::clamp(1.0f - elapsed / duration, 0.0f, 1.0f) : 0.0f;
+
+    for (auto* element : mViewToasts) {
+        if (element == nullptr) {
+            continue;
+        }
+        if (auto* progress = element->QuerySelector("progress")) {
+            progress->SetAttribute("value", remaining);
+        }
+        if (remaining == 0.0f) {
+            element->RemoveAttribute("open");
+        } else {
+            element->SetAttribute("open", "");
+        }
+    }
+
+    if (remaining == 0.0f) {
+        for (auto*& element : mViewToasts) {
+            remove_element(element);
+        }
+        toasts.pop_front();
     }
 }
 

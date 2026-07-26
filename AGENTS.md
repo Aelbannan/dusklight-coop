@@ -58,6 +58,21 @@ Each is `dusk::coop::<area>::` with `init()`, `reset()`, `tick()` lifecycle:
 | `difficulty` | Difficulty scaling |
 | `alink` | Per-player Link actor helpers (owner resolution) |
 
+### Per-viewport notifications
+
+The Aurora/RmlUi overlay supports notifications on every active co-op viewport:
+
+```cpp
+dusk::ui::push_toast_to_all_views({
+    .type = "warning",
+    .title = "Gather Up",
+    .content = "Gather up to go to the next room.",
+    .duration = std::chrono::seconds(4),
+});
+```
+
+This renders one copy in each split-screen cell and falls back to a normal full-screen toast in single-view mode. Include `dusk/ui/ui.hpp` when calling it.
+
 ### ScopedContext
 
 RAII class that sets `currentPlayer()`, `currentView()`, `currentEnemyTarget()` for the duration of a scope. Stack is asserted empty at frame boundaries — forgetting one or nesting incorrectly will crash in debug.

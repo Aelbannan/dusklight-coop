@@ -2,7 +2,9 @@
 
 #include "document.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstdint>
 
 namespace dusk::ui {
 
@@ -18,6 +20,8 @@ protected:
 
 private:
     void update_pipeline_progress();
+    void update_view_toasts();
+    void position_view_toast(Rml::Element* element, uint8_t view);
 
     Rml::Element* mFpsCounter = nullptr;
     Rml::Element* mPipelineProgress = nullptr;
@@ -29,7 +33,9 @@ private:
     Rml::Element* mSpeedrunTimer = nullptr;
     Rml::Element* mSpeedrunRta = nullptr;
     Rml::Element* mSpeedrunIgt = nullptr;
+    std::array<Rml::Element*, 8> mViewToasts{};
     clock::time_point mCurrentToastStartTime;
+    clock::time_point mViewToastStartTime;
     clock::time_point mMenuNotificationStartTime;
     clock::time_point mPipelineProgressStartTime;
     Uint64 mFpsLastUpdate = 0;

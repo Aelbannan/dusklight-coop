@@ -66,6 +66,7 @@ void restyle_scope(DocumentScope scope) {
 }
 
 std::deque<Toast> sToasts;
+std::deque<Toast> sViewToasts;
 bool sMenuNotificationRequested = false;
 
 // Sometimes gamepads can connect and disconnect quickly, especially during
@@ -104,6 +105,8 @@ void shutdown() noexcept {
     unregister_icon_texture_provider();
     sDocumentStack.clear();
     sPassiveDocuments.clear();
+    sToasts.clear();
+    sViewToasts.clear();
     sConnectedGamepads.clear();
     input::reset_input_state();
     input::release_input_block();
@@ -459,6 +462,14 @@ Insets safe_area_insets(Rml::Context* context) noexcept {
 
 void push_toast(Toast toast) noexcept {
     sToasts.push_back(std::move(toast));
+}
+
+void push_toast_to_all_views(Toast toast) noexcept {
+    sViewToasts.push_back(std::move(toast));
+}
+
+std::deque<Toast>& get_view_toasts() noexcept {
+    return sViewToasts;
 }
 
 std::vector<std::unique_ptr<Document>>& get_document_stack() noexcept {

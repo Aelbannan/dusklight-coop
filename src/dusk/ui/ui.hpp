@@ -104,7 +104,11 @@ Insets safe_area_insets(Rml::Context* context) noexcept;
 std::vector<std::unique_ptr<Document>>& get_document_stack() noexcept;
 
 void push_toast(Toast toast) noexcept;
+// Show one copy of the toast in every active co-op viewport. In single-view
+// mode this behaves like a normal full-screen toast.
+void push_toast_to_all_views(Toast toast) noexcept;
 std::deque<Toast>& get_toasts() noexcept;
+std::deque<Toast>& get_view_toasts() noexcept;
 void show_menu_notification() noexcept;
 bool consume_menu_notification_request() noexcept;
 
