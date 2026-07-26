@@ -287,10 +287,10 @@ bool applyInputSnapshot(daAlink_c* link) {
     const PlayerId id = ownerOf(link);
     const auto& snap = input::snapshot(id);
     link->mStickValue = stickMagnitude(snap.leftStick.x, snap.leftStick.y);
-    // Keep the engine's forward/up convention while preserving the movement
-    // handedness used by daAlink's sin/cos move calculation.
+    // Match JUTGamePad::CStick::update() and the vanilla PAD_1 path.  The
+    // previous negation of X mirrored left/right movement.
     link->mStickAngle =
-        static_cast<s16>(cM_atan2s(-snap.leftStick.x, -snap.leftStick.y) - static_cast<s16>(-0x8000));
+        static_cast<s16>(cM_atan2s(snap.leftStick.x, -snap.leftStick.y) - static_cast<s16>(-0x8000));
 
     auto mapTrig = [&](u16 padBit, daAlink_c::daAlink_ITEM_BTN btn) {
         if (snap.buttonsPressed & padBit) {
