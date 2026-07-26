@@ -1439,6 +1439,7 @@ set(DUSK_FILES
         src/dusk/coop/coop_difficulty.cpp
         src/dusk/coop/coop_drops.cpp
         src/dusk/coop/coop_enemy.cpp
+        src/dusk/coop/coop_event.cpp
         src/dusk/coop/coop_forms.cpp
         src/dusk/coop/coop_gate_h_selfcheck.cpp
         src/dusk/coop/coop_horses.cpp

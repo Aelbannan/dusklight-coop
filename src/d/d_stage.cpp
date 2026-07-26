@@ -23,6 +23,7 @@
 #include <cstring>
 
 #include "dusk/logging.h"
+#include "dusk/coop/coop_debug.h"
 #include "helpers/string.hpp"
 #if TARGET_PC
 #include <format>
@@ -2883,6 +2884,11 @@ int dStage_changeScene(int i_exitId, f32 speed, u32 mode, s8 room_no, s16 angle,
         dKy_set_nexttime(15.0f * timeH);
     }
 
+#if TARGET_PC
+    dusk::coop::debug::logInfo(
+        "dStage_changeScene: exitID=%d stage=%s room=%d point=%d",
+        i_exitId, scls_info->mStage, (int)scls_info->mRoom, (int)scls_info->mStart);
+#endif
     dComIfGp_setNextStage(scls_info->mStage, scls_info->mStart, (s8)scls_info->mRoom, (s8)layer,
                           speed, mode, 1, wipe == 15 ? 0 : wipe, angle, 1, wipe_time);
     return 1;

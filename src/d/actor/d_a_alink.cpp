@@ -44,6 +44,8 @@
 #include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_event.h"
+#include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_hud.h"
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_player.h"
@@ -4619,47 +4621,57 @@ void daAlink_c::playerInit() {
     } else
 #endif
     {
+        int startDemoArg = -1;
         if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
-            mStartEventID = dComIfGp_evmng_startDemo(-1);
+            startDemoArg = -1;
         } else if (dComIfGp_getStartStagePoint() == -4) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD5);
+            startDemoArg = 0xD5;
         } else {
             if (getLastSceneMode() == 9) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD3);
+                startDemoArg = 0xD3;
             } else if (startMode == 10) {
-                if (startEvent != 0xFF) {
-                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-                } else {
-                    mStartEventID = dComIfGp_evmng_startDemo(0xCF);
-                }
+                startDemoArg = (startEvent != 0xFF) ? startEvent : 0xCF;
             } else if (startMode == 11) {
-                if (startEvent != 0xFF) {
-                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-                } else {
-                    mStartEventID = dComIfGp_evmng_startDemo(0xD0);
-                }
+                startDemoArg = (startEvent != 0xFF) ? startEvent : 0xD0;
             } else if (startMode == 6) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xCD);
+                startDemoArg = 0xCD;
             } else if (startMode == 7) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xCE);
+                startDemoArg = 0xCE;
             } else if (startMode == 8) {
-                if (startEvent != 0xFF) {
-                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-                } else {
-                    mStartEventID = dComIfGp_evmng_startDemo(0xD4);
-                }
+                startDemoArg = (startEvent != 0xFF) ? startEvent : 0xD4;
             } else if (startMode == 12) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xC9);
+                startDemoArg = 0xC9;
             } else if (getLastSceneMode() == 11) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xFF);
+                startDemoArg = 0xFF;
             } else if (getLastSceneMode() == 12) {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD1);
+                startDemoArg = 0xD1;
             } else {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                startDemoArg = startEvent;
             }
         }
 
-        dComIfGp_getPEvtManager()->orderStartDemo();
+#if TARGET_PC
+        // Defer start demo when co-op is active so all joined Links reach
+        // the entry anchor before the story cutscene begins.
+        if (dusk::coop::runtime().joinedPlayerCount > 1 &&
+            dusk::coop::event::deferStageEntry(startDemoArg, current.pos) !=
+                dusk::coop::event::INVALID_EVENT_TOKEN)
+        {
+            mStartEventID = 0xFF;
+            dusk::coop::debug::logInfo(
+                "daAlink_c::playerInit: deferred stage entry for P0 "
+                "startDemoArg=%d anchor=(%.0f,%.0f,%.0f)",
+                startDemoArg,
+                static_cast<double>(current.pos.x),
+                static_cast<double>(current.pos.y),
+                static_cast<double>(current.pos.z));
+        } else
+#endif
+        {
+            // Solo play or co-op disabled: order the start demo immediately.
+            mStartEventID = dComIfGp_evmng_startDemo(startDemoArg);
+            dComIfGp_getPEvtManager()->orderStartDemo();
+        }
     }
     field_0x2f94 = -1;
     field_0x2f95 = -1;
@@ -5153,7 +5165,13 @@ int daAlink_c::create() {
     // A proxy Link starts in a neutral wait state. Running the story start
     // procedure here would consume the authority player's transition state
     // and can put a not-yet-unlocked cutscene on the event queue.
-    int midna_prm = usesStoryStart ? setStartProcInit() : procWaitInit();
+    // Additionally, when stage entry is deferred for the party barrier,
+    // the authority Link also starts in a neutral wait state.
+    const bool stageEntryPending = usesStoryStart &&
+        dusk::coop::event::isStageEntryPending();
+    int midna_prm = (usesStoryStart && !stageEntryPending)
+                         ? setStartProcInit()
+                         : procWaitInit();
 #else
     int midna_prm = setStartProcInit();
 #endif
@@ -14014,11 +14032,51 @@ s16 daAlink_c::getSceneExitMoveAngle() {
 }
 
 int daAlink_c::checkSceneChange(int i_exitID) {
+#if TARGET_PC
+    // A deferred party exit must not enter any vanilla exit/demo procedure:
+    // even setting mExitID is enough for later Link logic to stop accepting
+    // movement.  Clear stale exit state and let the arbiter own the request
+    // until P1 commits it.
+    if (dusk::coop::event::isStageExitPending() ||
+        dusk::coop::event::isStageExitReadyToCommit() ||
+        dusk::coop::event::wasStageExitCommittedThisFrame()) {
+        mExitID = 0x3F;
+        mExitDirection = 0xFF;
+        mpScnChg = nullptr;
+        return 0;
+    }
+#endif
+
     BOOL var_r3 = mProcID != PROC_FOG_DEAD && (mGroundCode == 9 || checkNoResetFlg2(FLG2_FOG_FADE));
 
     if (mGroundCode == 4 || mGroundCode == 10) {
         i_exitID = 0x3F;
     }
+
+#if TARGET_PC
+    const bool coopPartyExit = dusk::coop::runtime().joinedPlayerCount > 1;
+    // Ground exits can reach this function before a scene-exit actor has a
+    // chance to submit a request.  Capture them before vanilla's compulsory
+    // event call, which otherwise freezes every Link while gathering.
+    if (coopPartyExit && mLinkAcch.ChkGroundHit() && i_exitID != 0x3F &&
+        mExitID == 0x3F &&
+        !dusk::coop::event::isStageExitPending() &&
+        !dusk::coop::event::isStageExitReadyToCommit() &&
+        !dComIfGp_isEnableNextStage()) {
+        dusk::coop::event::CapturedExitParams exitParams{};
+        exitParams.exitId = i_exitID;
+        exitParams.speed = 0.0f;
+        exitParams.mode = 0;
+        exitParams.roomNo = fopAcM_GetRoomNo(this);
+        exitParams.angle = shape_angle.y;
+        exitParams.param5 = -1;
+        exitParams.groundPath = true;
+        exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
+        exitParams.anchor = current.pos;
+        dusk::coop::event::deferStageExit(exitParams);
+        return 0;
+    }
+#endif
 
     if (var_r3 ||
         ((i_exitID != 0x3F || mExitID != 0x3F)
@@ -14112,8 +14170,12 @@ int daAlink_c::checkSceneChange(int i_exitID) {
             || mProcID == PROC_WOLF_DIG
             || mProcID == PROC_WOLF_DIG_THROUGH
             || field_0x3106 != 0
-            || dComIfGp_event_compulsory(this, NULL, -1))
-        {
+#if TARGET_PC
+            || (!coopPartyExit && dComIfGp_event_compulsory(this, NULL, -1))
+#else
+            || dComIfGp_event_compulsory(this, NULL, -1)
+#endif
+        ) {
             BOOL isScnChange = false;
 
             if (var_r3) {
@@ -14121,8 +14183,46 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                 mDemo.setDemoMode(daPy_demo_c::DEMO_FOG_DEAD_e);
             } else {
                 if (mExitID != 0x3F) {
+#if TARGET_PC
+                    // Gate the exit transition behind the co-op arbiter.
+                    const bool coopExitPending = dusk::coop::event::isStageExitPending();
+                    const bool coopExitCommitted = dusk::coop::event::isStageExitReadyToCommit();
+                    const bool isAuthority = dusk::coop::alink::isStoryAuthorityLink(this);
+
+                    if (coopExitPending || coopExitCommitted) {
+                        // Only the story authority Link may perform the
+                        // transition; non-authority Links suppress it.
+                        if (isAuthority && coopExitCommitted) {
+                            // Capture the exit params and let P1 commit them.
+                            dusk::coop::debug::logInfo(
+                                "checkSceneChange: P0 committing stage exit "
+                                "exitId=%d",
+                                (int)(mExitID & 0xFF));
+                            isScnChange = dStage_changeScene(
+                                mExitID & 0xFF, exit_speed, exit_mode,
+                                (int)fopAcM_GetRoomNo(this),
+                                shape_angle.y, -1);
+                        } else if (!isAuthority) {
+                            dusk::coop::debug::logInfo(
+                                "checkSceneChange: P%u suppressed exit "
+                                "(exitId=%d) pending=%d",
+                                static_cast<unsigned>(
+                                    dusk::coop::alink::resolveOwner(this)),
+                                (int)(mExitID & 0xFF),
+                                (int)coopExitPending);
+                        }
+                        // Fall-through: if pending, P1 suppresses too.
+                    } else {
+                        // No co-op exit in progress; normal vanilla path.
+                        isScnChange = dStage_changeScene(
+                            mExitID & 0xFF, exit_speed, exit_mode,
+                            (int)fopAcM_GetRoomNo(this),
+                            shape_angle.y, -1);
+                    }
+#else
                     isScnChange = dStage_changeScene(mExitID & 0xFF, exit_speed, exit_mode,
                                                      (int)fopAcM_GetRoomNo(this), shape_angle.y, -1);
+#endif
                     if (isScnChange) {
                         onNoResetFlg2(FLG2_SCENE_CHANGE_START);
                         if (mpScnChg != NULL && fopAcM_GetName(mpScnChg) == fpcNm_SCENE_EXIT_e) {
@@ -14134,6 +14234,46 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                         field_0x2f58 = dPath_GetRoomPath(mExitDirection, fopAcM_GetRoomNo(this));
                     }
                 } else {
+#if TARGET_PC
+                    // Ground exits are checked by Link before daScex_c can
+                    // submit its request, so they need their own barrier
+                    // capture here.  Otherwise one Link can bypass the party
+                    // gate through dStage_changeSceneExitId().
+                    if (dusk::coop::runtime().joinedPlayerCount > 1) {
+                        bool exitPending = dusk::coop::event::isStageExitPending();
+                        bool exitReady = dusk::coop::event::isStageExitReadyToCommit();
+                        const bool exitCommittedThisFrame =
+                            dusk::coop::event::wasStageExitCommittedThisFrame();
+
+                        if (!exitPending && !exitReady && !exitCommittedThisFrame &&
+                            !dComIfGp_isEnableNextStage()) {
+                            dusk::coop::event::CapturedExitParams exitParams{};
+                            exitParams.exitId = i_exitID;
+                            exitParams.speed = exit_speed;
+                            exitParams.mode = exit_mode;
+                            exitParams.roomNo = fopAcM_GetRoomNo(this);
+                            exitParams.angle = shape_angle.y;
+                            exitParams.param5 = -1;
+                            exitParams.groundPath = true;
+                            exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
+                            exitParams.anchor = current.pos;
+                            dusk::coop::event::deferStageExit(exitParams);
+                            exitPending = dusk::coop::event::isStageExitPending();
+                            exitReady = dusk::coop::event::isStageExitReadyToCommit();
+                        }
+
+                        if (exitPending || exitReady || exitCommittedThisFrame) {
+                            dusk::coop::debug::logInfo(
+                                "checkSceneChange: ground exit held by party barrier "
+                                "owner=P%u pending=%d ready=%d committedThisFrame=%d",
+                                static_cast<unsigned>(
+                                    dusk::coop::alink::resolveOwner(this)),
+                                exitPending ? 1 : 0, exitReady ? 1 : 0,
+                                exitCommittedThisFrame ? 1 : 0);
+                            return 0;
+                        }
+                    }
+#endif
                     isScnChange = dStage_changeSceneExitId(mLinkAcch.m_gnd, exit_speed, exit_mode,
                                                            (int)fopAcM_GetRoomNo(this), shape_angle.y);
                     field_0x2f58 = dPath_GetRoomPath(dComIfG_Bgsp().GetRoomPathId(mLinkAcch.m_gnd),
@@ -18049,6 +18189,79 @@ int daAlink_c::procGoronRideWait() {
 
 int daAlink_c::execute() {
     loadModelDVD();
+
+#if TARGET_PC
+    // Check for committed stage entry: P1 deferred the start demo until
+    // all joined Links are near the entry anchor.  When the arbiter
+    // commits, order the start demo now.
+    if (dusk::coop::event::isStageEntryReadyToCommit()) {
+        if (dusk::coop::alink::isStoryAuthorityLink(this)) {
+            const int eventId = dusk::coop::event::commitStageEntryNow();
+            if (eventId != 0xFF) {
+                mStartEventID = dComIfGp_evmng_startDemo(eventId);
+                dComIfGp_getPEvtManager()->orderStartDemo();
+                dusk::coop::debug::logInfo(
+                    "daAlink_c::execute: committed stage entry eventId=%d "
+                    "mStartEventID=%d",
+                    eventId, mStartEventID);
+            }
+        }
+    }
+
+    // Check for committed stage exit: P1 performs the transition.
+    if (dusk::coop::event::isStageExitReadyToCommit()) {
+        if (dusk::coop::alink::isStoryAuthorityLink(this)) {
+            dusk::coop::debug::logInfo(
+                "daAlink_c::execute: committing stage exit");
+            dusk::coop::event::commitStageExitNow();
+        }
+    }
+
+    // Check for committed party story event: P1 re-orders the vanilla event.
+    if (dusk::coop::event::isPartyStoryReadyToCommit()) {
+        if (dusk::coop::alink::isStoryAuthorityLink(this)) {
+            const auto cr = dusk::coop::event::commitPartyStoryNow();
+            if (cr.valid) {
+                // Find the NPC actor by process ID.
+                fopAc_ac_c* npc = fopAcM_SearchByID(cr.params.npcProcId);
+                if (npc == nullptr) {
+                    // NPC may have been recreated; try finding by profile name.
+                    npc = fopAcM_SearchByName(cr.params.profName);
+                }
+                if (npc != nullptr) {
+                    // P1 orders the vanilla event directly (bypassing the
+                    // PartyStory classifier) with itself as request actor.
+                    // This preserves flow authority and presentation focus.
+                    dComIfGp_getEvent()->order(
+                        dEvt_type_TALK_e, 0x1EA, 0, 0x14F,
+                        this,            // P1 as request actor
+                        npc,             // NPC as target actor
+                        -1,              // event ID (resolved by event manager)
+                        0xFF);
+                    dusk::coop::event::markPartyStoryRunning(cr.token);
+                    dusk::coop::event::setActivePartyStoryToken(cr.token);
+                    dusk::coop::debug::logInfo(
+                        "daAlink_c: committed party story event "
+                        "profName=0x%04x token=%u",
+                        static_cast<unsigned>(cr.params.profName),
+                        static_cast<unsigned>(cr.token));
+                } else {
+                    // NPC not found — clean up arbiter state so the event
+                    // slot doesn't remain orphaned in Running state.
+                    dusk::coop::event::cancel(cr.token);
+                    dusk::coop::event::setActivePartyStoryToken(
+                        dusk::coop::event::INVALID_EVENT_TOKEN);
+                    dusk::coop::debug::logWarn(
+                        "daAlink_c: party story NPC not found for "
+                        "profName=0x%04x procId=%d — cancelled token=%u",
+                        static_cast<unsigned>(cr.params.profName),
+                        static_cast<int>(cr.params.npcProcId),
+                        static_cast<unsigned>(cr.token));
+                }
+            }
+        }
+    }
+#endif
 
     if (checkEndResetFlg0(ERFLG0_BOSS_ROOM_WAIT) && getMidnaActor() != NULL) {
         getMidnaActor()->onNoServiceWait();

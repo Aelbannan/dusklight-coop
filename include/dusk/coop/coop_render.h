@@ -61,6 +61,26 @@ void releaseCaptureSlot(ViewId view);
 // Free all capture slot buffers.
 void releaseAllCaptureSlots();
 
+// ── Presentation override for initiator-owned events ──────────────────────
+//
+// During an initiator-owned conversation the render path must present a
+// single full-screen view from the initiator's camera instead of the
+// hard-coded camera 0.  pushConversationPresentation() saves the current
+// multi-view layout and activates the override; popConversationPresentation()
+// restores the prior state.  resolveCamera() returns the initiator's camera
+// while the override is active (falling back to camera 0 if the secondary
+// camera is still null).
+//
+// Called from coop_event.cpp conversation lifecycle hooks.
+
+void pushConversationPresentation(ViewId owner);
+void popConversationPresentation();
+bool isConversationPresentationActive();
+ViewId getConversationPresentationOwner();
+
+// Diagnostics: frame count since override was pushed.
+uint32_t presentationOverrideFrameCount();
+
 // Normalized viewport rectangle for one grid cell (for HUD positioning).
 // Returns {0,0,1,1} when only one view is active.
 struct ViewportRect {

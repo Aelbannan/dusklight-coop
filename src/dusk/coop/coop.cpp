@@ -9,6 +9,7 @@
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_difficulty.h"
 #include "dusk/coop/coop_drops.h"
+#include "dusk/coop/coop_event.h"
 #include "m_Do/m_Do_lib.h"
 #include "dusk/coop/coop_enemy.h"
 #include "dusk/coop/coop_forms.h"
@@ -67,6 +68,7 @@ void init() {
     enemy::init();
     difficulty::init();
     drops::init();
+    event::init();
     forms::init();
     horses::init();
     attention::init();
@@ -92,6 +94,7 @@ void reset() {
     enemy::reset();
     difficulty::reset();
     drops::reset();
+    event::reset();
     forms::reset();
     horses::reset();
     debug::reset();
@@ -109,6 +112,7 @@ void tick() {
     forms::tick();
     horses::tick();
     attention::tick();
+    event::tick();
     enemy::tick();
     hud::tick();
     combat::endFrame();

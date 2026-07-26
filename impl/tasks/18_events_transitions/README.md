@@ -12,6 +12,7 @@ Implement Player 0 authority for story events, dialogue, doors, and stage transi
 
 ## Sub-tasks
 
+- [x] Step 0: Transition/event inventory + debug instrumentation (see AUTHORITY_CODE_MAP.md)
 - [ ] Enforce Player-0 authority for transitions (doors, warps, save prompts, story events)
 - [ ] Implement non-authority trigger behavior (local prompt, prevent spam)
 - [ ] Implement event start barrier (freeze secondaries, hide/reposition, switch to full-screen camera)

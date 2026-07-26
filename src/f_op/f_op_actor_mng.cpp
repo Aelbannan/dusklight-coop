@@ -22,6 +22,7 @@
 #include "d/d_item.h"
 #include "d/d_path.h"
 #include "d/d_s_play.h"
+#include "d/d_com_inf_game.h"
 #include "d/d_debug_viewer.h"
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
@@ -31,7 +32,12 @@
 
 #if TARGET_PC
 #include "dusk/coop/coop.h"
+#include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_drops.h"
+#include "dusk/coop/coop_event.h"
+#include "dusk/coop/coop_event_bridge.h"
 #include "dusk/coop/coop_render.h"
 namespace {
 bool g_coopGateEnemyDrop = false;
@@ -1107,13 +1113,118 @@ s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
 
 void* event_second_actor(u16 i_flag) {
     (void)i_flag;
+#if TARGET_PC
+    // Co-op fix: Use the currently active player from ScopedContext if
+    // available, otherwise fall back to P1.  This ensures that OtherEvent
+    // orders from NPCs/tags correctly identify the interacting player as
+    // the "other" participant, instead of always defaulting to P1.
+    const dusk::coop::PlayerId ctxPlayer = dusk::coop::currentPlayer();
+    fopAc_ac_c* link = dusk::coop::getPlayerActor(ctxPlayer);
+    if (ctxPlayer < dusk::coop::MAX_LOCAL_PLAYERS && link != nullptr) {
+        return link;
+    }
+#endif
     return dComIfGp_getPlayer(0);
 }
 
 s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_priority, u16 i_flag) {
+#if TARGET_PC
+    // Capture conversation metadata BEFORE the vanilla order check, so
+    // initiator/target info is available for logging even when gated.
+    // The actual trackConversation() call only fires AFTER the vanilla
+    // order succeeds (see below).
+    //
+    // i_actorA is the daAlink_c* that called this — use ownerOf() to
+    // resolve the initiator directly (no distance heuristic needed).
+    const s16 profName = i_actorB ? fopAcM_GetProfName(i_actorB) : 0;
+    const char* actorName = i_actorB ? dStage_getName(profName, -1) : "NULL";
+
+    // Stage/room context
+    const char* stageName = dComIfGp_getStartStageName();
+    if (!stageName || !stageName[0]) stageName = "?";
+    const s8 roomNo = i_actorB ? fopAcM_GetRoomNo(i_actorB) : -1;
+
+    // Event info from the target NPC
+    u16 rawEventId = 0;
+    u8 rawMapToolId = 0xFF;
+    if (i_actorB) {
+        rawEventId = i_actorB->eventInfo.getEventId();
+        rawMapToolId = i_actorB->eventInfo.getMapToolId();
+    }
+
+    // Resolve the initiator from the requesting Link actor.
+    // i_actorA is the daAlink_c* that called this.  Rather than
+    // including the full daAlink_c definition (heavy header), find
+    // the player by matching the actor pointer against all joined
+    // Links.  Fall back to the distance-based heuristic (closest to
+    // the target NPC) if the pointer match fails.
+    dusk::coop::PlayerId initiator = 0;
+    if (i_actorA) {
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            if (dusk::coop::getPlayerActor(pid) == i_actorA) {
+                initiator = pid;
+                break;
+            }
+        }
+    }
+    // If pointer-match failed, use distance-based fallback.
+    if (initiator == 0 && i_actorB) {
+        f32 closestDist = 1e9f;
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
+            if (link == nullptr) continue;
+            const f32 d = link->current.pos.absXZ(
+                i_actorB->current.pos);
+            if (d < closestDist) {
+                closestDist = d;
+                initiator = pid;
+            }
+        }
+    }
+
+    dusk::coop::event::CapturedConversationParams convParams;
+    convParams.profName = profName;
+    convParams.eventId = rawEventId;
+    convParams.mapToolId = rawMapToolId;
+    if (stageName) {
+        std::strncpy(convParams.stageName, stageName,
+                     sizeof(convParams.stageName) - 1);
+        convParams.stageName[sizeof(convParams.stageName) - 1] = '\0';
+    }
+    convParams.roomNo = roomNo;
+    convParams.anchor = i_actorB ? i_actorB->current.pos : cXyz{};
+    convParams.initiator = initiator;
+    convParams.npcProcId = i_actorB
+        ? fopAcM_GetID(i_actorB)
+        : fpcM_ERROR_PROCESS_ID_e;
+    convParams.requestActor = dComIfGp_getPlayer(0);  // P1 for setParam compat
+    convParams.targetActor = i_actorB;
+
+    // Log the candidate for discovery.
+    dusk_coop_logPartyStoryCandidate(profName, rawEventId, stageName, roomNo);
+
+    dusk::coop::debug::logInfo(
+        "fopAcM_orderTalkEvent: initiator=P%u(ownerOf) "
+        "target=%s profName=0x%04x eventId=%u stage=%s room=%d",
+        static_cast<unsigned>(initiator),
+        actorName,
+        static_cast<unsigned>(profName),
+        static_cast<unsigned>(rawEventId),
+        stageName ? stageName : "?",
+        static_cast<int>(roomNo));
+#endif
+
     if (!dComIfGp_getEvent()->isOrderOK() &&
         (!(i_flag & 0x400) || !dComIfGp_getEvent()->isChangeOK(i_actorA)))
     {
+#if TARGET_PC
+        dusk::coop::debug::logInfo(
+            "fopAcM_orderTalkEvent: order rejected by vanilla — not tracking");
+#endif
         return 0;
     }
 
@@ -1121,8 +1232,32 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
         i_priority = 0x1FF;
     }
 
-    return dComIfGp_event_order(dEvt_type_TALK_e, i_priority, i_flag, 0x14F, i_actorA, i_actorB, -1,
-                                -1);
+    const s32 result = dComIfGp_event_order(
+        dEvt_type_TALK_e, i_priority, i_flag, 0x14F,
+        i_actorA, i_actorB, -1, -1);
+
+#if TARGET_PC
+    // Only track the conversation if the vanilla order actually succeeded.
+    if (result != 0) {
+        const dusk::coop::event::EventToken convToken =
+            dusk::coop::event::trackConversation(convParams);
+        if (convToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderTalkEvent: conversation tracked token=%u "
+                "initiator=P%u profName=0x%04x eventId=%u",
+                static_cast<unsigned>(convToken),
+                static_cast<unsigned>(initiator),
+                static_cast<unsigned>(profName),
+                static_cast<unsigned>(rawEventId));
+        }
+    } else {
+        dusk::coop::debug::logInfo(
+            "fopAcM_orderTalkEvent: dComIfGp_event_order returned 0 "
+            "— not tracking conversation");
+    }
+#endif
+
+    return result;
 }
 
 s32 fopAcM_orderTalkItemBtnEvent(u16 i_eventType, fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB,
@@ -1141,9 +1276,167 @@ s32 fopAcM_orderTalkItemBtnEvent(u16 i_eventType, fopAc_ac_c* i_actorA, fopAc_ac
 }
 
 s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
+#if TARGET_PC
+    // DATA LOSS: initiator is hardcoded to P1 (dComIfGp_getPlayer(0))
+    // instead of using the Link that actually triggered the interaction.
+    // The target actor i_actor is preserved.
+    const s16 profName = i_actor ? fopAcM_GetProfName(i_actor) : 0;
+    const char* actorName = i_actor ? dStage_getName(profName, -1) : "NULL";
+    dusk::coop::debug::logInfo(
+        "fopAcM_orderSpeakEvent: initiator=PLAYER_0(hardcoded) "
+        "target=%s profName=0x%04x prio=%d flag=0x%04x",
+        actorName,
+        static_cast<unsigned>(profName),
+        i_priority, i_flag);
+
+    // Stage/room discriminator context
+    // NOTE: The game uses dComIfGp_getStartStageName() as a proxy for the
+    // current stage name; the stage-data object (dStage_stageDt_c) does not
+    // have a getName() method.
+    const char* stageName = dComIfGp_getStartStageName();
+    if (!stageName || !stageName[0]) {
+        stageName = "?";
+    }
+    const s8 roomNo = i_actor ? fopAcM_GetRoomNo(i_actor) : -1;
+
+    // PartyStory classifier check: this discriminates by event+stage+room,
+    // NOT by broad profile type.  See dusk_coop_isPartyStoryEvent for details.
+    //
+    // Try to get a real event ID from the NPC's event info.
+    u16 rawEventId = 0;
+    u8 rawMapToolId = 0xFF;
+    if (i_actor) {
+        rawEventId = i_actor->eventInfo.getEventId();
+        rawMapToolId = i_actor->eventInfo.getMapToolId();
+    }
+
+    // Track whether a non-PartyStory conversation should be recorded
+    // after the vanilla order validates.  Declared here so it lives long
+    // enough; only populated in the else branch below.
+    bool shouldTrackConversation = false;
+    dusk::coop::PlayerId convInitiator = 0;
+    dusk::coop::event::CapturedConversationParams convParams{};
+
+    if (dusk_coop_isPartyStoryEvent(profName, rawEventId, stageName, roomNo)) {
+        dusk::coop::event::CapturedPartyStoryParams params;
+        params.profName = profName;
+        params.eventId = rawEventId;
+        params.mapToolId = rawMapToolId;
+        if (stageName) {
+            std::strncpy(params.stageName, stageName, sizeof(params.stageName) - 1);
+            params.stageName[sizeof(params.stageName) - 1] = '\0';
+        }
+        params.roomNo = roomNo;
+        params.anchor = i_actor ? i_actor->current.pos : cXyz{};
+        params.radius = 450.0f;
+        params.npcProcId = i_actor ? fopAcM_GetID(i_actor) : fpcM_ERROR_PROCESS_ID_e;
+
+        // Find the closest joined Link as the initiator.
+        params.initiator = 0;
+        f32 closestDist = 1e9f;
+        for (dusk::coop::PlayerId pid = 0; pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
+            if (link == nullptr) continue;
+            const f32 d = link->current.pos.absXZ(i_actor ? i_actor->current.pos : cXyz{});
+            if (d < closestDist) {
+                closestDist = d;
+                params.initiator = pid;
+            }
+        }
+
+        // Log the candidate regardless of arbiter slot availability.
+        dusk_coop_logPartyStoryCandidate(
+            profName, rawEventId, stageName, roomNo);
+
+        const dusk::coop::event::EventToken token =
+            dusk::coop::event::deferPartyStory(params);
+        if (token != dusk::coop::event::INVALID_EVENT_TOKEN) {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: gated as PartyStory token=%u "
+                "initiator=P%u profName=0x%04x eventId=%u stage=%s room=%d",
+                static_cast<unsigned>(token),
+                static_cast<unsigned>(params.initiator),
+                static_cast<unsigned>(profName),
+                static_cast<unsigned>(rawEventId),
+                stageName ? stageName : "?",
+                static_cast<int>(roomNo));
+            // Suppress the vanilla event order — P1 will re-order when
+            // the arbiter commits.
+            return 0;
+        } else {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: PartyStory request rejected "
+                "(no arbiter slot) — falling through to vanilla path");
+        }
+        // Fall through to vanilla path if arbiter couldn't accept.
+    } else {
+        // Not a recognized PartyStory event, but log as candidate for
+        // future discovery (with stage/room/eventId context).
+        dusk_coop_logPartyStoryCandidate(
+            profName, rawEventId, stageName, roomNo);
+
+        // --- Step 5: Capture conversation metadata and route through arbiter ---
+        // Find the closest joined Link as the real initiator.
+        // This fixes the player-0 attribution while keeping the actual event
+        // order functional (P1 still starts/arbitrates the global event).
+        //
+        // IMPORTANT: The actual trackConversation() call is deferred until
+        // AFTER the vanilla order succeeds (see below), so we don't leak
+        // a tracked conversation when the vanilla order is rejected.
+        f32 closestDist = 1e9f;
+        for (dusk::coop::PlayerId pid = 0; pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
+            if (link == nullptr) continue;
+            const f32 d = link->current.pos.absXZ(i_actor ? i_actor->current.pos : cXyz{});
+            if (d < closestDist) {
+                closestDist = d;
+                convInitiator = pid;
+            }
+        }
+
+        // Find the request actor: use P1 for compatibility with setParam
+        // PtT/PtI talk-partner logic.
+        fopAc_ac_c* requestActor = dComIfGp_getPlayer(0);
+
+        shouldTrackConversation = true;
+        convParams.profName = profName;
+        convParams.eventId = rawEventId;
+        convParams.mapToolId = rawMapToolId;
+        if (stageName) {
+            std::strncpy(convParams.stageName, stageName,
+                         sizeof(convParams.stageName) - 1);
+            convParams.stageName[sizeof(convParams.stageName) - 1] = '\0';
+        }
+        convParams.roomNo = roomNo;
+        convParams.anchor = i_actor ? i_actor->current.pos : cXyz{};
+        convParams.initiator = convInitiator;
+        convParams.npcProcId = i_actor
+            ? fopAcM_GetID(i_actor)
+            : fpcM_ERROR_PROCESS_ID_e;
+        convParams.requestActor = requestActor;
+        convParams.targetActor = i_actor;
+    }
+
+    // --- Vanilla order path ---
+    // Keep the TARGET_PC block open so that shouldTrackConversation and
+    // convParams remain in scope for the deferred tracking below.
+#else
+    // Non-PC build: no tracking variables exist.
+    const bool shouldTrackConversation = false;
+#endif  // TARGET_PC
+
     if (!dComIfGp_getEvent()->isOrderOK() &&
         (!(i_flag & 0x400) || !dComIfGp_getEvent()->isChangeOK(i_actor)))
     {
+#if TARGET_PC
+        if (shouldTrackConversation) {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: order rejected by vanilla — "
+                "not tracking conversation");
+        }
+#endif
         return 0;
     }
 
@@ -1151,8 +1444,37 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
         i_priority = 0x1EA;
     }
 
-    return dComIfGp_event_order(dEvt_type_TALK_e, i_priority, i_flag, 0x14F, dComIfGp_getPlayer(0),
-                                i_actor, -1, -1);
+    // Use P1 as request actor for compatibility with setParam talk-partner
+    // logic.  The real initiator is tracked in the arbiter metadata.
+    const s32 result = dComIfGp_event_order(
+        dEvt_type_TALK_e, i_priority, i_flag, 0x14F,
+        dComIfGp_getPlayer(0), i_actor, -1, -1);
+
+#if TARGET_PC
+    // Only track the conversation if the vanilla order actually succeeded
+    // AND we captured conversation params (not a PartyStory event).
+    if (result != 0 && shouldTrackConversation) {
+        const dusk::coop::event::EventToken convToken =
+            dusk::coop::event::trackConversation(convParams);
+        if (convToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: conversation tracked token=%u "
+                "initiator=P%u profName=0x%04x eventId=%u stage=%s room=%d",
+                static_cast<unsigned>(convToken),
+                static_cast<unsigned>(convInitiator),
+                static_cast<unsigned>(profName),
+                static_cast<unsigned>(rawEventId),
+                stageName ? stageName : "?",
+                static_cast<int>(roomNo));
+        }
+    } else if (result == 0 && shouldTrackConversation) {
+        dusk::coop::debug::logInfo(
+            "fopAcM_orderSpeakEvent: dComIfGp_event_order returned 0 "
+            "— not tracking conversation");
+    }
+#endif  // TARGET_PC
+
+    return result;
 }
 
 s32 fopAcM_orderDoorEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_priority, u16 i_flag) {

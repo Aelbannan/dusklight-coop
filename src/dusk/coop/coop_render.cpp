@@ -4,6 +4,7 @@
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_camera.h"
 #include "dusk/coop/coop_debug.h"
+#include "dusk/coop/coop_event.h"
 #include "dusk/coop/coop_forms.h"
 
 #include "SSystem/SComponent/c_angle.h"
@@ -38,6 +39,15 @@ namespace {
 uint64_t g_lastHash = 0;
 uint32_t g_simTicks = 0;
 uint32_t g_lastPassCount = 1;
+
+// ── Presentation override state ────────────────────────────────────────────
+// Active while an initiator-owned conversation is running.
+static struct {
+    bool active = false;
+    ViewId owner = 0;
+    uint8_t savedViewCount = 0;
+    uint32_t frameCount = 0;
+} s_presentationOverride;
 
 #if TARGET_PC
 
@@ -337,6 +347,7 @@ void init() {
     g_lastHash = 0;
     g_simTicks = 0;
     g_lastPassCount = 1;
+    s_presentationOverride = {};
 }
 
 void reset() {
@@ -348,6 +359,10 @@ void beginFrame() {}
 
 void endFrame() {
     g_lastHash = computeFrameStateHash();
+    // Track frame count while presentation override is active (diagnostics).
+    if (s_presentationOverride.active) {
+        ++s_presentationOverride.frameCount;
+    }
 }
 
 void noteSimulationTick() {
@@ -358,10 +373,18 @@ void noteSimulationTick() {
 
 uint8_t worldDrawPassCount() {
 #if TARGET_PC
+    // Presentation override: initiator-owned conversations always render
+    // full-screen from the initiator's camera.  Activate on push, not only
+    // after dComIfGp_event_runCheck(), to prevent split-screen grid rendering
+    // between the event order and the first event-running frame.
+    if (s_presentationOverride.active) {
+        return 1;
+    }
+
     // Event cameras/cutscenes are authored for the vanilla single-view
     // pipeline. Rendering them once also avoids duplicating demo actors and
     // fullscreen effects into the split-screen capture grid.
-    if (dComIfGp_event_runCheck()) {
+    if (dComIfGp_event_runCheck() && !event::hasWaitingForPartyEvent()) {
         return 1;
     }
 #endif
@@ -375,7 +398,8 @@ bool isMultiViewActive() {
 }
 
 dDlst_window_c* resolveWindow(ViewId view) {
-    if (!isMultiViewActive()) {
+    if (s_presentationOverride.active || !isMultiViewActive()) {
+        (void)view;
         return dComIfGp_getWindow(0);
     }
     COOP_ASSERT(view < MAX_LOCAL_VIEWS);
@@ -383,6 +407,24 @@ dDlst_window_c* resolveWindow(ViewId view) {
 }
 
 camera_process_class* resolveCamera(ViewId view) {
+    // Presentation override: use the initiator's camera instead of camera 0.
+    // This ensures the event's full-screen pass uses the right point-of-view
+    // during initiator-owned conversations.
+    if (s_presentationOverride.active) {
+        camera_class* initiatorCam = getCameraProcess(s_presentationOverride.owner);
+        if (initiatorCam != nullptr) {
+            return reinterpret_cast<camera_process_class*>(initiatorCam);
+        }
+        // Secondary camera may be null if it hasn't finished async creation yet.
+        // When worldDrawPassCount() returns 1 during override, view is always 0,
+        // but guard against a stale override with a null owner camera anyway.
+        debug::logWarn(
+            "resolveCamera: presentation override active but owner=view%u "
+            "camera null, falling back to camera 0",
+            static_cast<unsigned>(s_presentationOverride.owner));
+        // Fall through to camera 0 rather than entering the multi-view branch.
+        return dComIfGp_getCamera(0);
+    }
     if (isMultiViewActive()) {
         if (camera_class* cam = getCameraProcess(view)) {
             return reinterpret_cast<camera_process_class*>(cam);
@@ -621,6 +663,97 @@ void releaseAllCaptureSlots() {
         freeCaptureSlot(slot);
     }
 #endif
+}
+
+// ── Presentation override ────────────────────────────────────────────────────
+
+void pushConversationPresentation(ViewId owner) {
+    if (owner >= MAX_LOCAL_VIEWS) {
+        debug::logWarn(
+            "pushConversationPresentation: invalid owner=%u, ignoring",
+            static_cast<unsigned>(owner));
+        return;
+    }
+    if (s_presentationOverride.active) {
+        if (s_presentationOverride.owner == owner) {
+            debug::logInfo(
+                "pushConversationPresentation: already active owner=view%u "
+                "frame=%u — ignoring duplicate push",
+                static_cast<unsigned>(owner),
+                static_cast<unsigned>(s_presentationOverride.frameCount));
+            return;
+        }
+        // Different owner — log and replace.  This shouldn't normally happen
+        // because conversations are deduplicated, but handle it gracefully.
+        debug::logWarn(
+            "pushConversationPresentation: replacing owner view%u -> view%u "
+            "frame=%u",
+            static_cast<unsigned>(s_presentationOverride.owner),
+            static_cast<unsigned>(owner),
+            static_cast<unsigned>(s_presentationOverride.frameCount));
+    }
+
+    // Save the current multi-view layout BEFORE changing it.
+    s_presentationOverride.savedViewCount = runtime().activeViewCount;
+    s_presentationOverride.owner = owner;
+    s_presentationOverride.active = true;
+    s_presentationOverride.frameCount = 0;
+
+    debug::logInfo(
+        "presentation: push owner=view%u savedViewCount=%u",
+        static_cast<unsigned>(owner),
+        static_cast<unsigned>(s_presentationOverride.savedViewCount));
+}
+
+void popConversationPresentation() {
+    if (!s_presentationOverride.active) {
+        debug::logInfo(
+            "popConversationPresentation: no active override — nothing to pop");
+        return;
+    }
+
+    const uint8_t savedCount = s_presentationOverride.savedViewCount;
+    const ViewId owner = s_presentationOverride.owner;
+    const uint32_t duration = s_presentationOverride.frameCount;
+
+    s_presentationOverride = {};
+
+    // Restore the saved activeViewCount.  If the saved count is stale (e.g.,
+    // because players joined/left during the event), clamp to current state.
+    uint8_t restoreCount = savedCount;
+    if (restoreCount < 1) restoreCount = 1;
+    if (restoreCount > MAX_LOCAL_VIEWS) restoreCount = MAX_LOCAL_VIEWS;
+    runtime().activeViewCount = restoreCount;
+
+    // Defense-in-depth: if the saved count was already 1 and the override
+    // was somehow pushed during a single-view scenario, the restore is a
+    // no-op but we log it for diagnostics.
+    if (savedCount != restoreCount) {
+        debug::logInfo(
+            "presentation: pop restored count clamped %u -> %u",
+            static_cast<unsigned>(savedCount),
+            static_cast<unsigned>(restoreCount));
+    }
+
+    debug::logInfo(
+        "presentation: pop owner=view%u duration=%u frames restoredViewCount=%u",
+        static_cast<unsigned>(owner),
+        static_cast<unsigned>(duration),
+        static_cast<unsigned>(restoreCount));
+}
+
+bool isConversationPresentationActive() {
+    return s_presentationOverride.active;
+}
+
+ViewId getConversationPresentationOwner() {
+    return s_presentationOverride.active
+               ? s_presentationOverride.owner
+               : static_cast<ViewId>(0);
+}
+
+uint32_t presentationOverrideFrameCount() {
+    return s_presentationOverride.frameCount;
 }
 
 }  // namespace dusk::coop::render

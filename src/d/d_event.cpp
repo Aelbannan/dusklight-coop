@@ -13,6 +13,12 @@
 #include "SSystem/SComponent/c_counter.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/coop_debug.h"
+#include "dusk/coop/coop_event.h"
+#include "dusk/coop/coop_render.h"
+#endif
+
 #include "helpers/string.hpp"
 
 namespace {
@@ -159,6 +165,22 @@ void dEvt_control_c::setParam(dEvt_order_c* order) {
     mEventId = order->mEventId;
     mHindFlag = order->mHindFlag;
 
+#if TARGET_PC
+    // Co-op fix: For TALK-type events (conversations), always set the talk
+    // partner (PtT) and item partner (PtI) to the target actor (NPC),
+    // regardless of which player is the requestor.
+    // Vanilla logic sets PtT/PtI to the requestor when the requestor is
+    // NOT P1.  This was designed for 4 Swords multiplayer where the
+    // "partner" is another player.  For Twilight Princess co-op, every
+    // conversation target is an NPC, so PtT/PtI must always point to the
+    // target actor.  Without this fix, NPC code that checks
+    // `dComIfGp_event_getTalkPartner() == self` breaks when P2+ talks.
+    if (order->mEventType == dEvt_type_TALK_e ||
+        order->mEventType == dEvt_type_CATCH_e) {
+        setPtT(order->mpTargetActor);
+        setPtI(order->mpTargetActor);
+    } else
+#endif
     if (dComIfGp_getPlayer(0) != order->mpRequestActor) {
         setPtT(order->mpRequestActor);
         setPtI(order->mpRequestActor);
@@ -584,6 +606,60 @@ int dEvt_control_c::endProc() {
     mUnkEventId = 255;
     mPreItemNo = dItemNo_NONE_e;
     dComIfGp_getEventManager().setStartDemo(-2);
+
+#if TARGET_PC
+    // If a PartyStory event was running, mark it finished so subsequent
+    // interactions can trigger new party events.
+    const dusk::coop::event::EventToken partyToken =
+        dusk::coop::event::getActivePartyStoryToken();
+    if (partyToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
+        const auto currentState = dusk::coop::event::state(partyToken);
+        if (currentState == dusk::coop::event::EventState::Running) {
+            dusk::coop::event::markPartyStoryFinished(partyToken);
+            dusk::coop::event::setActivePartyStoryToken(
+                dusk::coop::event::INVALID_EVENT_TOKEN);
+            dusk::coop::debug::logInfo(
+                "dEvt_control_c::endProc: party story finished token=%u",
+                static_cast<unsigned>(partyToken));
+        } else {
+            dusk::coop::event::setActivePartyStoryToken(
+                dusk::coop::event::INVALID_EVENT_TOKEN);
+            dusk::coop::debug::logWarn(
+                "dEvt_control_c::endProc: stale party story token=%u "
+                "state=%d — cleared",
+                static_cast<unsigned>(partyToken),
+                static_cast<int>(currentState));
+        }
+    }
+
+    // If a conversation event was running, mark it finished so rewards
+    // can be distributed to all joined players.
+    const dusk::coop::event::EventToken convToken =
+        dusk::coop::event::getActiveConversationToken();
+    if (convToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
+        const auto currentState = dusk::coop::event::state(convToken);
+        if (currentState == dusk::coop::event::EventState::Running) {
+            dusk::coop::event::markConversationFinished(convToken);
+            dusk::coop::debug::logInfo(
+                "dEvt_control_c::endProc: conversation finished token=%u",
+                static_cast<unsigned>(convToken));
+        } else {
+            // Stale token: the event slot was reclaimed without a proper
+            // markConversationFinished() call.  Pop the presentation override
+            // to ensure Step 6 cleanup occurs even when the event state
+            // machine loses track of the slot.
+            dusk::coop::event::setActiveConversationToken(
+                dusk::coop::event::INVALID_EVENT_TOKEN);
+            dusk::coop::render::popConversationPresentation();
+            dusk::coop::debug::logWarn(
+                "dEvt_control_c::endProc: stale conversation token=%u "
+                "state=%d — override popped, token cleared",
+                static_cast<unsigned>(convToken),
+                static_cast<int>(currentState));
+        }
+    }
+#endif
+
     return 1;
 }
 
