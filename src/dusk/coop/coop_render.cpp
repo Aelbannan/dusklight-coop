@@ -355,12 +355,21 @@ void noteSimulationTick() {
 // ── View counts and lookups ──────────────────────────────────────────────────
 
 uint8_t worldDrawPassCount() {
+#if TARGET_PC
+    // Event cameras/cutscenes are authored for the vanilla single-view
+    // pipeline. Rendering them once also avoids duplicating demo actors and
+    // fullscreen effects into the split-screen capture grid.
+    if (dComIfGp_event_runCheck()) {
+        return 1;
+    }
+#endif
+
     const uint8_t n = runtime().activeViewCount;
     return n < 1 ? 1 : n;
 }
 
 bool isMultiViewActive() {
-    return runtime().activeViewCount > 1;
+    return worldDrawPassCount() > 1;
 }
 
 dDlst_window_c* resolveWindow(ViewId view) {
