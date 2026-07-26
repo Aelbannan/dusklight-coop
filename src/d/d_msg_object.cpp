@@ -30,6 +30,8 @@
 #include "m_Do/m_Do_lib.h"
 
 #if TARGET_PC
+#include "d/d_lib.h"
+#include "dusk/coop/coop_dialogue_bridge.h"
 #include "dusk/menu_pointer.h"
 #include "dusk/settings.h"
 #include "dusk/version.hpp"
@@ -435,6 +437,12 @@ static void dummyStrings() {
 DUSK_GAME_DATA dMsgObject_HIO_c g_MsgObject_HIO_c;
 
 int dMsgObject_c::_execute() {
+#if TARGET_PC
+    // Route STControl stick reads to the dialogue owner's pad so that
+    // choice cursor movement and number input respond to the triggering
+    // player's controller.
+    STControl::setStickPadOverride(dusk_coop_resolve_dialogue_pad());
+#endif
     field_0x4c7 = 0;
     if (mpTalkHeap != NULL) {
         field_0x148 = mDoExt_setCurrentHeap(mpTalkHeap);
@@ -885,12 +893,12 @@ void dMsgObject_c::openProc() {
             }
             pRef->setStopFlag(0);
         } else {
-            if (mDoCPd_c::getTrigA(0)) {
+            if (mDoCPd_c::getTrigA(DLPAD())) {
                 if (getSelectCursorPosLocal() != 0xff) {
                     field_0x1a3 = 1;
                     field_0x16a = 9;
                 }
-            } else if (mDoCPd_c::getTrigB(0) && getSelectCancelPos() != 0) {
+            } else if (mDoCPd_c::getTrigB(DLPAD()) && getSelectCancelPos() != 0) {
                 setSelectCursorPosLocal(getSelectCancelPos() - 1);
                 uVar12 = 1;
                 field_0x1a3 = 2;
@@ -986,7 +994,7 @@ void dMsgObject_c::outnowProc() {
     jmessage_tReference* pRef =
         (jmessage_tReference*)mpRenProc->getReference();
     if (pRef->getCharAllAlphaRate() < 1.0f) {
-        if (mDoCPd_c::getTrigA(0)) {
+        if (mDoCPd_c::getTrigA(DLPAD())) {
             pRef->setCharAllAlphaRate(1.0f);
         } else {
             pRef->addCharAllAlphaRate();
@@ -1087,7 +1095,7 @@ void dMsgObject_c::continueProc() {
     {
         mpScrnDraw->arwAnimeMove();
     }
-    if (((mDoCPd_c::getTrigA(0) == 0 && mDoCPd_c::getTrigB(0) == 0) || !isHowlMessage()) &&
+    if (((mDoCPd_c::getTrigA(DLPAD()) == 0 && mDoCPd_c::getTrigB(DLPAD()) == 0) || !isHowlMessage()) &&
         isSend())
     {
         mpCtrl->render_synchronize();
@@ -1142,7 +1150,7 @@ void dMsgObject_c::selectProc() {
         pRef->setSelectPos(pointerChoice);
     }
 #endif
-    if (mDoCPd_c::getTrigA(0)
+    if (mDoCPd_c::getTrigA(DLPAD())
 #if TARGET_PC
         || pointerConfirm
 #endif
@@ -1150,7 +1158,7 @@ void dMsgObject_c::selectProc() {
         if (getSelectCursorPosLocal() != 0xff) {
             field_0x1a3 = 1;
         }
-    } else if (mDoCPd_c::getTrigB(0) &&
+    } else if (mDoCPd_c::getTrigB(DLPAD()) &&
                (((mpScrnDraw->isSelect() || getStatusLocal() == 20) && getSelectCancelPos() != 0)))
     {
         setSelectCursorPosLocal(getSelectCancelPos() - 1);
@@ -1217,7 +1225,7 @@ void dMsgObject_c::selectProc() {
     field_0x100->select_idx = pRef->getSelectPos();
     if (isSend() && field_0x1a3 != 0 && iVar8) {
         field_0x1a3 = 0;
-        if (mDoCPd_c::getTrigB(0)) {
+        if (mDoCPd_c::getTrigB(DLPAD())) {
             mSelectPushFlag = 2;
         } else {
             mSelectPushFlag = 1;
@@ -1247,7 +1255,7 @@ void dMsgObject_c::inputProc() {
     mpRefer->inputNumber();
     if (isSend()) {
         field_0x199 = 0;
-        if (mDoCPd_c::getTrigA(0)) {
+        if (mDoCPd_c::getTrigA(DLPAD())) {
                          /* dSv_event_tmp_flag_c::T_0080 - Kakariko Village - Put money in fundraiser box */
             BOOL iVar2 = dComIfGs_isTmpBit(dSv_event_tmp_flag_c::tempBitLabels[80]);
                                         /* dSv_event_flag_c::F_0802 - Faron Woods - Trill attacks when stealing */
@@ -1285,7 +1293,7 @@ void dMsgObject_c::inputProc() {
             }
             dMeter2Info_offShopTalkFlag();
             setStatusLocal(14);
-        } else if (mDoCPd_c::getTrigB(0)) {
+        } else if (mDoCPd_c::getTrigB(DLPAD())) {
             /* dSv_event_tmp_flag_c::T_0080 - Kakariko Village - Put money in fundraiser box */
             dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[80]);
             dMeter2Info_offShopTalkFlag();
@@ -1305,12 +1313,12 @@ void dMsgObject_c::finishProc() {
     {
         mpScrnDraw->dotAnimeMove();
     }
-    if (isHowlMessage() && ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck() && mDoCPd_c::getTrigB(0)) {
+    if (isHowlMessage() && ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck() && mDoCPd_c::getTrigB(DLPAD())) {
         dMsgObject_onMsgSend();
     }
     u8 sendRes = isSend();
-    if (((mDoCPd_c::getTrigA(0) == 0 &&
-         (mDoCPd_c::getTrigB(0) == 0 || ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck())) ||
+    if (((mDoCPd_c::getTrigA(DLPAD()) == 0 &&
+         (mDoCPd_c::getTrigB(DLPAD()) == 0 || ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck())) ||
         !isHowlMessage()) && sendRes != 0)
     {
         if (mpRefer->getMsgID() == 0xc4e) {
@@ -1668,8 +1676,8 @@ u8 dMsgObject_c::isSend() {
         if (pRef->getSendFlag() == 5) {
             if (getStatusLocal() == 21) {
                 setButtonStatusLocal();
-                if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) ||)
-                    mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+                if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())) ||)
+                    mDoCPd_c::getTrigA(DLPAD()) != 0 || mDoCPd_c::getTrigB(DLPAD()) != 0) {
                     return 2;
                 }
                 return 0;
@@ -1688,8 +1696,8 @@ u8 dMsgObject_c::isSend() {
         }
         if (pRef->getSendFlag() == 2) {
             setButtonStatusLocal();
-            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) ||)
-                mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())) ||)
+                mDoCPd_c::getTrigA(DLPAD()) != 0 || mDoCPd_c::getTrigB(DLPAD()) != 0) {
                 return 2;
             }
         }
@@ -1702,8 +1710,8 @@ u8 dMsgObject_c::isSend() {
                 return 2;
             }
         } else {
-            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0) && !isShopItemMessage()) ||)
-                mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD()) && !isShopItemMessage()) ||)
+                mDoCPd_c::getTrigA(DLPAD()) != 0 || mDoCPd_c::getTrigB(DLPAD()) != 0) {
                 return 2;
             }
             if (mesgCancelButton) {

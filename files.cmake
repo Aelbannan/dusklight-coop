@@ -1436,6 +1436,7 @@ set(DUSK_FILES
         src/dusk/coop/coop_combat.cpp
         src/dusk/coop/coop_context.cpp
         src/dusk/coop/coop_debug.cpp
+        src/dusk/coop/coop_dialogue_bridge.cpp
         src/dusk/coop/coop_difficulty.cpp
         src/dusk/coop/coop_drops.cpp
         src/dusk/coop/coop_enemy.cpp

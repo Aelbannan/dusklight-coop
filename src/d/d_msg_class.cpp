@@ -14,6 +14,7 @@
 #include "m_Do/m_Do_graphic.h"
 
 #if TARGET_PC
+#include "dusk/coop/coop_dialogue_bridge.h"
 #include "dusk/menu_pointer.h"
 #include "dusk/scope_guard.hpp"
 #endif
@@ -2008,7 +2009,7 @@ void jmessage_tSequenceProcessor::do_begin(void const* pEntry, char const* pszTe
     pReference->resetReference();
     field_0xb5 = 0;
 #if TARGET_PC
-    if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) {
+    if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())) {
         field_0xb2 = 1;
     }
 #endif
@@ -2073,7 +2074,7 @@ bool jmessage_tSequenceProcessor::do_isReady() {
     #endif
 
 #if TARGET_PC
-    if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) {
+    if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())) {
         field_0xb2 = 1;
         pReference->setSendTimer(0);
     }
@@ -2094,7 +2095,7 @@ bool jmessage_tSequenceProcessor::do_isReady() {
     }
 
     if (pReference->isButtonTagStopFlag()) {
-        if (mDoCPd_c::getTrigA(PAD_1)) {
+        if (mDoCPd_c::getTrigA(DLPAD())) {
             pReference->offButtonTagStopFlag();
             pReference->onLightBatchFlag();
         }
@@ -2151,7 +2152,7 @@ bool jmessage_tSequenceProcessor::do_isReady() {
             case 0:
             case 5:
             case 6:
-                if (mDoCPd_c::getTrigA(PAD_1) || field_0xb2 != 0 IF_DUSK(|| (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)))) {
+                if (mDoCPd_c::getTrigA(DLPAD()) || field_0xb2 != 0 IF_DUSK(|| (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())))) {
                     field_0xa4 = 0;
                     pReference->onBatchFlag();
                     pReference->setCharCnt(DUSK_IF_ELSE(dusk::version::isRegionJpn() ? D_MSG_CLASS_CHAR_CNT_MAX : 0x200, D_MSG_CLASS_CHAR_CNT_MAX));
@@ -2262,7 +2263,7 @@ bool jmessage_tSequenceProcessor::do_tag(u32 i_tag, void const* i_data, u32 i_si
     // this code after the switch statement and this saves us from having to litter
     // the switch statement with IF_DUSK before every return.
     auto instantTextRun = SimpleScopeGuard([&]() {
-        if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) {
+        if (dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(DLPAD())) {
             field_0xb2 = 1;
             pReference->setSendTimer(0);
         }

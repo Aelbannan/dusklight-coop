@@ -1298,9 +1298,11 @@ s32 fopAcM_orderTalkItemBtnEvent(u16 i_eventType, fopAc_ac_c* i_actorA, fopAc_ac
 
 s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
 #if TARGET_PC
-    // DATA LOSS: initiator is hardcoded to P1 (dComIfGp_getPlayer(0))
-    // instead of using the Link that actually triggered the interaction.
-    // The target actor i_actor is preserved.
+    // Initiator resolved below: closest joined Link to the NPC is used as
+    // the request actor so Pt1 points to the correct player for NPC
+    // attention during the conversation.  The target actor i_actor is
+    // preserved as the NPC (Pt2).  PtT/PtI remain the NPC target (handled
+    // by the setParam fix in d_event.cpp).
     const s16 profName = i_actor ? fopAcM_GetProfName(i_actor) : 0;
     const char* actorName = i_actor ? dStage_getName(profName, -1) : "NULL";
     dusk::coop::debug::logInfo(
@@ -1417,8 +1419,10 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
             }
         }
 
-        // Find the request actor: use P1 for compatibility with setParam
-        // PtT/PtI talk-partner logic.
+        // Find the request actor: the correct triggering Link is resolved
+        // below at the event order call site; store P1 here for the
+        // conversation metadata (setParam PtT/PtI compat already handled
+        // by the TARGET_PC fix in d_event.cpp).
         fopAc_ac_c* requestActor = dComIfGp_getPlayer(0);
 
         shouldTrackConversation = true;
@@ -1474,11 +1478,22 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
     }
 #endif
 
-    // Use P1 as request actor for compatibility with setParam talk-partner
-    // logic.  The real initiator is tracked in the arbiter metadata.
+    // Resolve request actor: for co-op, use the triggering Link (the closest
+    // joined player to the NPC targeting this) so Pt1 points to the correct
+    // player for NPC attention during the conversation.  PtT/PtI remain the
+    // NPC target (handled by the setParam fix in d_event.cpp).
+    // Non-PC builds always use P1 (vanilla behavior).
+#if TARGET_PC
+    fopAc_ac_c* const requestActorForOrder = shouldTrackConversation
+        ? dusk::coop::getPlayerActor(convInitiator)
+        : dComIfGp_getPlayer(0);
+#else
+    fopAc_ac_c* const requestActorForOrder = dComIfGp_getPlayer(0);
+#endif
+
     const s32 result = dComIfGp_event_order(
         dEvt_type_TALK_e, i_priority, i_flag, 0x14F,
-        dComIfGp_getPlayer(0), i_actor, -1, -1);
+        requestActorForOrder, i_actor, -1, -1);
 
 #if TARGET_PC
     // Only track the conversation if the vanilla order actually succeeded

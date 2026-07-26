@@ -1,6 +1,8 @@
 #ifndef D_D_LIB_H
 #define D_D_LIB_H
 
+#include "dolphin/types.h"
+
 #include "SSystem/SComponent/c_xyz.h"
 #include <mtx.h>
 #include <os.h>
@@ -69,6 +71,13 @@ public:
     /* 0x28 */ s16 mFirstWaitTime;
     /* 0x2A */ s16 field_0x2a;
     /* 0x2C */ s16 field_0x2c;
+
+#if TARGET_PC
+    // Override the legacy pad port used by getValueStick()/getAngleStick().
+    // Set to 0..3 (PAD_1..PAD_4).  Resets to PAD_1 (0) when cleared.
+    static void setStickPadOverride(u8 pad);
+    static u8 s_stickPadOverride;
+#endif
 };  // Size = 0x30
 
 struct CSTControl : public STControl {

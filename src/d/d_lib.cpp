@@ -87,12 +87,28 @@ void STControl::Yinit() {
     field_0x2c = mFirstWaitTime;
 }
 
+#if TARGET_PC
+u8 STControl::s_stickPadOverride = PAD_1;
+
+void STControl::setStickPadOverride(u8 pad) {
+    s_stickPadOverride = pad;
+}
+#endif
+
 f32 STControl::getValueStick() {
+#if TARGET_PC
+    return mDoCPd_c::getStickValue(s_stickPadOverride);
+#else
     return mDoCPd_c::getStickValue(PAD_1);
+#endif
 }
 
 s16 STControl::getAngleStick() {
+#if TARGET_PC
+    return mDoCPd_c::getStickAngle(s_stickPadOverride);
+#else
     return mDoCPd_c::getStickAngle(PAD_1);
+#endif
 }
 
 f32 CSTControl::getValueStick() {
