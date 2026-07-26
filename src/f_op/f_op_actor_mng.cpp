@@ -1232,6 +1232,13 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
         i_priority = 0x1FF;
     }
 
+    // Push the conversation presentation override BEFORE ordering the
+    // vanilla event, so the initiator's camera is active on the first
+    // event frame instead of defaulting to camera 0 (P1).  Pop on failure.
+#if TARGET_PC
+    dusk::coop::render::pushConversationPresentation(initiator);
+#endif
+
     const s32 result = dComIfGp_event_order(
         dEvt_type_TALK_e, i_priority, i_flag, 0x14F,
         i_actorA, i_actorB, -1, -1);
@@ -1241,6 +1248,10 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
     if (result != 0) {
         const dusk::coop::event::EventToken convToken =
             dusk::coop::event::trackConversation(convParams);
+        // trackConversation() also calls pushConversationPresentation(),
+        // but the second call is a no-op (same-owner guard) — the first
+        // push above already ensured the override is active before the
+        // event order so the first event frame renders from initiator.
         if (convToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
             dusk::coop::debug::logInfo(
                 "fopAcM_orderTalkEvent: conversation tracked token=%u "
@@ -1249,11 +1260,21 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
                 static_cast<unsigned>(initiator),
                 static_cast<unsigned>(profName),
                 static_cast<unsigned>(rawEventId));
+        } else {
+            // trackConversation failed (no slot, invalid params) — undo the
+            // speculative presentation push so the override is not leaked.
+            dusk::coop::render::popConversationPresentation();
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderTalkEvent: trackConversation failed token=INVALID "
+                "initiator=P%u — presentation popped",
+                static_cast<unsigned>(initiator));
         }
     } else {
+        // Order rejected — undo the speculative presentation push.
+        dusk::coop::render::popConversationPresentation();
         dusk::coop::debug::logInfo(
             "fopAcM_orderTalkEvent: dComIfGp_event_order returned 0 "
-            "— not tracking conversation");
+            "— presentation popped, not tracking conversation");
     }
 #endif
 
@@ -1444,6 +1465,15 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
         i_priority = 0x1EA;
     }
 
+    // Push the conversation presentation override BEFORE ordering the
+    // vanilla event, so the initiator's camera is active on the first
+    // event frame.  Pop on failure.
+#if TARGET_PC
+    if (shouldTrackConversation) {
+        dusk::coop::render::pushConversationPresentation(convInitiator);
+    }
+#endif
+
     // Use P1 as request actor for compatibility with setParam talk-partner
     // logic.  The real initiator is tracked in the arbiter metadata.
     const s32 result = dComIfGp_event_order(
@@ -1456,6 +1486,10 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
     if (result != 0 && shouldTrackConversation) {
         const dusk::coop::event::EventToken convToken =
             dusk::coop::event::trackConversation(convParams);
+        // trackConversation() also calls pushConversationPresentation(),
+        // but the second call is a no-op (same-owner guard) — the first
+        // push above already ensured the override is active before the
+        // event order so the first event frame renders from initiator.
         if (convToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
             dusk::coop::debug::logInfo(
                 "fopAcM_orderSpeakEvent: conversation tracked token=%u "
@@ -1466,11 +1500,28 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
                 static_cast<unsigned>(rawEventId),
                 stageName ? stageName : "?",
                 static_cast<int>(roomNo));
+        } else {
+            // trackConversation failed (no slot, invalid params) — undo the
+            // speculative presentation push so the override is not leaked.
+            dusk::coop::render::popConversationPresentation();
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: trackConversation failed token=INVALID "
+                "initiator=P%u — presentation popped",
+                static_cast<unsigned>(convInitiator));
         }
-    } else if (result == 0 && shouldTrackConversation) {
-        dusk::coop::debug::logInfo(
-            "fopAcM_orderSpeakEvent: dComIfGp_event_order returned 0 "
-            "— not tracking conversation");
+    } else if (shouldTrackConversation) {
+        // Order rejected — undo the speculative presentation push.
+        dusk::coop::render::popConversationPresentation();
+        if (result == 0) {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: dComIfGp_event_order returned 0 "
+                "— presentation popped, not tracking conversation");
+        } else {
+            dusk::coop::debug::logInfo(
+                "fopAcM_orderSpeakEvent: order succeeded but "
+                "shouldTrackConversation=false (PartyStory) — "
+                "presentation not pushed");
+        }
     }
 #endif  // TARGET_PC
 

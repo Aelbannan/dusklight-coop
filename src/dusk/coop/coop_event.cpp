@@ -12,6 +12,8 @@
 
 #if TARGET_PC
 #include "d/d_com_inf_game.h"
+#include "d/d_event_data.h"
+#include "d/d_event_manager.h"
 #include "d/d_item.h"
 #include "d/d_item_data.h"
 #include "d/d_stage.h"
@@ -223,6 +225,40 @@ bool allReady(const EventSlot& slot) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Talk-style event classifier
+// ---------------------------------------------------------------------------
+
+#if TARGET_PC
+
+bool isTalkStyleEvent(s16 eventId) {
+    if (eventId == -1) {
+        return false;
+    }
+
+    dEvent_manager_c& evtMng = dComIfGp_getEventManager();
+    dEvDtEvent_c* event = evtMng.getEventData(eventId);
+    if (event == nullptr) {
+        return false;
+    }
+
+    for (int i = 0; i < event->getNStaff(); ++i) {
+        const int staffIdx = event->getStaff(i);
+        dEvDtStaff_c* staff = evtMng.getBase().getStaffP(staffIdx);
+        if (staff != nullptr && staff->getType() == dEvDtStaff_c::TYPE_MESSAGE) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#else
+
+bool isTalkStyleEvent(s16) { return false; }
+
+#endif  // TARGET_PC
 
 // ---------------------------------------------------------------------------
 // Lifecycle

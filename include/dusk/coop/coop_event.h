@@ -88,6 +88,26 @@ constexpr EventToken INVALID_EVENT_TOKEN = 0xFF;
 constexpr size_t MAX_PENDING_EVENTS = 4;
 
 // ---------------------------------------------------------------------------
+// Talk-style event classification
+// ---------------------------------------------------------------------------
+
+// Checks whether an event (identified by its event composit ID from the
+// event manager) contains a message-type staff.  Events with a message staff
+// are "talk-style" events — they display dialogue text, typically triggered
+// by map-tool or location proximity rather than a direct Speak/Talk button.
+//
+// This classifier is intentionally narrow: it checks for TYPE_MESSAGE staff
+// in the event data, NOT broad profile names or event types.  Unrelated
+// deferred events (doors, pickups, warps, autonomous cutscenes) that lack a
+// message staff return false.
+//
+// Returns true when the event data is loaded and contains at least one staff
+// of type dEvDtStaff_c::TYPE_MESSAGE (staff type 7).  Returns false when the
+// event data is not yet available (null), the event ID is -1, or no message
+// staff is found.
+bool isTalkStyleEvent(s16 eventId);
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 

@@ -14,6 +14,8 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_event.h"
 #include "dusk/coop/coop_render.h"
@@ -444,6 +446,63 @@ int dEvt_control_c::demoCheck(dEvt_order_c* order) {
         return 0;
     }
 
+#if TARGET_PC
+    // Talk-style event classification hook:
+    // After the event manager has successfully ordered the event, check if
+    // this OTHER-type event has a message staff (talk-style dialogue event).
+    // If so, push the presentation override so the initiator's camera is
+    // used instead of defaulting to camera 0 (P1), preventing split-screen
+    // rendering of the dialogue frame.
+    //
+    // This only fires for events confirmed to have TYPE_MESSAGE staff in
+    // their event data.  Non-message OTHER events (doors, pickups, warps,
+    // autonomous cutscenes) are not affected.
+    //
+    // Normal TALK-type conversations manage their own override via
+    // fopAcM_orderTalkEvent/fopAcM_orderSpeakEvent — they are NOT
+    // double-tracked here because this code only runs for dEvt_type_OTHER_e.
+    if (dusk::coop::event::isTalkStyleEvent(eventId)) {
+        // Resolve initiator from requesting actor (if it's a Link),
+        // otherwise fall back to the closest joined player to the
+        // target actor.  Preserve P1 flow authority by default.
+        dusk::coop::PlayerId initiator = 0;
+        if (actor1 != nullptr) {
+            for (dusk::coop::PlayerId pid = 0;
+                 pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+                if (dusk::coop::isJoined(pid) &&
+                    dusk::coop::getPlayerActor(pid) == actor1) {
+                    initiator = pid;
+                    break;
+                }
+            }
+        }
+        if (initiator == 0 && actor2 != nullptr) {
+            f32 closestDist = 1e9f;
+            for (dusk::coop::PlayerId pid = 0;
+                 pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+                if (!dusk::coop::isJoined(pid)) continue;
+                fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
+                if (link == nullptr) continue;
+                const f32 d = link->current.pos.absXZ(actor2->current.pos);
+                if (d < closestDist) {
+                    closestDist = d;
+                    initiator = pid;
+                }
+            }
+        }
+        // Guard against invalid/resolved-to-none initiator.
+        if (initiator >= dusk::coop::MAX_LOCAL_PLAYERS ||
+            !dusk::coop::isJoined(initiator)) {
+            initiator = 0;
+        }
+        dusk::coop::render::pushConversationPresentation(initiator);
+        dusk::coop::debug::logInfo(
+            "demoCheck: talk-style other-event push initiator=P%u "
+            "eventId=%d",
+            static_cast<unsigned>(initiator), eventId);
+    }
+#endif
+
     if (actor1 != NULL) {
         actor1->eventInfo.setCommand(dEvtCmd_INDEMO_e);
     }
@@ -468,6 +527,23 @@ int dEvt_control_c::demoEnd() {
     if (actor != NULL) {
         actor->eventInfo.setCommand(dEvtCmd_NONE_e);
     }
+
+#if TARGET_PC
+    // Pop any talk-style presentation override that was pushed in demoCheck()
+    // for OTHER-type events with message staff.  Guard against popping the
+    // override for TALK-type conversations (which manage their own lifecycle
+    // through trackConversation/markConversationFinished).  When no active
+    // conversation is tracked, the override must have been pushed by
+    // demoCheck() and should be popped here.
+    if (dusk::coop::render::isConversationPresentationActive() &&
+        dusk::coop::event::getActiveConversationToken() ==
+            dusk::coop::event::INVALID_EVENT_TOKEN) {
+        dusk::coop::render::popConversationPresentation();
+        dusk::coop::debug::logInfo(
+            "demoEnd: popped talk-style presentation override (eventId=%d)",
+            static_cast<int>(mEventId));
+    }
+#endif
 
     if (mEventId != -1) {
         dComIfGp_getEventManager().endProc(mEventId, TRUE);
