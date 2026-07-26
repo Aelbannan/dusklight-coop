@@ -307,42 +307,48 @@ void drawView(ViewId view) {
         }
     }
 
-    // Per-view emphasis button — created/updated/drawn here so the
-    // content always reflects the current player for this view.
-    auto& empView = g_viewEmpButton[view];
-    if (empView == nullptr) {
-        // Lazy-create on first draw of this view.
-        dusk_coop_createEmpButton(&empView);
-    }
-
-    if (empView != nullptr) {
-        const auto& btnState = g_playerButtonState[player];
-        EmphasisButtonParams params;
-        params.mStatus       = 0;
-        params.doStatus      = btnState.doStatus;
-        params.aStatus       = btnState.aStatus;
-        params.rStatus       = btnState.rStatus;
-        params.zStatus       = btnState.zStatus;
-        params.m3dStatus     = btnState.m3dStatus;
-        params.cStickStatus  = btnState.cStickStatus;
-        // S status stays global — it is force-set by the event system and
-        // field_0x767 is deliberately not re-patched per player.
-        params.sButtonStatus = dComIfGp_getSButtonStatus();
-        params.xItemStatus   = btnState.xStatus;
-        params.yItemStatus   = btnState.yStatus;
-        params.bottleStatus  = btnState.bottleStatus;
-
-        dusk_coop_processEmphasisButton(empView, g_hudDraw, params);
-        // Bottom-anchor the emphasis button position.
-        // updateButton() reads g_drawHIO.mEmpButton.mEmpButtonPosY but is
-        // only called from _execute() — not run for per-view buttons on PC.
-        if (bottomAnchor > 0.0f) {
-            empView->paneTrans(empView->mpParent,
-                               empView->mParentCenterX,
-                               g_drawHIO.mEmpButton.mEmpButtonPosY + bottomAnchor,
-                               0xFF);
+    // The button archive and 2D heap are unavailable while the scene is
+    // tearing down, and event cutscenes do not display gameplay prompts.
+    // In particular, do not run dMeterButton_c::_execute() against a button
+    // whose scene-owned panes have just been released.
+    if (!dComIfGp_event_runCheck() && dComIfGp_getMeterButtonArchive() != nullptr) {
+        // Per-view emphasis button — created/updated/drawn here so the
+        // content always reflects the current player for this view.
+        auto& empView = g_viewEmpButton[view];
+        if (empView == nullptr) {
+            // Lazy-create on first draw of this view.
+            dusk_coop_createEmpButton(&empView);
         }
-        dusk_coop_drawEmpButton(empView);
+
+        if (empView != nullptr) {
+            const auto& btnState = g_playerButtonState[player];
+            EmphasisButtonParams params;
+            params.mStatus       = 0;
+            params.doStatus      = btnState.doStatus;
+            params.aStatus       = btnState.aStatus;
+            params.rStatus       = btnState.rStatus;
+            params.zStatus       = btnState.zStatus;
+            params.m3dStatus     = btnState.m3dStatus;
+            params.cStickStatus  = btnState.cStickStatus;
+            // S status stays global — it is force-set by the event system and
+            // field_0x767 is deliberately not re-patched per player.
+            params.sButtonStatus = dComIfGp_getSButtonStatus();
+            params.xItemStatus   = btnState.xStatus;
+            params.yItemStatus   = btnState.yStatus;
+            params.bottleStatus  = btnState.bottleStatus;
+
+            dusk_coop_processEmphasisButton(empView, g_hudDraw, params);
+            // Bottom-anchor the emphasis button position.
+            // updateButton() reads g_drawHIO.mEmpButton.mEmpButtonPosY but is
+            // only called from _execute() — not run for per-view buttons on PC.
+            if (bottomAnchor > 0.0f) {
+                empView->paneTrans(empView->mpParent,
+                                   empView->mParentCenterX,
+                                   g_drawHIO.mEmpButton.mEmpButtonPosY + bottomAnchor,
+                                   0xFF);
+            }
+            dusk_coop_drawEmpButton(empView);
+        }
     }
 
     g_patchPlayerForDraw = -1;

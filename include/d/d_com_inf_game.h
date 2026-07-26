@@ -4802,6 +4802,10 @@ inline dRes_info_c* dComIfG_getStageResInfo(const char* i_arcName) {
     return g_dComIfG_gameInfo.mResControl.getStageResInfo(i_arcName);
 }
 
+inline bool dComIfG_isObjectResHeapInUse(const JKRHeap* i_heap) {
+    return g_dComIfG_gameInfo.mResControl.hasObjectResHeap(i_heap);
+}
+
 inline int dComIfG_syncAllObjectRes() {
     return g_dComIfG_gameInfo.mResControl.syncAllObjectRes();
 }

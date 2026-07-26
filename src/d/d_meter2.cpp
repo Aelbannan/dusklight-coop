@@ -2682,7 +2682,7 @@ void dMeter2_c::check2DContents() {
 // and drawView() via unqualified lookup that finds the global version.
 
 void dusk_coop_createEmpButton(dMeterButton_c** outBtn) {
-    if (outBtn == nullptr || *outBtn != nullptr) return;
+    if (outBtn == nullptr || *outBtn != nullptr || dComIfGp_getMeterButtonArchive() == nullptr) return;
     // Per-view buttons are persistent (created lazily on first draw, only
     // destroyed on coop reset), so allocate from the main 2D exp heap.
     // Do NOT use the vanilla subheap2D(8) + heap-lock dance here:

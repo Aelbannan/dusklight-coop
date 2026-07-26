@@ -35,10 +35,11 @@ public:
 
     s32 getResNum() { return mArchive->countFile(); }
 
-    int getCount() { return mCount; }
+    int getCount() const { return mCount; }
     char* getArchiveName() { return mArchiveName; }
     mDoDvdThd_mountArchive_c* getDMCommand() { return mDMCommand; }
     JKRArchive* getArchive() { return mArchive; }
+    JKRHeap* getHeap() const { return heap; }
     JKRSolidHeap* getDataHeap() { return mDataHeap; }
     u32 incCount() { return ++mCount; }
     u32 decCount() { return --mCount; }
@@ -134,6 +135,8 @@ public:
     dRes_info_c* getObjectResInfo(const char* i_arcName) {
         return getResInfo(i_arcName, mObjectInfo, ARRAY_SIZEU(mObjectInfo));
     }
+
+    bool hasObjectResHeap(const JKRHeap* i_heap) const;
 
     dRes_info_c* getStageResInfo(const char* i_arcName) {
         return getResInfo(i_arcName, mStageInfo, ARRAY_SIZEU(mStageInfo));

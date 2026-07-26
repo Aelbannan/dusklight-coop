@@ -20165,6 +20165,13 @@ static int daAlink_Draw(daAlink_c* i_this) {
     return i_this->draw();
 }
 
+#if TARGET_PC
+namespace {
+static void deleteAlinkResource(request_of_phase_process_class* phase, const char* arcName,
+                                JKRExpHeap*& heap);
+}
+#endif
+
 daAlink_c::~daAlink_c() {
 #if TARGET_PC
     const dusk::coop::PlayerId owner = dusk::coop::alink::ownerOf(this);
@@ -20195,6 +20202,10 @@ daAlink_c::~daAlink_c() {
         changeWarpMaterial(WARP_MAT_MODE_1);
     }
 
+#if TARGET_PC
+    deleteAlinkResource(&mPhaseReq, mArcName, mpArcHeap);
+    deleteAlinkResource(&mShieldPhaseReq, mShieldArcName, mpShieldArcHeap);
+#else
     dComIfG_resDelete(&mPhaseReq, mArcName);
     if (mpArcHeap != NULL) {
         mDoExt_destroyExpHeap(mpArcHeap);
@@ -20204,6 +20215,7 @@ daAlink_c::~daAlink_c() {
     if (mpShieldArcHeap != NULL) {
         mDoExt_destroyExpHeap(mpShieldArcHeap);
     }
+#endif
 
     dKy_plight_cut(&mMagneBootsPlight);
 
@@ -20218,6 +20230,77 @@ daAlink_c::~daAlink_c() {
     dComIfGp_setLinkPlayer(NULL);
 #endif
 }
+
+#if TARGET_PC
+namespace {
+
+// An indexed Link gets its own parent heap, but the resource controller shares
+// the archive (and its solid heap) by name. Do not free a parent heap while a
+// different Link still holds a reference to that archive.
+constexpr int kDeferredAlinkHeapCount = 16;
+JKRExpHeap* g_deferredAlinkHeaps[kDeferredAlinkHeapCount]{};
+
+static void deferAlinkHeap(JKRExpHeap* heap) {
+    if (heap == nullptr) {
+        return;
+    }
+    for (JKRExpHeap* deferred : g_deferredAlinkHeaps) {
+        if (deferred == heap) {
+            return;
+        }
+    }
+    for (JKRExpHeap*& deferred : g_deferredAlinkHeaps) {
+        if (deferred == nullptr) {
+            deferred = heap;
+            return;
+        }
+    }
+}
+
+static bool removeDeferredAlinkHeap(JKRExpHeap* heap) {
+    for (JKRExpHeap*& deferred : g_deferredAlinkHeaps) {
+        if (deferred == heap) {
+            deferred = nullptr;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void releaseAlinkHeap(JKRExpHeap*& heap) {
+    JKRExpHeap* candidate = heap;
+    heap = nullptr;
+    if (candidate == nullptr) {
+        return;
+    }
+
+    removeDeferredAlinkHeap(candidate);
+    if (dComIfG_isObjectResHeapInUse(candidate)) {
+        deferAlinkHeap(candidate);
+    } else {
+        mDoExt_destroyExpHeap(candidate);
+    }
+}
+
+static void releaseDeferredAlinkHeaps() {
+    for (JKRExpHeap*& heap : g_deferredAlinkHeaps) {
+        if (heap != nullptr && !dComIfG_isObjectResHeapInUse(heap)) {
+            JKRExpHeap* candidate = heap;
+            heap = nullptr;
+            mDoExt_destroyExpHeap(candidate);
+        }
+    }
+}
+
+static void deleteAlinkResource(request_of_phase_process_class* phase, const char* arcName,
+                                JKRExpHeap*& heap) {
+    dComIfG_resDelete(phase, arcName);
+    releaseAlinkHeap(heap);
+    releaseDeferredAlinkHeaps();
+}
+
+}  // namespace
+#endif
 
 static int daAlink_Delete(daAlink_c* i_this) {
     fopAcM_RegisterDeleteID(i_this, "ALINK");

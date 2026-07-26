@@ -856,6 +856,20 @@ int dRes_control_c::deleteRes(char const* i_arcName, dRes_info_c* i_resInfo, int
     return 1;
 }
 
+bool dRes_control_c::hasObjectResHeap(const JKRHeap* i_heap) const {
+    if (i_heap == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < ARRAY_SIZE(mObjectInfo); ++i) {
+        const dRes_info_c& info = mObjectInfo[i];
+        if (info.getCount() != 0 && info.getHeap() == i_heap) {
+            return true;
+        }
+    }
+    return false;
+}
+
 dRes_info_c* dRes_control_c::getResInfo(char const* i_arcName, dRes_info_c* i_resInfo, int i_infoNum) {
     for (int i = 0; i < i_infoNum; i++) {
         if (i_resInfo->getCount() != 0) {

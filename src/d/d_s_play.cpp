@@ -45,6 +45,7 @@
 #include "dusk/ui/ui.hpp"
 #if TARGET_PC
 #include "dusk/coop/coop.h"
+#include "dusk/coop/coop_hud.h"
 #include "dusk/coop/coop_render.h"
 #endif
 #endif
@@ -854,6 +855,9 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
     UNUSED(i_this);
 
 #if TARGET_PC
+    // The per-view emphasis buttons are allocated from the scene-owned 2D
+    // heap, which is destroyed below. Release them before that heap goes away.
+    dusk::coop::hud::reset();
     // Gate D/B: tear down secondary proxies/cameras before stage resources go away.
     dusk::coop::onRoomUnload();
 #endif

@@ -84,7 +84,16 @@ int daAlink_c::loadModelDVD() {
 #endif
                 }
                 cPhs_Reset(&mPhaseReq);
+#if TARGET_PC
+                // The archive may still be referenced by another indexed Link.
+                // Its solid heap lives in this parent heap, so freeAll() would
+                // invalidate resources that are still in use.
+                if (!dComIfG_isObjectResHeapInUse(mpArcHeap)) {
+                    mpArcHeap->freeAll();
+                }
+#else
                 mpArcHeap->freeAll();
+#endif
 
                 if (mProcID == PROC_METAMORPHOSE || mProcID == PROC_METAMORPHOSE_ONLY) {
                     setArcName(!checkWolf());
@@ -138,7 +147,13 @@ int daAlink_c::loadShieldModelDVD() {
             mShieldModel = NULL;
             dComIfG_resDelete(&mShieldPhaseReq, mShieldArcName);
             cPhs_Reset(&mShieldPhaseReq);
+#if TARGET_PC
+            if (!dComIfG_isObjectResHeapInUse(mpShieldArcHeap)) {
+                mpShieldArcHeap->freeAll();
+            }
+#else
             mpShieldArcHeap->freeAll();
+#endif
             setShieldArcName();
         } else if (mShieldChangeWaitTimer == 1) {
             int phase_state = dComIfG_resLoad(&mShieldPhaseReq, mShieldArcName, mpShieldArcHeap);
