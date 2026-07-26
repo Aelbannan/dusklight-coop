@@ -168,7 +168,9 @@ static void setupPresentGXState() {
     GXSetDither(GX_ENABLE);
 
     Mtx44 ortho;
-    MTXOrtho(ortho, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 10.0f);
+    // The captured framebuffer uses the normal screen orientation.  Keep the
+    // horizontal bounds in ascending order; reversing them mirrors every pane.
+    MTXOrtho(ortho, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 10.0f);
     GXSetProjection(ortho, GX_ORTHOGRAPHIC);
     GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
     GXSetCurrentMtx(0);
