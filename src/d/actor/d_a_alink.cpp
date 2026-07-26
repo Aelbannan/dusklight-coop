@@ -4610,47 +4610,57 @@ void daAlink_c::playerInit() {
     int startMode = getStartMode();
     int startEvent = getStartEvent();
 
-    if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
-        mStartEventID = dComIfGp_evmng_startDemo(-1);
-    } else if (dComIfGp_getStartStagePoint() == -4) {
-        mStartEventID = dComIfGp_evmng_startDemo(0xD5);
-    } else {
-        if (getLastSceneMode() == 9) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD3);
-        } else if (startMode == 10) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xCF);
-            }
-        } else if (startMode == 11) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD0);
-            }
-        } else if (startMode == 6) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCD);
-        } else if (startMode == 7) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCE);
-        } else if (startMode == 8) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD4);
-            }
-        } else if (startMode == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xC9);
-        } else if (getLastSceneMode() == 11) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xFF);
-        } else if (getLastSceneMode() == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD1);
+#if TARGET_PC
+    // Start events are global to the scene, so only the story-authority Link
+    // may order one. Secondary Links are real actors, but must not replay the
+    // area's entry cutscene while they are recreated during a transition.
+    if (!dusk::coop::alink::isStoryAuthorityLink(this)) {
+        mStartEventID = 0xFF;
+    } else
+#endif
+    {
+        if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
+            mStartEventID = dComIfGp_evmng_startDemo(-1);
+        } else if (dComIfGp_getStartStagePoint() == -4) {
+            mStartEventID = dComIfGp_evmng_startDemo(0xD5);
         } else {
-            mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+            if (getLastSceneMode() == 9) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD3);
+            } else if (startMode == 10) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xCF);
+                }
+            } else if (startMode == 11) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD0);
+                }
+            } else if (startMode == 6) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCD);
+            } else if (startMode == 7) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCE);
+            } else if (startMode == 8) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD4);
+                }
+            } else if (startMode == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xC9);
+            } else if (getLastSceneMode() == 11) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xFF);
+            } else if (getLastSceneMode() == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD1);
+            } else {
+                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+            }
         }
-    }
 
-    dComIfGp_getPEvtManager()->orderStartDemo();
+        dComIfGp_getPEvtManager()->orderStartDemo();
+    }
     field_0x2f94 = -1;
     field_0x2f95 = -1;
     field_0x2f96 = -1;
@@ -5139,7 +5149,14 @@ int daAlink_c::create() {
         mNowAnmPackUpper[0].setAnmTransform(underBck);
     }
 
+#if TARGET_PC
+    // A proxy Link starts in a neutral wait state. Running the story start
+    // procedure here would consume the authority player's transition state
+    // and can put a not-yet-unlocked cutscene on the event queue.
+    int midna_prm = usesStoryStart ? setStartProcInit() : procWaitInit();
+#else
     int midna_prm = setStartProcInit();
+#endif
     setSelectEquipItem(FALSE);
     setMatrix();
     allAnimePlay();
