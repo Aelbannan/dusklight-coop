@@ -14072,6 +14072,8 @@ int daAlink_c::checkSceneChange(int i_exitID) {
         exitParams.param5 = -1;
         exitParams.groundPath = true;
         exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
+        exitParams.initiator = dusk::coop::alink::resolveOwner(this);
+        exitParams.initiatorPosition = current.pos;
         exitParams.anchor = current.pos;
         dusk::coop::event::deferStageExit(exitParams);
         return 0;
@@ -14256,6 +14258,8 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                             exitParams.param5 = -1;
                             exitParams.groundPath = true;
                             exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
+                            exitParams.initiator = dusk::coop::alink::resolveOwner(this);
+                            exitParams.initiatorPosition = current.pos;
                             exitParams.anchor = current.pos;
                             dusk::coop::event::deferStageExit(exitParams);
                             exitPending = dusk::coop::event::isStageExitPending();
@@ -19392,6 +19396,11 @@ int daAlink_c::execute() {
 
     field_0x3540 = old.pos;
     field_0x3108 = shape_angle.y;
+
+#if TARGET_PC
+    dusk::coop::event::enforceStageExitBoundary(
+        this, dusk::coop::alink::resolveOwner(this));
+#endif
 
     if (checkHorseRide() && checkBoarSingleBattle()) {
         if (abs(shape_angle.y) < 0x4000) {

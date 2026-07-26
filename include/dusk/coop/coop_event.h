@@ -196,6 +196,8 @@ struct CapturedExitParams {
     int param5;
     bool groundPath;     // true = use dStage_changeSceneExitId path
     cBgS_PolyInfo groundPoly{}; // captured when groundPath is true
+    PlayerId initiator{0};
+    cXyz initiatorPosition{}; // position when the exit was first triggered
     cXyz anchor{};
 };
 
@@ -223,6 +225,10 @@ bool isStageExitPending();
 // stage exit.  This prevents the Link ground-exit path from issuing a second
 // vanilla transition after the arbiter has already committed one.
 bool wasStageExitCommittedThisFrame();
+
+// Prevent the initiating Link from crossing farther through the exit while
+// the party barrier is waiting.  Movement away from the exit remains free.
+void enforceStageExitBoundary(fopAc_ac_c* actor, PlayerId player);
 
 // ---------------------------------------------------------------------------
 // Party-synchronized story event — a route-blocking NPC event that must be

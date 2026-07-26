@@ -69,6 +69,10 @@ int daScex_c::execute() {
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz spC;
     bool anyPlayerInZone = false;
+#if TARGET_PC
+    dusk::coop::PlayerId exitInitiator = 0;
+    cXyz exitInitiatorPosition{};
+#endif
 
     if (checkWork()) {
         mDoMtx_multVec(mMatrix, &player->current.pos, &spC);
@@ -84,8 +88,10 @@ int daScex_c::execute() {
                 scale.x, scale.y, scale.z);
 #endif
             anyPlayerInZone = true;
-
 #if TARGET_PC
+            exitInitiator = 0;
+            exitInitiatorPosition = player->current.pos;
+
             // Do not put P1 into vanilla scene-change state while a party
             // barrier is being gathered.  Setting mExitID causes Link's
             // normal update path to enter the exit procedure and prevents
@@ -129,6 +135,10 @@ int daScex_c::execute() {
                 if (spC.y >= 0.0f && spC.y <= scale.y &&
                     fabsf(spC.x) <= scale.x && fabsf(spC.z) <= scale.z)
                 {
+                    if (!anyPlayerInZone) {
+                        exitInitiator = pid;
+                        exitInitiatorPosition = coopPlayer->current.pos;
+                    }
                     anyPlayerInZone = true;
                     dusk::coop::debug::logInfo(
                         "Scex: P%u in exit zone exitId=%d",
@@ -150,6 +160,8 @@ int daScex_c::execute() {
                 exitParams.angle = 0;
                 exitParams.param5 = -1;
                 exitParams.groundPath = false;
+                exitParams.initiator = exitInitiator;
+                exitParams.initiatorPosition = exitInitiatorPosition;
                 exitParams.anchor = current.pos;
 
                 dusk::coop::event::EventToken exitToken =

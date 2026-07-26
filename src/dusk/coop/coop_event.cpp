@@ -904,6 +904,45 @@ bool wasStageExitCommittedThisFrame() {
     return s_stageExitCommittedThisFrame;
 }
 
+void enforceStageExitBoundary(fopAc_ac_c* actor, PlayerId player) {
+    if (actor == nullptr || !g_deferredExit.hasPending ||
+        g_deferredExit.committed || player != g_deferredExit.captured.initiator) {
+        return;
+    }
+
+    const CapturedExitParams& params = g_deferredExit.captured;
+    const f32 startX = params.initiatorPosition.x - params.anchor.x;
+    const f32 startZ = params.initiatorPosition.z - params.anchor.z;
+    const f32 startLength = std::sqrt(startX * startX + startZ * startZ);
+    if (startLength < 1.0f) {
+        return;
+    }
+
+    const f32 normalX = startX / startLength;
+    const f32 normalZ = startZ / startLength;
+    const f32 currentX = actor->current.pos.x - params.anchor.x;
+    const f32 currentZ = actor->current.pos.z - params.anchor.z;
+    const f32 projection = currentX * normalX + currentZ * normalZ;
+    constexpr f32 kExitAdvanceAllowance = 20.0f;
+    const f32 minimumProjection = startLength - kExitAdvanceAllowance;
+
+    if (projection >= minimumProjection) {
+        return;
+    }
+
+    const f32 correction = minimumProjection - projection;
+    actor->current.pos.x += normalX * correction;
+    actor->current.pos.z += normalZ * correction;
+
+    // Remove only velocity directed farther into the exit; movement away from
+    // the exit and lateral movement remain available.
+    const f32 inwardSpeed = actor->speed.x * normalX + actor->speed.z * normalZ;
+    if (inwardSpeed < 0.0f) {
+        actor->speed.x -= normalX * inwardSpeed;
+        actor->speed.z -= normalZ * inwardSpeed;
+    }
+}
+
 // ===========================================================================
 // Active PartyStory token accessors
 // ===========================================================================
