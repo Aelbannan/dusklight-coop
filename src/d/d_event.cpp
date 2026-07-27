@@ -164,6 +164,34 @@ void dEvt_control_c::setParam(dEvt_order_c* order) {
     setPt1(order->mpRequestActor);
     setPt2(order->mpTargetActor);
 
+#if TARGET_PC
+    // Talk-style OTHER events (dialogue triggered by location/map tags
+    // rather than direct Speak/Talk button) have their request actor set
+    // to the tag object, not the Link who initiated the conversation.
+    // Override Pt1 to use the conversation presentation owner's Link so
+    // event scripts see the correct initiator for camera, cut type, and
+    // dialogue attribution.  Falls back to P1 if the owner actor is
+    // unavailable.  Normal TALK events and unrelated OTHER events are
+    // not affected.
+    if (order->mEventType == dEvt_type_OTHER_e &&
+        dusk::coop::render::isConversationPresentationActive() &&
+        dusk::coop::event::isTalkStyleEvent(order->mEventId)) {
+        const dusk::coop::ViewId owner =
+            dusk::coop::render::getConversationPresentationOwner();
+        fopAc_ac_c* ownerActor = dusk::coop::getPlayerActor(owner);
+        if (ownerActor != nullptr) {
+            setPt1(ownerActor);
+            dusk::coop::debug::logInfo(
+                "setParam: talk-style OTHER event Pt1 -> P%u Link (was tag)",
+                static_cast<unsigned>(owner));
+        } else {
+            setPt1(dComIfGp_getPlayer(0));
+            dusk::coop::debug::logInfo(
+                "setParam: talk-style OTHER event Pt1 -> P1 fallback");
+        }
+    }
+#endif
+
     mEventId = order->mEventId;
     mHindFlag = order->mHindFlag;
 

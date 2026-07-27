@@ -10,6 +10,12 @@
 #include "d/d_com_inf_game.h"
 #include "f_pc/f_pc_name.h"
 
+#if TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_alink.h"
+#include "dusk/coop/coop_accessors.h"
+#endif
+
 enum evt_cut_e {
     EVT_CUT_NONE_e,
     EVT_CUT_TALK_e,
@@ -99,6 +105,44 @@ int daTag_EvtMsg_c::Execute() {
         } else if (isDelete()) {
             fopAcM_delete(this);
         } else {
+#if TARGET_PC
+            // Co-op: evaluate each joined Link for area + facing eligibility.
+            // Select the closest valid player and order the event once using
+            // P1 as the request actor (preserving flow authority).
+            if (mFlowID != -1) {
+                dusk::coop::PlayerId best = dusk::coop::alink::DIALOGUE_PLAYER_NONE;
+                f32 bestDist = 1e30f;
+                for (dusk::coop::PlayerId pi = 0; pi < dusk::coop::MAX_LOCAL_PLAYERS; ++pi) {
+                    if (!dusk::coop::isJoined(pi)) continue;
+                    fopAc_ac_c* pl = dusk::coop::getPlayerActor(pi);
+                    if (pl == nullptr) continue;
+                    if (!chkPointInArea(pl->current.pos)) continue;
+                    if (getProcType() == 0) {
+                        const s16 angleToPlayer = fopAcM_searchActorAngleY(this, pl);
+                        const s16 angleDiff = static_cast<s16>(
+                            static_cast<s16>(angleToPlayer + 0x7FFF) -
+                            static_cast<s16>(pl->current.angle.y));
+                        const s16 absDiff = std::abs(static_cast<int>(angleDiff));
+                        if (absDiff > 0x1000) continue;
+                    }
+                    const cXyz delta = pl->current.pos - current.pos;
+                    const f32 distXZ = delta.absXZ();
+                    if (distXZ < bestDist) {
+                        bestDist = distXZ;
+                        best = pi;
+                    }
+                }
+                if (best != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+                    if (getProcType() == 0) {
+                        mEventID = dComIfGp_getEventManager().getEventIdx(this, "DEFAULT_EVT_TALK", 0xFF);
+                        fopAcM_orderOtherEventId(this, mEventID, 0xFF, 0xFFFF, 0, 1);
+                    } else {
+                        eventInfo.onCondition(dEvtCnd_CANTALK_e);
+                        fopAcM_orderSpeakEvent(this, 0, 0);
+                    }
+                }
+            }
+#else
             if (mFlowID != -1 && chkPointInArea(daPy_getPlayerActorClass()->current.pos)) {
                 if (getProcType() == 0) {
                     s16 var_r28 = (s16)(fopAcM_searchPlayerAngleY(this) + 0x7FFF);
@@ -117,6 +161,7 @@ int daTag_EvtMsg_c::Execute() {
                     fopAcM_orderSpeakEvent(this, 0, 0);
                 }
             }
+#endif
         }
         attention_info.flags = 0;
         attention_info.position = current.pos;

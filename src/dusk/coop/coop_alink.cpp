@@ -313,4 +313,67 @@ bool applyInputSnapshot(daAlink_c* link) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Location-based dialogue trigger helper
+// ---------------------------------------------------------------------------
+
+#if TARGET_PC
+
+PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams& params) {
+    PlayerId best = DIALOGUE_PLAYER_NONE;
+    f32 bestDist = 1e30f;
+
+    for (PlayerId i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
+        if (!isJoined(i)) {
+            continue;
+        }
+        fopAc_ac_c* player = getPlayerActor(i);
+        if (player == nullptr) {
+            continue;
+        }
+
+        // Standard XZ radius + Y half-height area check.
+        {
+            const cXyz delta = player->current.pos - params.center;
+            const f32 distXZ = std::sqrt(delta.x * delta.x + delta.z * delta.z);
+            if (distXZ >= params.radiusXZ) {
+                continue;
+            }
+            if (delta.y < -params.halfHeightY || delta.y > params.halfHeightY) {
+                continue;
+            }
+        }
+
+        // Apply the facing-angle check if requested.
+        if (params.needFacingCheck && params.facingArc > 0 && params.tagActor != nullptr) {
+            const s16 angleToPlayer = fopAcM_searchActorAngleY(params.tagActor, player);
+            const s16 angleDiff = static_cast<s16>(
+                static_cast<s16>(angleToPlayer + 0x7FFF) -
+                static_cast<s16>(player->current.angle.y));
+            const s16 absDiff = std::abs(static_cast<int>(angleDiff));
+            if (absDiff > params.facingArc) {
+                continue;
+            }
+        }
+
+        // Track closest by XZ distance to the trigger center.
+        const cXyz delta = player->current.pos - params.center;
+        const f32 distXZ = std::sqrt(delta.x * delta.x + delta.z * delta.z);
+        if (distXZ < bestDist) {
+            bestDist = distXZ;
+            best = i;
+        }
+    }
+
+    return best;
+}
+
+#else
+
+PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams&) {
+    return 0;  // P1 only on non-PC builds
+}
+
+#endif  // TARGET_PC
+
 }  // namespace dusk::coop::alink

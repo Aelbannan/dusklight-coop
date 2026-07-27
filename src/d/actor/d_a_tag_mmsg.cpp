@@ -5,6 +5,12 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_alink.h"
+#include "dusk/coop/coop_accessors.h"
+#endif
+
 int daTagMmsg_c::create() {
     fopAcM_ct(this, daTagMmsg_c);
 
@@ -71,6 +77,34 @@ int daTagMmsg_c::execute() {
         return 1;
     }
 
+#if TARGET_PC
+    // Co-op: evaluate each joined Link for Midna message eligibility.
+    // Use a helper lambda to check conditions; set Midna message for the
+    // first valid player found.
+    {
+        constexpr size_t MAX_PLAYERS = dusk::coop::MAX_LOCAL_PLAYERS;
+        bool set = false;
+        for (dusk::coop::PlayerId i = 0; i < MAX_PLAYERS && !set; ++i) {
+            if (!dusk::coop::isJoined(i)) {
+                continue;
+            }
+            fopAc_ac_c* player = dusk::coop::getPlayerActor(i);
+            if (player == nullptr) {
+                continue;
+            }
+            if ((current.pos.y <= player->current.pos.y) &&
+                (field_0x578 >= player->current.pos.y) &&
+                (fopAcM_searchPlayerDistanceXZ2(this) < field_0x574) &&
+                (field_0x570 == 0x3FF ||
+                 dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[field_0x570])) &&
+                (field_0x568 == 0xFF || fopAcM_isSwitch(this, field_0x568)))
+            {
+                daPy_getLinkPlayerActorClass()->setMidnaMsgNum(this, shape_angle.z);
+                set = true;
+            }
+        }
+    }
+#else
     daPy_py_c* player = daPy_getLinkPlayerActorClass();
     if ((current.pos.y <= player->current.pos.y) && (field_0x578 >= player->current.pos.y) &&
         (fopAcM_searchPlayerDistanceXZ2(this) < field_0x574) &&
@@ -80,6 +114,7 @@ int daTagMmsg_c::execute() {
     {
         player->setMidnaMsgNum(this, shape_angle.z);
     }
+#endif
 
     return 1;
 }

@@ -10,6 +10,11 @@
 
 #include "helpers/string.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_alink.h"
+#endif
+
 static DUSK_CONST char* l_evtNameList[] = {
     NULL,
     "JUMP_DEMOSTAGE",
@@ -101,10 +106,29 @@ int daTag_Evt_c::execute() {
             }
         }
         if (!isDelete() && cLib_calcTimer(&field_0x5D0) == 0) {
+#if TARGET_PC
+            // Co-op: check if ANY joined player is within the trigger area.
+            // Set field_0x570 = 1 when the closest eligible player is found.
+            {
+                dusk::coop::alink::DialogueTriggerParams dtp{};
+                dtp.tagActor = nullptr;
+                dtp.center = current.pos;
+                dtp.radiusXZ = scale.x;
+                dtp.halfHeightY = scale.y;
+                dtp.facingArc = 0;
+                dtp.needFacingCheck = false;
+                const dusk::coop::PlayerId trigger =
+                    dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
+                if (trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+                    field_0x570 = 1;
+                }
+            }
+#else
             sp14 = daPy_getPlayerActorClass()->current.pos - current.pos;
             if (sp14.absXZ() < scale.x && -scale.y < sp14.y && sp14.y < scale.y) {
                 field_0x570 = 1;
             }
+#endif
         }
         if (bVar != 0 && field_0x570 != 0) {
             field_0x572 = dComIfGp_getEventManager().getEventIdx(this, l_evtNameList[field_0x570], -1);

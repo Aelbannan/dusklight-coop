@@ -30,4 +30,37 @@ void clearLinkOwner(PlayerId id, const daAlink_c* link);
 // Fill stick/buttons from PlayerInputSnapshot. Returns true if applied.
 bool applyInputSnapshot(daAlink_c* link);
 
+// ---------------------------------------------------------------------------
+// Location-based dialogue trigger helper
+// ---------------------------------------------------------------------------
+
+// Parameters for per-player dialogue eligibility checks.
+struct DialogueTriggerParams {
+    fopAc_ac_c* tagActor;      // the tag actor (for angle calculations)
+    cXyz center;               // trigger center (tag actor position)
+    f32 radiusXZ;              // horizontal range (typically scale.x)
+    f32 halfHeightY;           // vertical half-extent (typically scale.y)
+    s16 facingArc;             // max allowed angle difference from player facing
+                               // to the tag (e.g. 0x1000). Set to 0 to skip
+                               // the facing check.
+    bool needFacingCheck;      // true = apply the facing arc test
+};
+
+// For location-based dialogue triggers: iterate all joined co-op players
+// whose Link actor is valid, check that the player is within the XZ radius
+// and Y half-height of the trigger center, and optionally check the facing
+// angle.  Selects the closest eligible player (by XZ distance).
+//
+// Returns the closest eligible PlayerId, or DIALOGUE_PLAYER_NONE (0xFF)
+// when no joined player satisfies the conditions.
+//
+// The caller is responsible for ordering a single event with the returned
+// player's context.  P1 remains the vanilla request actor for flow
+// compatibility.
+PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams& params);
+
+// Sentinel returned by resolveClosestDialoguePlayer when no joined player
+// satisfies the trigger conditions.
+constexpr PlayerId DIALOGUE_PLAYER_NONE = 0xFF;
+
 }  // namespace dusk::coop::alink

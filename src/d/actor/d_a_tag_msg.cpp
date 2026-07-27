@@ -13,6 +13,12 @@
 
 #include "helpers/string.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/coop.h"
+#include "dusk/coop/coop_alink.h"
+#include "dusk/coop/coop_accessors.h"
+#endif
+
 static int createHeapCallBack(fopAc_ac_c* i_this) {
     daTag_Msg_c* msg = (daTag_Msg_c*)i_this;
     return msg->createHeap();
@@ -162,8 +168,24 @@ int daTag_Msg_c::draw() {
 }
 
 BOOL daTag_Msg_c::rangeCheck() {
+#if TARGET_PC
+    // Co-op: return true if ANY joined player's Link actor is within the
+    // trigger area (XZ radius + Y half-height).  The event is ordered once
+    // by the first eligible player (see execute()).
+    dusk::coop::alink::DialogueTriggerParams dtp{};
+    dtp.tagActor = nullptr;
+    dtp.center = current.pos;
+    dtp.radiusXZ = scale.x;
+    dtp.halfHeightY = scale.y;
+    dtp.facingArc = 0;
+    dtp.needFacingCheck = false;
+    const dusk::coop::PlayerId trigger =
+        dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
+    return trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE;
+#else
     cXyz player_dist = daPy_getPlayerActorClass()->current.pos - current.pos;
     return player_dist.absXZ() < scale.x && (-scale.y < player_dist.y && player_dist.y < scale.y);
+#endif
 }
 
 BOOL daTag_Msg_c::otherCheck() {
@@ -189,7 +211,25 @@ BOOL daTag_Msg_c::otherCheck() {
 
     if (field_0x5dd) {
         return 1;
-    } else {
+    }
+
+#if TARGET_PC
+    // Co-op: return true if ANY joined player is facing toward the tag
+    // within the required arc (0x1000).  The event is ordered once.
+    {
+        dusk::coop::alink::DialogueTriggerParams dtp{};
+        dtp.tagActor = this;
+        dtp.center = current.pos;
+        dtp.radiusXZ = scale.x;
+        dtp.halfHeightY = scale.y;
+        dtp.facingArc = 0x1000;
+        dtp.needFacingCheck = true;
+        const dusk::coop::PlayerId trigger =
+            dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
+        return trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE;
+    }
+#else
+    {
         s16 var_r28 = fopAcM_searchActorAngleY(this, daPy_getPlayerActorClass()) + 0x7FFF;
         s16 angle_to_player = var_r28 - daPy_getPlayerActorClass()->current.angle.y;
         if (angle_to_player < 0) {
@@ -198,6 +238,7 @@ BOOL daTag_Msg_c::otherCheck() {
 
         return angle_to_player <= 0x1000;
     }
+#endif
 }
 
 DUSK_CONST char* daTag_Msg_c::getResName() {

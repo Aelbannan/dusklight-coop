@@ -3,6 +3,11 @@
 #include "d/actor/d_a_npc.h"
 
 #include "d/actor/d_a_npc_tk.h"
+
+#if TARGET_PC
+#include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_render.h"
+#endif
 #include "d/actor/d_a_tag_evtarea.h"
 #include "d/d_debug_viewer.h"
 #include "d/d_k_wmark.h"
@@ -909,6 +914,17 @@ void daNpcT_JntAnm_c::setParam(fopAc_ac_c* i_actor, J3DModel* i_model, cXyz* i_e
         mAttnPosP = NULL;
         break;
     case LOOK_PLAYER:
+#if TARGET_PC
+        if (dusk::coop::render::isConversationPresentationActive()) {
+            dusk::coop::ViewId owner = dusk::coop::render::getConversationPresentationOwner();
+            fopAc_ac_c* ownerActor = dusk::coop::getPlayerActor(owner);
+            if (ownerActor != NULL) {
+                mAttnPosP = &ownerActor->attention_info.position;
+                mAttnPos = *mAttnPosP;
+                break;
+            }
+        }
+#endif
         mAttnPosP = &daPy_getPlayerActorClass()->attention_info.position;
         mAttnPos = *mAttnPosP;
         break;
