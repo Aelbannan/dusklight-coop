@@ -1669,9 +1669,9 @@ int daNpc_grO_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngrs[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     facePlayerFlag = TRUE;
-                } else if (step(fopAcM_searchPlayerAngleY(this), 12, 8, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), 12, 8, 15)) {
                     setExpression(EXPR_NONE, -1.0f);
                     setMotion(MOT_WAIT_A, -1.0f, 0);
                     mTurnMode = 0;
@@ -1840,7 +1840,7 @@ int daNpc_grO_c::cutPushOut(int i_staffId) {
                 setMotion(MOT_WAIT_A, 0.0f, 1);
                 setLookMode(LOOK_RESET);
                 initTalk(mFlowNodeNo, NULL);
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
                 break;
         }
     }

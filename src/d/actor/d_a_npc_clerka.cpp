@@ -662,7 +662,7 @@ int daNpc_clerkA_c::talk(void* param_0) {
         }
     case MODE_RUN:
         if (!mStagger.checkStagger()) {
-            if (mTwilight || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mTwilight || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, FALSE, NULL, FALSE)) {
                     mPlayerActorMngr.entry(daPy_getPlayerActorClass());
                     dComIfGp_event_reset();
@@ -674,7 +674,7 @@ int daNpc_clerkA_c::talk(void* param_0) {
                 }
             } else {
                 mJntAnm.lookPlayer(0);
-                step(fopAcM_searchPlayerAngleY(this), 4, 5, 15, 0);
+                step(BODY_TURN_ANGLE(this), 4, 5, 15, 0);
             }
         }
         break;
@@ -689,7 +689,7 @@ int daNpc_clerkA_c::shop(void* param_0) {
     cXyz cam_ctr_pos;
     cXyz cStack_3c;
 
-    fopAcM_searchPlayerAngleY(this);
+    BODY_TURN_ANGLE(this);
 
     switch (mMode) {
     case MODE_ENTER:

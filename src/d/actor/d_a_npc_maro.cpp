@@ -1217,7 +1217,7 @@ int daNpc_Maro_c::cutConversationAboutPachinko(int arg0) {
             }
 
             case 1: {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
             }
         }
     }
@@ -1254,7 +1254,7 @@ int daNpc_Maro_c::cutConversationAboutWoodSwd(int arg0) {
     if (dComIfGp_getEventManager().getIsAddvance(arg0)) {
         switch (prm_val) {
             case 0: {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 break;
             }
 
@@ -1737,7 +1737,7 @@ int daNpc_Maro_c::cutCacaricoConversation(int arg0) {
     if (dComIfGp_getEventManager().getIsAddvance(arg0)) {
         switch (prm_val) {
             case 0: {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 if (checkStep()) {
                     mStepMode = 0;
                 }
@@ -2020,7 +2020,7 @@ int daNpc_Maro_c::cutArrowTutorial(int arg0) {
             case 70: {
                 mFaceMotionSeqMngr.setNo(9, 0.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, 0.0f, 0, 0);
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 if (checkStep()) {
                     mStepMode = 0;
                 }
@@ -2057,7 +2057,7 @@ int daNpc_Maro_c::cutArrowTutorial(int arg0) {
             case 90: {
                 mFaceMotionSeqMngr.setNo(9, 0.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, 0.0f, 0, 0);
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
                 mHide = false;
                 initTalk(mFlowNodeNo, local_4c);
                 dComIfGp_getEvent()->setPtT(this);
@@ -2383,7 +2383,7 @@ int daNpc_Maro_c::cutArrowTutorial(int arg0) {
                     daPy_getPlayerActorClass()->setPlayerPosAndAngle(&daPy_getPlayerActorClass()->current.pos,
                                         my_s_vec.y, 0);
                     dComIfGp_getEvent()->setPt2(this);
-                    setAngle(fopAcM_searchPlayerAngleY(this));
+                    setAngle(BODY_TURN_ANGLE(this));
                 } else if (prm_val == 63) {
                     if (!daNpcT_chkEvtBit(0x4B)) {
                         dComIfGs_offSaveSwitch(0x6D);
@@ -2550,7 +2550,7 @@ int daNpc_Maro_c::cutArrowTutorial(int arg0) {
                 }
 
                 if (prm_val == 44) {
-                    setAngle(fopAcM_searchPlayerAngleY(this));
+                    setAngle(BODY_TURN_ANGLE(this));
                 }
 
                 retval = 1;
@@ -2831,8 +2831,8 @@ int daNpc_Maro_c::cutNotGonnaLet(int arg0) {
         }
 
         case 2: {
-            if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-                if (step(fopAcM_searchPlayerAngleY(this), 9, 7, 15, 0)) {
+            if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+                if (step(BODY_TURN_ANGLE(this), 9, 7, 15, 0)) {
                     mFaceMotionSeqMngr.setNo(9, -1.0f, 0, 0);
                     mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
                 }

@@ -509,7 +509,7 @@ int daNpc_Zant_c::talk(void* param_1) {
             }
         case 2:
             if (!mStagger.checkStagger()) {
-                if (mTwilight || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mTwilight || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     if (talkProc(NULL, 0, NULL, 0)) {
                         mPlayerActorMngr.entry(daPy_getPlayerActorClass());
                         dComIfGp_event_reset();
@@ -522,7 +522,7 @@ int daNpc_Zant_c::talk(void* param_1) {
                     }
                 } else {
                     mJntAnm.lookPlayer(0);
-                    step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0);
+                    step(BODY_TURN_ANGLE(this), -1, -1, 15, 0);
                 }
             }
         case 3:

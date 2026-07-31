@@ -627,8 +627,8 @@ int daNpc_ZelRo_c::talk(void* param_1) {
             } else {
                 mJntAnm.lookPlayer(0);
 
-                if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-                    step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0);
+                if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+                    step(BODY_TURN_ANGLE(this), -1, -1, 15, 0);
                 } else {
                     bVar1 = true;
                 }

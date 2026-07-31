@@ -1355,7 +1355,7 @@ BOOL daNpc_zrZ_c::ECut_helpPrince(int i_staffID) {
         case 50: {
             initTalk(0x3e9, NULL);
             angle = player->current.angle;
-            angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+            angle.y = BODY_TURN_ANGLE(this) + 0x8000;
             cXyz pos(-898.02f, 14.565f, -1002.517f);
             player->setPlayerPosAndAngle(&pos, &angle);
             break;
@@ -1366,7 +1366,7 @@ BOOL daNpc_zrZ_c::ECut_helpPrince(int i_staffID) {
 
         case 60:
             initTalk(0x3e9, NULL);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             setLookMode(LOOK_PLAYER);
             break;
 
@@ -1443,7 +1443,7 @@ BOOL daNpc_zrZ_c::ECut_helpPrince(int i_staffID) {
                 Z2GetAudioMgr()->subBgmStart(Z2BGM_LUTERA1);
             }
         }
-        setAngle(fopAcM_searchPlayerAngleY(this));
+        setAngle(BODY_TURN_ANGLE(this));
         break;
 
     case 50:
@@ -1588,7 +1588,7 @@ BOOL daNpc_zrZ_c::ECut_comeHere(int i_staffID) {
             mActorMngr[0].entry(daPy_getPlayerActorClass());
             setLookMode(LOOK_PLAYER);
             angle = player->current.angle;
-            angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+            angle.y = BODY_TURN_ANGLE(this) + 0x8000;
             player->setPlayerPosAndAngle(&player->current.pos, &angle);
             dComIfGp_getEvent()->setPtT(this);
             initTalk(8, NULL);
@@ -1600,10 +1600,10 @@ BOOL daNpc_zrZ_c::ECut_comeHere(int i_staffID) {
     switch (prm) {
     case 1:
         facing_player = false;
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             facing_player = true;
         } else {
-            if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+            if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_GT_A, -1.0f, false);
                 mTurnMode = 0;
@@ -1637,7 +1637,7 @@ BOOL daNpc_zrZ_c::ECut_restoreLink(int i_staffID) {
         switch (prm) {
         case 0:
             pullbackPlayer(mpHIO->m.mRestoreDst - 500.0f);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
 
         case 1:
@@ -1777,8 +1777,8 @@ BOOL daNpc_zrZ_c::ECut_clothesGet(int i_staffID) {
         break;
 
     case 20:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                 mTurnMode = 0;
             }
         } else {
@@ -2039,7 +2039,7 @@ BOOL daNpc_zrZ_c::ECut_srSkip(int i_staffID) {
             mSpeed = 0.0f;
             current.pos = mPath.getPntPos(mPath.getIdx());
             old.pos = current.pos;
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             tevStr.TevColor.a = 0xff;
             mIsMoving = false;
             if (mpRockActor != NULL) {
@@ -2081,7 +2081,7 @@ BOOL daNpc_zrZ_c::wait(void* param_0) {
             mOrderEvtNo = EVT_HELP_PRINCE;
             mActorMngr[0].entry(daPy_getPlayerActorClass());
             setLookMode(LOOK_PLAYER);
-            s16 angle_y = fopAcM_searchPlayerAngleY(this);
+            s16 angle_y = BODY_TURN_ANGLE(this);
             shape_angle.y = angle_y;
             mCurAngle.y = angle_y;
             current.angle.y = angle_y;
@@ -2157,21 +2157,21 @@ BOOL daNpc_zrZ_c::comeHere(void* param_0) {
         // fallthrough
 
     case 2:
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
         setAngle(mCurAngle.y);
 
         if (!mIsLeading) {
             if ((pnt_pos - player_pos).absXZ() < mpHIO->m.mFollowDst) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 setLookMode(LOOK_PLAYER);
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
                 setMotion(MOT_LEAD, -1.0f, false);
                 mIsLeading = true;
             } else if (!dComIfGs_isSwitch(mSwitch1, fopAcM_GetRoomNo(this))
                 && (current.pos - player_pos).absXZ() > mpHIO->m.mRestoreDst)
             {
                 mOrderEvtNo = EVT_RESTORE_LINK;
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
             }
         } else {
             if (mPath.chkPassedDst(current.pos)) {
@@ -2215,7 +2215,7 @@ BOOL daNpc_zrZ_c::comeHere(void* param_0) {
                 && (current.pos - player_pos).absXZ() > mpHIO->m.mRestoreDst)
             {
                 mOrderEvtNo = EVT_RESTORE_LINK;
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
             }
         }
         break;
@@ -2251,7 +2251,7 @@ BOOL daNpc_zrZ_c::comeHere2(void* param_0) {
             mpRockActor = (daObjZraRock_c*)fpcM_Search(s_subRock, this);
         }
 
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
         setAngle(mCurAngle.y);
 
         if (!mMusicSet && dComIfGs_isSwitch(mSwitch3, fopAcM_GetRoomNo(this))) {
@@ -2314,7 +2314,7 @@ BOOL daNpc_zrZ_c::comeHere2(void* param_0) {
 
             if ((current.pos - player_pos).absXZ() > mpHIO->m.mRestoreDst) {
                 mOrderEvtNo = EVT_RESTORE_LINK;
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
             }
         }
 
@@ -2348,9 +2348,9 @@ BOOL daNpc_zrZ_c::talk(void* param_0) {
         } else {
             setLookMode(LOOK_PLAYER_TALK);
             mActorMngr[0].entry(daPy_getPlayerActorClass());
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 talk = true;
-            } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+            } else if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_GT_A, -1.0f, false);
                 mTurnMode = 0;

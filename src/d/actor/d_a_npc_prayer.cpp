@@ -613,7 +613,7 @@ bool daNpcPray_c::talk(void*) {
         mActionMode = 2;
         break;
     case 2:
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, TRUE, NULL)) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 int itemNo = 0;
@@ -645,7 +645,7 @@ bool daNpcPray_c::talk(void*) {
             break;
         }
 
-        if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+        if (step(BODY_TURN_ANGLE(this), 1)) {
             setMotion(MOTION_PRAYTALK_e, -1.0f, 0);
             mTurnMode = 0;
         }

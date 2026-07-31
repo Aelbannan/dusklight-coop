@@ -502,9 +502,9 @@ int daNpcTkj_c::talk(void*) {
     case 2:
         if (!mTwilight) {
             mJntAnm.lookPlayer(0);
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 var_r29 = TRUE;
-            } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0)) {
+            } else if (step(BODY_TURN_ANGLE(this), -1, -1, 15, 0)) {
                 var_r29 = TRUE;
             }
         } else {

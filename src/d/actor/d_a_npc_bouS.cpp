@@ -1132,7 +1132,7 @@ bool daNpcBouS_c::talk(void* param_1) {
             break;
         
         case 2:
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     mActorMngrs[0].entry(daPy_getPlayerActorClass());
                     itemNo = 0;
@@ -1168,7 +1168,7 @@ bool daNpcBouS_c::talk(void* param_1) {
                         setExpressionTalkAfter();
                     }
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1)) {
                 setMotion(MOT_WAIT_A, -1.0f, 0);
                 mTurnMode = 0;
             }
@@ -1458,7 +1458,7 @@ int daNpcBouS_c::EvCut_BousIntroSumo2(int i_staffId) {
 
     switch (*cutName) {
         case '0001':
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     int choiceNo = mFlow.getChoiceNo();
                     OS_REPORT("二択分岐 %s\n", choiceNo == 0 ? "はい" : "いいえ");
@@ -1470,7 +1470,7 @@ int daNpcBouS_c::EvCut_BousIntroSumo2(int i_staffId) {
 
                     return 1;
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1)) {
                 setMotion(MOT_WAIT_A, -1.0f, 0);
                 mTurnMode = 0;
             }

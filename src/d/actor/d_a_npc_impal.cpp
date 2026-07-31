@@ -805,7 +805,7 @@ bool daNpcImpal_c::talk(void* param_0) {
         mMode = 2;
         break;
     case 2:
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 int evt_id = 0;
@@ -835,7 +835,7 @@ bool daNpcImpal_c::talk(void* param_0) {
                 }
             }
         } else {
-            s16 angle = fopAcM_searchPlayerAngleY(this);
+            s16 angle = BODY_TURN_ANGLE(this);
             if (step(angle, 1)) {
                 setMotion(MOT_0, -1.0f, false);
                 mTurnMode = 0;

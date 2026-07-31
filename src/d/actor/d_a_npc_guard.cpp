@@ -113,7 +113,7 @@ void daNpcGuard_c::initRun() {
 }
 
 void daNpcGuard_c::executeRun() {
-    field_0xda0 = fopAcM_searchPlayerAngleY(this);
+    field_0xda0 = BODY_TURN_ANGLE(this);
     cLib_addCalcAngleS2(&shape_angle.y, field_0xda0, 0xD, 0x600);
     setAngle();
     f32 maxSpeed = Cd2_HIO_maxSpeed(m_type);
@@ -165,7 +165,7 @@ void daNpcGuard_c::executeFightWait() {
     f32 distCopy = dist;
     cLib_addCalc2(&distCopy, 0.0f, 0.2f, 10.0f);
     speedF = dist - distCopy;
-    field_0xda0 = fopAcM_searchPlayerAngleY(this);
+    field_0xda0 = BODY_TURN_ANGLE(this);
     cLib_addCalcAngleS2(&shape_angle.y, field_0xda0, 0x3, 0x600);
     setAngle();
 
@@ -214,7 +214,7 @@ void daNpcGuard_c::initFightMenace() {
 }
 
 void daNpcGuard_c::executeFightMenace() {
-    field_0xda0 = fopAcM_searchPlayerAngleY(this);
+    field_0xda0 = BODY_TURN_ANGLE(this);
     cLib_addCalcAngleS2(&shape_angle.y, field_0xda0, 0x3, 0x600);
     setAngle();
     if (mpMorf->isStop()) {
@@ -260,7 +260,7 @@ void daNpcGuard_c::executeFear() {
 void daNpcGuard_c::initEscape() {
     setAnm((J3DAnmTransformKey*)getAnmP(4, 3), 2.0f, 8.0f, 2, 0, -1);
     mCitizen.playVoice(0);
-    shape_angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+    shape_angle.y = BODY_TURN_ANGLE(this) + 0x8000;
     speedF = 20.0f;
     fopAcM_createItemFromTable(&current.pos, 7, -1, -1, NULL, 0, NULL, NULL, NULL, false);
     field_0xd9c = 1;
@@ -270,7 +270,7 @@ void daNpcGuard_c::executeEscape() {
     if (field_0xd9c != 0) {
         speedF = 20.0f;
         mpMorf->setPlaySpeed(2.0f);
-        cLib_addCalcAngleS2(&shape_angle.y, fopAcM_searchPlayerAngleY(this) + 0x8000, 0xD, 0x600);
+        cLib_addCalcAngleS2(&shape_angle.y, BODY_TURN_ANGLE(this) + 0x8000, 0xD, 0x600);
         if (current.pos.y != old.pos.y) {
             s16 polyAngle = 0x0;
             cM3dGPla plane;

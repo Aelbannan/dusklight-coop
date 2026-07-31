@@ -2120,7 +2120,7 @@ int daNpc_ykM_c::cutGetTomatoPuree(int i_cutIndex) {
                 break;
 
             case 3:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 break;
 
             case 4:
@@ -2341,7 +2341,7 @@ int daNpc_ykM_c::cutGetTaste(int i_cutIndex) {
                 break;
 
             case 3:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 break;
 
             case 4:
@@ -2773,7 +2773,7 @@ int daNpc_ykM_c::cutFindWolf(int i_cutIndex) {
     if (dComIfGp_getEventManager().getIsAddvance(i_cutIndex)) {
         switch (prm) {
             case 0:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 break;
 
             case 1:
@@ -3586,7 +3586,7 @@ BOOL daNpc_ykM_c::race(void* param_1) {
                         fVar2 *= 0.0f;
                     } else {
                         if (chkTouchPlayer() && field_0x1540 == 0) {
-                            s16 sVar2 = fopAcM_searchPlayerAngleY(this);
+                            s16 sVar2 = BODY_TURN_ANGLE(this);
                             f32 fVar3 = daPy_getPlayerActorClass()->speedF;
                             s16 iVar3 = cM_deg2s(mpHIO->m.fly_angle);
                             daPy_getPlayerActorClass()->setThrowDamage(sVar2, fVar3 * cM_scos(iVar3), fVar3 * cM_ssin(iVar3), 0, 0, 0);

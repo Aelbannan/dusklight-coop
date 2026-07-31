@@ -1074,7 +1074,7 @@ int daNpc_Hanjo_c::cutConversationAboutSaru(int staffIdx) {
     if (dComIfGp_getEventManager().getIsAddvance(staffIdx)) { 
         switch(iVar4) {
         case 0:
-            mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+            mPlayerAngle = BODY_TURN_ANGLE(this);
             if (checkStep()) {
                 mStepMode = 0;
             }
@@ -1702,7 +1702,7 @@ int daNpc_Hanjo_c::throwStone(void* param_0) {
         if (!mStagger.checkStagger()) {
             if (daNpcT_chkEvtBit(0x8b)) {
                 mJntAnm.lookPlayer(0);
-                lookround(fopAcM_searchPlayerAngleY(this));
+                lookround(BODY_TURN_ANGLE(this));
             } else {
                 mJntAnm.lookNone(0);
                 if (home.angle.y != mCurAngle.y) {

@@ -450,7 +450,7 @@ void daNpcCdn3_c::executeEscape() {
             mCitizen.playVoice(0);
             field_0xb68 = 1;
         }
-        cLib_addCalcAngleS2(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 3, 0x600);
+        cLib_addCalcAngleS2(&shape_angle.y, BODY_TURN_ANGLE(this), 3, 0x600);
     } else if (field_0xb68 == 1) {
         if (fopAcM_CheckCondition(this, 4)) {
             fopAcM_delete(this);
@@ -507,7 +507,7 @@ void daNpcCdn3_c::initFear() {
 
     m_seqNum = a_anmNum;
     setAnm((J3DAnmTransformKey*)getAnmP(0x29, mObjNum), 1.0f, 0.0f, 0, 0, -1);
-    field_0xb92 = fopAcM_searchPlayerAngleY(this);
+    field_0xb92 = BODY_TURN_ANGLE(this);
     mFlowNodeNum = 0;
     speedF = 0.0f;
     dComIfGs_onSaveDunSwitch(0x3c);
@@ -559,7 +559,7 @@ void daNpcCdn3_c::executeFight() {
     if (mpMorf->isStop()) {
         setAnm((J3DAnmTransformKey*)getAnmP(42, mObjNum), 1.0f, 12.0f, 2, 0, -1);
     }
-    field_0xb92 = fopAcM_searchPlayerAngleY(this);
+    field_0xb92 = BODY_TURN_ANGLE(this);
     if (mpMorf->getAnm() != getAnmP(41, mObjNum)) {
         if (mpMorf->checkFrame(1.0f)) {
             mCitizen.playVoice(2);

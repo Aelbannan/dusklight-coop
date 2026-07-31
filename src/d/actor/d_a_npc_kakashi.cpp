@@ -865,7 +865,7 @@ void daNpc_Kakashi_c::setStaggerParam(fopAc_ac_c* i_hitActor) {
         case 2:
             sp14 = mCurAngle;
             setPrtcls(0);
-            sp14.y = fopAcM_searchPlayerAngleY(this);
+            sp14.y = BODY_TURN_ANGLE(this);
 
             fopAcM_createChild(fpcNm_OBJ_KBACKET_e, fopAcM_GetID(this), 0x80000000, &pos, fopAcM_GetRoomNo(this), &sp14, NULL, -1, NULL);
             fopAcM_createChild(fpcNm_OBJ_KBACKET_e, fopAcM_GetID(this), 0x80000001, &pos, fopAcM_GetRoomNo(this), &sp14, NULL, -1, NULL);

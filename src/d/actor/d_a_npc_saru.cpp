@@ -1189,7 +1189,7 @@ int daNpc_Saru_c::talk(void* param_1) {
                     }
                 } else {
                     mJntAnm.lookPlayer(0);
-                    step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0);
+                    step(BODY_TURN_ANGLE(this), -1, -1, 15, 0);
                 }
                 break;
 

@@ -282,7 +282,7 @@ int daNpc_Kn_c::teach02_shieldReflectWait(void* param_0) {
                     mSound.startCollisionSE(Z2SE_HIT_HARD_BODY, 0x1E);
                 }
             }
-            cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+            cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
             setAngle(mCurAngle.y);
         }
         break;
@@ -379,8 +379,8 @@ int daNpc_Kn_c::ECut_secondSkillExplain(int i_idx) {
         }
         break;
     case 6: 
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            if (step(fopAcM_searchPlayerAngleY(this), 1, 0x20, 20, 0)) {
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            if (step(BODY_TURN_ANGLE(this), 1, 0x20, 20, 0)) {
                 rt = 1;
                 mFaceMotionSeqMngr.setNo(1, -1.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
@@ -489,9 +489,9 @@ int daNpc_Kn_c::ECut_reflectExplain(int i_idx) {
             speedF = 0.0f;
             speed.zero();
 
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 rt = 1;
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1, 0x20, 20, 0)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1, 0x20, 20, 0)) {
                 mFaceMotionSeqMngr.setNo(1, -1.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
             }
@@ -565,7 +565,7 @@ int daNpc_Kn_c::ECut_secondSkillGet(int i_idx) {
             break;
         }
         case 12:
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
         case 15:
             Z2GetAudioMgr()->bgmStreamPrepare(0x2000038);
@@ -588,9 +588,9 @@ int daNpc_Kn_c::ECut_secondSkillGet(int i_idx) {
             speedF = 0.0f;
             speed.zero();
 
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 rt = 1;
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1, 0x20, 20, 0)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1, 0x20, 20, 0)) {
                 mFaceMotionSeqMngr.setNo(1, -1.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
             }
@@ -611,14 +611,14 @@ int daNpc_Kn_c::ECut_secondSkillGet(int i_idx) {
         if (talkProc(NULL, 0, NULL, 0)) {
             rt = 1;
         }
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
         setAngle(mCurAngle.y);
         break;
     case 30:
         if (talkProc(NULL, 0, NULL, 0)) {
             setSceneChange(1);
         }
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
         setAngle(mCurAngle.y);
         break;
     default:

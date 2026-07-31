@@ -574,7 +574,7 @@ void daNpcTkc_c::reset() {
         mDoMtx_stack_c::multVecZero(&home.pos);
         old.pos = home.pos;
         current.pos = home.pos;
-        setAngle(fopAcM_searchPlayerAngleY(this));
+        setAngle(BODY_TURN_ANGLE(this));
 
         static int const m_cameraItemNum = 1;
         dCam_getBody()->StartEventCamera(18, fopAcM_GetID(this), "Type", 1, &m_cameraItemNum, nullptr);

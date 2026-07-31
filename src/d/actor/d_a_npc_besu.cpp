@@ -1731,7 +1731,7 @@ int daNpc_Besu_c::cutConversationAboutSaru(int arg0) {
     if (dComIfGp_getEventManager().getIsAddvance(arg0)) {
         switch (prm_val) {
             case 0: {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 if (checkStep()) {
                     mStepMode = 0;
                 }
@@ -2228,7 +2228,7 @@ int daNpc_Besu_c::cutCacaricoConversation(int arg0) {
     if (dComIfGp_getEventManager().getIsAddvance(arg0)) {
         switch (prm_val) {
             case 0: {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 if (checkStep()) {
                     mStepMode = 0;
                 }

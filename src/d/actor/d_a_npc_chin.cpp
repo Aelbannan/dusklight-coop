@@ -1273,7 +1273,7 @@ bool daNpcChin_c::talk(void* param_0) {
 
         break;
     case 1:
-        if (mTwilight || fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+        if (mTwilight || BODY_TURN_ANGLE(this) == mCurAngle.y) {
             if (talkProc(NULL, 1, NULL)) {
                 mActorMngrs[0].entry(daPy_getPlayerActorClass());
 
@@ -1293,7 +1293,7 @@ bool daNpcChin_c::talk(void* param_0) {
             }
 
             _talk_motion();
-        } else if (step(fopAcM_searchPlayerAngleY(this), 1, 15)) {
+        } else if (step(BODY_TURN_ANGLE(this), 1, 15)) {
             setMotion(0, -1.0f, 0);
             mTurnMode = 0;
         }
@@ -1684,7 +1684,7 @@ int daNpcChin_c::_Evt_GameFailed_CutInit(const int& param_0) {
     switch (param_0) {
     case 10:
         setMotion(0, -1.0f, 0);
-        setAngle(fopAcM_searchPlayerAngleY(this));
+        setAngle(BODY_TURN_ANGLE(this));
 
         break;
     case 20:
@@ -1791,7 +1791,7 @@ int daNpcChin_c::_Evt_GameSucceed_CutMain(const int& param_0) {
     int result = 0;
     switch (param_0) {
     case 10:
-        setAngle(fopAcM_searchPlayerAngleY(this));
+        setAngle(BODY_TURN_ANGLE(this));
         return 1;
     case 20:
         if (talkProc(NULL, 1, NULL)) {
@@ -1922,7 +1922,7 @@ int daNpcChin_c::_Evt_GameGiveUp_CutInit(const int& param_0) {
     case 10:
         setMotion(0, -1.0f, 0);
         setExpression(14, -1.0f);
-        setAngle(fopAcM_searchPlayerAngleY(this));
+        setAngle(BODY_TURN_ANGLE(this));
 
         break;
     case 20:

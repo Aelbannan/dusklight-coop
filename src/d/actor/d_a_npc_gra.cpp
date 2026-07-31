@@ -1976,7 +1976,7 @@ void daNpc_grA_c::lookat() {
 
 BOOL daNpc_grA_c::chkFindPlayer() {
     BOOL ret = FALSE;
-    s16 searchAngle = fopAcM_searchPlayerAngleY(this) - current.angle.y;
+    s16 searchAngle = BODY_TURN_ANGLE(this) - current.angle.y;
     if (abs(searchAngle) < 0x3c00) {
         if (mType == 8) {
             if (mNpcfActorManager[0].getActorP() == NULL) {
@@ -2244,7 +2244,7 @@ BOOL daNpc_grA_c::ECut_grDSRoll(int i_staffID) {
         break;
     case 0x14: {
         s16 spA = current.angle.y;
-        cLib_chaseAngleS(&spA, fopAcM_searchPlayerAngleY(this), 0x800);
+        cLib_chaseAngleS(&spA, BODY_TURN_ANGLE(this), 0x800);
         setAngle(spA);
         r28 = 1;
     } break;
@@ -2319,15 +2319,15 @@ BOOL daNpc_grA_c::ECut_grDSRoll(int i_staffID) {
         break;
     case 0x46: {
         s16 sp8 = current.angle.y;
-        cLib_chaseAngleS(&sp8, fopAcM_searchPlayerAngleY(this), 0x800);
+        cLib_chaseAngleS(&sp8, BODY_TURN_ANGLE(this), 0x800);
         setAngle(sp8);
         home.angle.y = sp8;
         r28 = 1;
     } break;
     case 0x50:
-        if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+        if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
             mTurnMode = 0;
-        } else if (step(fopAcM_searchPlayerAngleY(this), -1, 0x16, 0xf)) {
+        } else if (step(BODY_TURN_ANGLE(this), -1, 0x16, 0xf)) {
             mTurnMode = 0;
             if (field_0x14D8 == 0x1c) {
                 setMotion(0, -1.0f, 0);
@@ -2335,7 +2335,7 @@ BOOL daNpc_grA_c::ECut_grDSRoll(int i_staffID) {
         }
         if (cLib_calcTimer(&mEventTimer) == 0) {
             if (mMotion == 0x15) {
-                if (field_0x14D8 == 0x16 && fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+                if (field_0x14D8 == 0x16 && BODY_TURN_ANGLE(this) == mCurAngle.y) {
                     r28 = 1;
                 }
                 if (field_0x14D8 == 0x1f && mAnm_p->getFrame() >= 10.0f &&
@@ -2474,10 +2474,10 @@ BOOL daNpc_grA_c::ECut_teachElevator(int i_staffID) {
         }
         break;
     case 0xa:
-        if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+        if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
             mTurnMode = 0;
             r30 = 1;
-        } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xf)) {
+        } else if (step(BODY_TURN_ANGLE(this), -1, -1, 0xf)) {
             mTurnMode = 0;
             setMotion(5, -1.0f, 0);
         }
@@ -2558,10 +2558,10 @@ BOOL daNpc_grA_c::ECut_kickOut(int i_staffID) {
     }
     switch (sp30) {
     case 0:
-        if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+        if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
             mTurnMode = 0;
             r28 = 1;
-        } else if (step(fopAcM_searchPlayerAngleY(this), 0x17, 0x16, 0xf)) {
+        } else if (step(BODY_TURN_ANGLE(this), 0x17, 0x16, 0xf)) {
             mTurnMode = 0;
             setMotion(0, -1.0f, 0);
         }
@@ -2810,7 +2810,7 @@ BOOL daNpc_grA_c::ECut_carrySpaWater(int i_staffID) {
         case 0x50: {
             cXyz c = current.pos;
             c.y += 200.0f;
-            csXyz c2(0, fopAcM_searchPlayerAngleY(this), 0);
+            csXyz c2(0, BODY_TURN_ANGLE(this), 0);
             fopAcM_createItemForBoss(&c, 0x21, fopAcM_GetRoomNo(this), &c2, NULL, 0.0f, 20.0f,
                                      0x80);
         } break;
@@ -2846,9 +2846,9 @@ BOOL daNpc_grA_c::ECut_carrySpaWater(int i_staffID) {
         }
         break;
     case 0x23:
-        if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+        if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
             r28 = 1;
-        } else if (step(fopAcM_searchPlayerAngleY(this), 0x17, 0x16, 0xf)) {
+        } else if (step(BODY_TURN_ANGLE(this), 0x17, 0x16, 0xf)) {
             setExpression(0x17, -1.0f);
             setMotion(0, -1.0f, 0);
             mTurnMode = 0;
@@ -3974,7 +3974,7 @@ BOOL daNpc_grA_c::talk(void*) {
             r27 = mFlowID;
         }
         initTalk(r27, NULL);
-        field_0x1484 = fopAcM_searchPlayerAngleY(this);
+        field_0x1484 = BODY_TURN_ANGLE(this);
         if (mType == 0xb) {
             if (field_0x1691 == 0) {
                 daNpcF_offTmpBit(0xb);

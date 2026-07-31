@@ -691,7 +691,7 @@ void daNpcTks_c::reset() {
             field_0x1370 = 10;
             setAction(&daNpcTks_c::demo_farewell);
             cXyz i_pos(current.pos);
-            csXyz i_angle(0, fopAcM_searchPlayerAngleY(this), 0);
+            csXyz i_angle(0, BODY_TURN_ANGLE(this), 0);
             i_pos.y += 60.0f;
             parentActorID = fopAcM_createChild(fpcNm_NPC_TKC_e, fopAcM_GetID(this), 4, &i_pos, fopAcM_GetRoomNo(this),
                                             &i_angle, NULL, -1, NULL);
@@ -1200,7 +1200,7 @@ void daNpcTks_c::talk() {
             break;
 
         case 2: {
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     mActorMngr[0].entry(daPy_getPlayerActorClass());
                     int itemNo = 0;
@@ -1230,7 +1230,7 @@ void daNpcTks_c::talk() {
                         setExpressionTalkAfter();
                     }
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1)) {
                 setMotion(MOT_WAIT_A, -1.0f, 0);
                 mTurnMode = 0;
             }
@@ -1666,7 +1666,7 @@ void daNpcTks_c::demo_appear() {
                             break;
 
                         case '0004':
-                            if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+                            if (step(BODY_TURN_ANGLE(this), 1)) {
                                 setMotionAnm(ANM_WAIT_A, 0.0f);
                                 eventManager.cutEnd(staffId);
                             }
@@ -1930,7 +1930,7 @@ void daNpcTks_c::demo_farewell() {
                                 initTalk(mMessageNo, NULL);
                                 mMsgTimer = 0;
                                 setLookMode(LOOK_PLAYER_TALK, NULL);
-                                setAngle(fopAcM_searchPlayerAngleY(this));
+                                setAngle(BODY_TURN_ANGLE(this));
                                 break;
                             
                             case '0002':
@@ -2111,7 +2111,7 @@ void daNpcTks_c::demo_warpBack() {
                             case '0002':
                                 initTalk(3, NULL);
                                 mMsgTimer = 0;
-                                setAngle(fopAcM_searchPlayerAngleY(this));
+                                setAngle(BODY_TURN_ANGLE(this));
                                 break;
 
                             case '0003':
@@ -2239,7 +2239,7 @@ void daNpcTks_c::demo_walkBack() {
                             case '0002':
                                 initTalk(3, NULL);
                                 mMsgTimer = 0;
-                                setAngle(fopAcM_searchPlayerAngleY(this));
+                                setAngle(BODY_TURN_ANGLE(this));
                                 break;
 
                             case '0003':
@@ -2343,7 +2343,7 @@ void daNpcTks_c::demo_Lv7Start() {
                             case '0002':
                                 current.pos.set(120.0f, 3000.0f, 5500.0f);
                                 old.pos = current.pos;
-                                setAngle(fopAcM_searchPlayerAngleY(this));
+                                setAngle(BODY_TURN_ANGLE(this));
                                 parentActorID = fopAcM_createChild(fpcNm_NPC_TKC_e, fopAcM_GetID(this), 3, &current.pos, fopAcM_GetRoomNo(this),
                                                                    &mCurAngle, NULL, -1, NULL);
                                 dComIfGp_event_setTalkPartner(this);
@@ -2484,12 +2484,12 @@ void daNpcTks_c::demo_Lv7Start() {
                             break;
 
                         case '0008':
-                            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                                 if (talkProc(NULL, TRUE, NULL)) {
                                     eventManager.cutEnd(staffId);
                                 }
                             } else {
-                                if (step(fopAcM_searchPlayerAngleY(this), 0)) {
+                                if (step(BODY_TURN_ANGLE(this), 0)) {
                                     mTurnMode = 0;
                                 }
                             }
@@ -2713,11 +2713,11 @@ void daNpcTks_c::demo_Lv3PickUp() {
                             break;
 
                         case '0002':
-                            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                                 if (talkProc(NULL, TRUE, NULL)) {
                                     eventManager.cutEnd(staffId);
                                 }
-                            } else if (step(fopAcM_searchPlayerAngleY(this), 0)) {
+                            } else if (step(BODY_TURN_ANGLE(this), 0)) {
                                 mTurnMode = 0;
                             }
                             break;
@@ -2844,11 +2844,11 @@ void daNpcTks_c::demo_Lv6PickUp() {
                             break;
 
                         case '0002':
-                            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                                 if (talkProc(NULL, TRUE, NULL)) {
                                     eventManager.cutEnd(staffId);
                                 }
-                            } else if (step(fopAcM_searchPlayerAngleY(this), 0)) {
+                            } else if (step(BODY_TURN_ANGLE(this), 0)) {
                                 mTurnMode = 0;
                             }
                             break;

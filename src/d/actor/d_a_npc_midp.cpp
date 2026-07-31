@@ -585,7 +585,7 @@ int daNpc_midP_c::talk(void* param_1) {
         case 1:
             if (!mStagger.checkStagger()) {
                 initTalk(mFlowNodeNo, NULL);
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 if (checkStep()) {
                     mStepMode = 0;
                 }

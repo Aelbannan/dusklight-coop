@@ -1177,7 +1177,7 @@ int daNpc_Taro_c::cutConversationAboutPachinko(int param_1) {
     if (dComIfGp_getEventManager().getIsAddvance(param_1)) {
         switch(prm) {
         case 0:
-            mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+            mPlayerAngle = BODY_TURN_ANGLE(this);
             break;
         case 1:
             break;
@@ -1224,7 +1224,7 @@ int daNpc_Taro_c::cutConversationAboutWoodSwd(int param_1) {
     if (dComIfGp_getEventManager().getIsAddvance(param_1)) {
         switch(prm) {
         case 0:
-            mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+            mPlayerAngle = BODY_TURN_ANGLE(this);
             break;
         case 1:
             break;
@@ -1484,7 +1484,7 @@ int daNpc_Taro_c::cutHail(int param_1) {
             daTag_Push_c* actor_p = (daTag_Push_c*)field_0xba0.getActorP();
             JUT_ASSERT(3732, NULL != actor_p)
             initTalk(actor_p->getFlowNodeNo(), NULL);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
         }
         }
@@ -2367,7 +2367,7 @@ int daNpc_Taro_c::cutArrowTutorial(int param_1) {
                 mJntAnm.lookCamera(0);
                 mPlayerAngle = cLib_targetAngleY(fopAcM_GetPosition_p(this), fopCamM_GetEye_p(pCamera));
             } else {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
             }
 
             if (checkStep()) {
@@ -2438,7 +2438,7 @@ int daNpc_Taro_c::cutArrowTutorial(int param_1) {
                 cStack_48.y = cLib_targetAngleY(fopAcM_GetPosition_p(this), fopCamM_GetEye_p(pCamera));
             } else {
                 mJntAnm.lookPlayer(0);
-                cStack_48.y = fopAcM_searchPlayerAngleY(this);
+                cStack_48.y = BODY_TURN_ANGLE(this);
             }
 
             if (cStack_48.y != mCurAngle.y) {
@@ -2536,7 +2536,7 @@ int daNpc_Taro_c::cutTagPush1(int param_1) {
             mMotionSeqMngr.setNo(0, 0.0f, 0, 0);
             mJntAnm.lookNone(1);
             initTalk(pushTag->getFlowNodeNo(), NULL);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
         }
     }
@@ -2745,7 +2745,7 @@ int daNpc_Taro_c::cutTagPush4(int param_1) {
             mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
             mJntAnm.lookNone(1);
             pushTag->pushBackPlayer(0);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             mStagger.initialize();
             mDamageTimer = 0;
             break;
@@ -2864,7 +2864,7 @@ int daNpc_Taro_c::wait(void* param_0) {
         }
         case TYPE_8:
             if (daNpcT_chkTmpBit(0x3c)) {
-                local_5e = fopAcM_searchPlayerAngleY(this);
+                local_5e = BODY_TURN_ANGLE(this);
             }
             if (daPy_py_c::checkNowWolf() && mHide == 0) {
                 if (daPy_getPlayerActorClass()->eventInfo.mCondition & 1) {

@@ -467,7 +467,7 @@ int daNpcClerkT_c::talk(void* param_0) {
         }
     case MODE_RUN:
         if (!mStagger.checkStagger()) {
-            if (mTwilight || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mTwilight || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, FALSE, NULL, FALSE)) {
                     mPlayerActorMngr.entry(daPy_getPlayerActorClass());
                     dComIfGp_event_reset();
@@ -479,7 +479,7 @@ int daNpcClerkT_c::talk(void* param_0) {
                 }
             } else {
                 mJntAnm.lookPlayer(0);
-                step(fopAcM_searchPlayerAngleY(this), 1, 0, 15, 0);
+                step(BODY_TURN_ANGLE(this), 1, 0, 15, 0);
             }
         }
         break;
@@ -494,7 +494,7 @@ int daNpcClerkT_c::shop(void* param_0) {
     cXyz cam_ctr_pos;
     cXyz cStack_3c;
 
-    fopAcM_searchPlayerAngleY(this);
+    BODY_TURN_ANGLE(this);
 
     switch (mMode) {
     case MODE_ENTER:
@@ -518,7 +518,7 @@ int daNpcClerkT_c::shop(void* param_0) {
         }
     case MODE_RUN:
         if (!mStagger.checkStagger()) {
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 mShopProcess = shop_process(this, &mFlow);
                 if (mShopProcess != 0) {
                     mPlayerActorMngr.entry(daPy_getPlayerActorClass());
@@ -527,7 +527,7 @@ int daNpcClerkT_c::shop(void* param_0) {
                     field_0x10e9 = 1;
                 }
             } else {
-                step(fopAcM_searchPlayerAngleY(this), 1, 0, 15, 0);
+                step(BODY_TURN_ANGLE(this), 1, 0, 15, 0);
             }
             if (chkExplainItem() && getCursorPos()) {
                 field_0xd6c = mItemCtrl.getCurrentPos(getCursorPos() - 1);

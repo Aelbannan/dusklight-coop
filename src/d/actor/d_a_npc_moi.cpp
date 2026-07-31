@@ -1071,7 +1071,7 @@ void daNpc_Moi_c::setSSlash(int param_1) {
     } else {
         mSound.startCreatureVoice(JAISoundID(Z2SE_MOI_V_WOUND_SWING), -1);
     }
-    field_0x1664 = fopAcM_searchPlayerAngleY(this);
+    field_0x1664 = BODY_TURN_ANGLE(this);
     s16 iVar3 = cM_deg2s(mpHIO->m.field_0xb8);
     daPy_getPlayerActorClass()->setThrowDamage(fopAcM_searchPlayerAngleY(this),
                                                mpHIO->m.field_0xb4 * cM_scos(iVar3),
@@ -1306,7 +1306,7 @@ int daNpc_Moi_c::poise() {
                         mMotionSeqMngr.setNo(MOT_UNK_10, -1.0f, 0, 0);
                         field_0x166e = 0;
                     }
-                } else if ((s16)abs((s16)(fopAcM_searchPlayerAngleY(this) - mCurAngle.y)) <
+                } else if ((s16)abs((s16)(BODY_TURN_ANGLE(this) - mCurAngle.y)) <
                            cM_deg2s(60.0))
                 {
                     cXyz cStack_74 = getAttnPos(daPy_getPlayerActorClass());
@@ -1332,7 +1332,7 @@ int daNpc_Moi_c::poise() {
                         field_0x1648 = 0;
                     }
                 } else {
-                    field_0x1664 = fopAcM_searchPlayerAngleY(this);
+                    field_0x1664 = BODY_TURN_ANGLE(this);
                     if (field_0x166b != 0) {
                         mMotionSeqMngr.setNo(MOT_UNK_10, -1.0f, 0, 0);
                     } else {
@@ -1645,7 +1645,7 @@ int daNpc_Moi_c::cutFindWolf(int param_1) {
             mPath.setIdx(0);
             mPath.setNextIdx(mPath.getNumPnts());
             cStack_30 = mPath.getPntPos(mPath.getIdx());
-            field_0x1664 = fopAcM_searchPlayerAngleY(this);
+            field_0x1664 = BODY_TURN_ANGLE(this);
             setAngle(field_0x1664);
             mPlayerActorMngr.entry(daPy_getPlayerActorClass());
             mEventTimer = uVar8;

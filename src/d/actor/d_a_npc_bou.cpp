@@ -635,7 +635,7 @@ void daNpc_Bou_c::action() {
 
     hit_actor = field_0xba0.getActorP();
     if (hit_actor != NULL) {
-        UNUSED(abs((s16)(fopAcM_searchPlayerAngleY(this) - mCurAngle.y)));
+        UNUSED(abs((s16)(BODY_TURN_ANGLE(this) - mCurAngle.y)));
         switch (((daTag_Push_c*) hit_actor)->getId()) {
             case 7: {
                 mEvtNo = 8;
@@ -1290,7 +1290,7 @@ int daNpc_Bou_c::cutMeetingAgain(int arg) {
             case 0: {
                 mFaceMotionSeqMngr.setNo(10, -1.0f, 0, 0);
                 mMotionSeqMngr.setNo(0, -1.0f, 0, 0);
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
                 break;
             }
 

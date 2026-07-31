@@ -1937,15 +1937,15 @@ int daNpc_Grz_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngrs[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     bVar1 = TRUE;
                 } else if (mType == TYPE_LIEDOWN) {
-                    if (step(fopAcM_searchPlayerAngleY(this), 9, 14, 30)) {
+                    if (step(BODY_TURN_ANGLE(this), 9, 14, 30)) {
                         setExpression(EXPR_WEAK_WAIT, -1.0f);
                         setMotion(MOT_WEAK_WAIT, -1.0f, 0);
                         mTurnMode = 0;
                     }
-                } else if (step(fopAcM_searchPlayerAngleY(this), 10, 13, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), 10, 13, 15)) {
                     setExpression(EXPR_NONE, -1.0f);
                     setMotion(MOT_WAIT_A, -1.0f, 0);
                     mTurnMode = 0;
@@ -2385,9 +2385,9 @@ int daNpc_Grz_c::doStoneSmashCut(int i_staffId) {
             break;
 
         case 40:
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 rv = 1;
-            } else if (step(fopAcM_searchPlayerAngleY(this), 10, 13, 15)) {
+            } else if (step(BODY_TURN_ANGLE(this), 10, 13, 15)) {
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, 0);
                 mTurnMode = 0;

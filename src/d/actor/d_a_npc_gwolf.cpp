@@ -1313,7 +1313,7 @@ BOOL daNpc_GWolf_c::ECut_attackWarp(int i_staffId) {
         }
 
         case 10:
-            cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+            cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
             setAngle(mCurAngle.y);
             rv = TRUE;
             break;
@@ -1440,7 +1440,7 @@ BOOL daNpc_GWolf_c::ECut_attackWarpHorse(int i_staffId) {
         }
 
         case 10:
-            cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+            cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
             setAngle(mCurAngle.y);
             rv = TRUE;
             break;
@@ -1834,9 +1834,9 @@ BOOL daNpc_GWolf_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngrs[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     bVar1 = TRUE;
-                } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                     setMotion(MOT_WAITSIT, -1.0f, 0);
                     mTurnMode = 0;
                 }

@@ -1324,7 +1324,7 @@ bool daNpcMoiR_c::talk(void* param_1) {
             break;
 
         case 2:
-            if (mMode == MODE_SIT || fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+            if (mMode == MODE_SIT || BODY_TURN_ANGLE(this) == mCurAngle.y) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     mActorMngr[0].entry(daPy_getPlayerActorClass());
                     itemNo = 0;
@@ -1359,7 +1359,7 @@ bool daNpcMoiR_c::talk(void* param_1) {
                         setExpressionTalkAfter();
                     }
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+            } else if (step(BODY_TURN_ANGLE(this), 1)) {
                 setMotion(MOT_WAIT_C, -1.0f, 0);
                 mTurnMode = 0;
             }
@@ -1456,7 +1456,7 @@ bool daNpcMoiR_c::fight(void* param_1) {
                 iVar1 = 0;
             }
 
-            if (step(fopAcM_searchPlayerAngleY(this), iVar1)) {
+            if (step(BODY_TURN_ANGLE(this), iVar1)) {
                 if (mMotion == MOT_SQUAREUP_STEP) {
                     setMotion(MOT_DRIVEAWAY, -1.0f, 0);
                     field_0xe00 = cLib_getRndValue(1, 2);
@@ -1668,7 +1668,7 @@ BOOL daNpcMoiR_c::EvCut_Appear(int i_cutIndex) {
             break;
 
         case '0005':
-            if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+            if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     int choice_no = mFlow.getChoiceNo();
                     OS_REPORT("二択分岐 %s\n", choice_no == 0 ? "はい" : "いいえ");
@@ -1680,7 +1680,7 @@ BOOL daNpcMoiR_c::EvCut_Appear(int i_cutIndex) {
                     return TRUE;
                 }
             } else {
-                if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+                if (step(BODY_TURN_ANGLE(this), 1)) {
                     setMotion(MOT_WAIT_C, -1.0f, 0);
                     mTurnMode = 0;
                 }
@@ -1747,14 +1747,14 @@ BOOL daNpcMoiR_c::EvCut_Appear2(int i_cutIndex) {
 
     switch (*cutName) {
         case '0001':
-            if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+            if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     return TRUE;
                 }
                 break;
             }
 
-            if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+            if (step(BODY_TURN_ANGLE(this), 1)) {
                 setMotion(MOT_WAIT_C, -1.0f, 0);
                 mTurnMode = 0;
             }

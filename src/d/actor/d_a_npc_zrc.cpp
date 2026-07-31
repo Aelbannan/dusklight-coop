@@ -1469,7 +1469,7 @@ BOOL daNpc_zrC_c::waitPray(void* param_0) {
         if ((mLookMode == LOOK_PLAYER || mLookMode == LOOK_PLAYER_TALK)) {
             BOOL find_player = chkFindPlayer2(FALSE, shape_angle.y);
             if (find_player || field_0xe30) {
-                s16 player_angle = fopAcM_searchPlayerAngleY(this);
+                s16 player_angle = BODY_TURN_ANGLE(this);
                 if (find_player && !field_0xe30) {
                     setExpression(EXPR_GETUP, -1.0f);
                     setMotion(MOT_GETUP, -1.0f, FALSE);
@@ -1582,9 +1582,9 @@ BOOL daNpc_zrC_c::talk(void* param_0) {
         } else {
             setLookMode(LOOK_PLAYER_TALK);
             mActorMngr[0].entry(daPy_getPlayerActorClass());
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 talk = TRUE;
-            } else if (step(fopAcM_searchPlayerAngleY(this), EXPR_STEP, MOT_STEP, 15)) {
+            } else if (step(BODY_TURN_ANGLE(this), EXPR_STEP, MOT_STEP, 15)) {
                 setExpression(EXPR_WAIT_A, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
@@ -1715,8 +1715,8 @@ BOOL daNpc_zrC_c::ECut_earringGet(int i_staffID) {
 
     switch (prm) {
     case 0:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 30)) {
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            if (step(BODY_TURN_ANGLE(this), -1, -1, 30)) {
                 setExpression(EXPR_WAIT_A, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;

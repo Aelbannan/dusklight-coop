@@ -950,9 +950,9 @@ int daNpc_myna2_c::talk(void* param_0) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMgrs[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     var_r29 = 1;
-                } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF)) {
+                } else if (step(BODY_TURN_ANGLE(this), -1, -1, 0xF)) {
                     mTurnMode = 0;
                 }
             }
@@ -1325,7 +1325,7 @@ void daNpc_myna2_c::calcHovering(int param_0, int param_1) {
     }
 
     current.pos += field_0xe10;
-    cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 0x10, 0x200);
+    cLib_addCalcAngleS2(&current.angle.y, BODY_TURN_ANGLE(this), 0x10, 0x200);
     
     s16 sp14 = (current.angle.y + cM_atan2s(field_0xe10.x, field_0xe10.z));
     f32 temp_f30 = field_0xe10.absXZ() * cM_scos(sp14);

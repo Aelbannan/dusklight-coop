@@ -6,6 +6,8 @@
 #include "SSystem/SComponent/c_math.h"
 #include "Z2AudioLib/Z2Creature.h"
 #include "d/actor/d_a_player.h"
+#include "dusk/coop/coop_body_turn_bridge.h"
+
 #include "d/d_path.h"
 #include "d/d_msg_flow.h"
 #include "d/d_particle_copoly.h"

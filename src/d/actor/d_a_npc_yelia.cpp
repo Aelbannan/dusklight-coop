@@ -657,7 +657,7 @@ BOOL daNpc_Yelia_c::checkChangeEvt() {
                             mMotionSeqMngr.setNo(MOTION_KIZUKU, -1.0f, FALSE, 0);
                         }
                         mJntAnm.lookPlayer(false);
-                        cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this),
+                        cLib_addCalcAngleS2(&current.angle.y, BODY_TURN_ANGLE(this),
                                             4, 0x800);
                         shape_angle.y = current.angle.y;
                         mCurAngle.y = shape_angle.y;

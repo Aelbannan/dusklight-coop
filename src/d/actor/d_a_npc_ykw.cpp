@@ -1936,7 +1936,7 @@ int daNpc_ykW_c::cutFindWolf(int param_0) {
     case 0:
         if (mEventTimer != 0 || dComIfGp_getEventManager().getIsAddvance(param_0)) {
             if (cLib_calcTimer(&mEventTimer) == 0) {
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
             }
         } else {
             mJntAnm.lookPlayer(0);

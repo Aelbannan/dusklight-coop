@@ -768,7 +768,7 @@ void daNpc_Aru_c::reset() {
             }
         }
     } else {
-        angle.y = fopAcM_searchPlayerAngleY(this);
+        angle.y = BODY_TURN_ANGLE(this);
     }
 
     setAngle(angle);
@@ -1528,7 +1528,7 @@ int daNpc_Aru_c::cutGotoBullRunningStage(int i_staffID) {
     if (dComIfGp_getEventManager().getIsAddvance(i_staffID)) {
         switch (prm) {
             case 0:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
 
                 if (checkStep()) {
                     mStepMode = 0;
@@ -1709,7 +1709,7 @@ int daNpc_Aru_c::cutSpeakTo(int i_staffID) {
     if (dComIfGp_getEventManager().getIsAddvance(i_staffID)) {
         switch (prm) {
             case 0:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
 
                 if (checkStep()) {
                     mStepMode = 0;
@@ -1933,7 +1933,7 @@ int daNpc_Aru_c::wait(void*) {
                 } else if (mType == TYPE_0 || (mType == TYPE_2 && daNpcT_chkTmpBit(182))) {
                     // dSv_event_tmp_flag_c::T_0182 - Ordon Ranch - Finished Goat herding Ⅱ
                     mJntAnm.lookPlayer(0);
-                    lookround(fopAcM_searchPlayerAngleY(this));
+                    lookround(BODY_TURN_ANGLE(this));
                 } else {
                     if (field_0xfcd) {
                         mPlayerActorMngr.remove();
@@ -2032,7 +2032,7 @@ int daNpc_Aru_c::bullRunning(void*) {
                     }
                 } else {
                     mJntAnm.lookPlayer(0);
-                    lookround(fopAcM_searchPlayerAngleY(this));
+                    lookround(BODY_TURN_ANGLE(this));
                 }
             }
             break;
@@ -2076,7 +2076,7 @@ int daNpc_Aru_c::skipFence(void* param_1) {
 
             if (!mStagger.checkStagger()) {
                 mJntAnm.lookPlayer(0);
-                lookround(fopAcM_searchPlayerAngleY(this));
+                lookround(BODY_TURN_ANGLE(this));
             }
             break;
 

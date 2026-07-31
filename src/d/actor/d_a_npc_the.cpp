@@ -799,9 +799,9 @@ BOOL daNpcThe_c::talk(void* param_0) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
             }
 
-            if (mType == TYPE_KAKARIKO || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mType == TYPE_KAKARIKO || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 bvar1 = true;
-            } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xf)) {
+            } else if (step(BODY_TURN_ANGLE(this), -1, -1, 0xf)) {
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, false);
                 mTurnMode = 0;

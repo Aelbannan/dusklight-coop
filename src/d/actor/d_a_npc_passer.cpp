@@ -318,7 +318,7 @@ void daNpcPasser_c::executeEscape() {
             field_0xb1c = 1;
         }
 
-        cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), MREG_S(0) + 3, MREG_S(1) + 0x600);
+        cLib_addCalcAngleS2(&current.angle.y, BODY_TURN_ANGLE(this), MREG_S(0) + 3, MREG_S(1) + 0x600);
     } else if (field_0xb1c == 1) {
         if (fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e)) {
             fopAcM_delete(this);
@@ -400,7 +400,7 @@ void daNpcPasser_c::executeFight() {
         setAnm((J3DAnmTransformKey*)getAnmP(0x2A, m_objNum), 1.0f, 12.0f, J3DFrameCtrl::EMode_LOOP, 0, -1);
     }
 
-    mTargetAngleY = fopAcM_searchPlayerAngleY(this);
+    mTargetAngleY = BODY_TURN_ANGLE(this);
 
     if (mpMorf->getAnm() != getAnmP(0x29, m_objNum)) {
         if (mpMorf->checkFrame(1.0f)) {

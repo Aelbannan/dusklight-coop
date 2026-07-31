@@ -3901,8 +3901,8 @@ bool daNpcChat_c::wait(void* param_1) {
                     }
 
                     if (
-                        mTalkFlag && mLookPlayerCheck == 1 && mCurAngle.y != fopAcM_searchPlayerAngleY(this) &&
-                        step(fopAcM_searchPlayerAngleY(this), 1)
+                        mTalkFlag && mLookPlayerCheck == 1 && mCurAngle.y != BODY_TURN_ANGLE(this) &&
+                        step(BODY_TURN_ANGLE(this), 1)
                     ) {
                         mTurnMode = 0;
                     }
@@ -3947,7 +3947,7 @@ bool daNpcChat_c::wait(void* param_1) {
 bool daNpcChat_c::fear(void* param_1) {
     switch (mMode) {
         case 0:
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             setMotion(MOT_SURPRISE, -1.0f, 0);
             speedF = 0.0f;
             dComIfGs_onSaveDunSwitch(60);
@@ -3958,7 +3958,7 @@ bool daNpcChat_c::fear(void* param_1) {
             if (mMotionAnm == ANM_SURPRISE) {
                 if (mAnm_p->isStop()) {
                     setMotion(MOT_TO_WOLF, -1.0f, 0);
-                    mPlayerAngleY = fopAcM_searchPlayerAngleY(this) + 0x8000;
+                    mPlayerAngleY = BODY_TURN_ANGLE(this) + 0x8000;
                 }
             } else {
                 if (mCurAngle.y != mPlayerAngleY) {
@@ -4005,7 +4005,7 @@ bool daNpcChat_c::talk(void* param_1) {
 
         case 2:
             if (mLookPlayerCheck == 1) {
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     if (talkProc(NULL, FALSE, (fopAc_ac_c**)mTalkMembers)) {
                         setAction(&daNpcChat_c::wait);
                         rv = true;
@@ -4028,7 +4028,7 @@ bool daNpcChat_c::talk(void* param_1) {
                         }
                     }
                 } else {
-                    if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+                    if (step(BODY_TURN_ANGLE(this), 1)) {
                         mTurnMode = 0;
                     }
                 }

@@ -707,7 +707,7 @@ bool daNpcAshB_c::wait(void* param_0) {
                     cM_deg2s(mpHIO->m.common.body_angleY_max + mpHIO->m.common.head_angleY_max);
 
                 if (fopAcM_seenPlayerAngleY(this) > res) {
-                    field_0xdea = fopAcM_searchPlayerAngleY(this);
+                    field_0xdea = BODY_TURN_ANGLE(this);
                 }
             } else if (step(field_0xdea, 1, 15.0f)) {
                 setExpression(EXPR_EXPLAIN_B, -1.0f);
@@ -869,7 +869,7 @@ bool daNpcAshB_c::talk(void* param_0) {
         mMode = 2;
         break;
     case 2:
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 int evt_id = 0;
@@ -902,7 +902,7 @@ bool daNpcAshB_c::talk(void* param_0) {
                 }
             }
         } else {
-            s16 angle = fopAcM_searchPlayerAngleY(this);
+            s16 angle = BODY_TURN_ANGLE(this);
 
             if (step(angle, 1, 15.0f)) {
                 setMotion(0, -1.0f, false);
@@ -1015,7 +1015,7 @@ BOOL daNpcAshB_c::EvCut_Appear(int i_staffID) {
     case '0002':
         return TRUE;
     case '0003':
-        if (step(fopAcM_searchPlayerAngleY(this), 1, 20.0f) != 0) {
+        if (step(BODY_TURN_ANGLE(this), 1, 20.0f) != 0) {
             setLookMode(2);
             setMotion(0, -1.0f, 0);
             mTurnMode = 0;

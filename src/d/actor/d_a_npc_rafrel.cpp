@@ -1083,7 +1083,7 @@ bool daNpcRafrel_c::wait_type01(void* param_0) {
             if (mCurAngle.y == field_0xe12) {
                 s16 spA = cM_deg2s(mpHIO->m.common.body_angleY_max + mpHIO->m.common.head_angleY_max);
                 if (fopAcM_seenPlayerAngleY(this) > spA) {
-                    field_0xe12 = fopAcM_searchPlayerAngleY(this);
+                    field_0xe12 = BODY_TURN_ANGLE(this);
                 }
             } else if (step(field_0xe12, 0x12, 15.0f)) {
                 setExpression(7, -1.0f);
@@ -1301,7 +1301,7 @@ bool daNpcRafrel_c::talk(void* param_0) {
         field_0xe10 = 2;
         break;
     case 2:
-        if (mType == 0 || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mType == 0 || mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 field_0xc7c[0].entry(daPy_getPlayerActorClass());
 
@@ -1332,7 +1332,7 @@ bool daNpcRafrel_c::talk(void* param_0) {
                     setExpressionTalkAfter();
                 }
             }
-        } else if (step(fopAcM_searchPlayerAngleY(this), 0x12, 15.0f)) {
+        } else if (step(BODY_TURN_ANGLE(this), 0x12, 15.0f)) {
             setMotion(0, -1.0f, 0);
             mTurnMode = 0;
         }
@@ -1586,7 +1586,7 @@ int daNpcRafrel_c::EvCut_Appear(int i_staffId) {
     case '0008':
     case '0009':
     case '0011':
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 int choiceNo = mFlow.getChoiceNo();
                 OS_REPORT("二択分岐 %s\n", choiceNo == 0 ? "はい" : "いいえ");
@@ -1597,13 +1597,13 @@ int daNpcRafrel_c::EvCut_Appear(int i_staffId) {
 
                 return 1;
             }
-        } else if (step(fopAcM_searchPlayerAngleY(this), 0x12, 15.0f)) {
+        } else if (step(BODY_TURN_ANGLE(this), 0x12, 15.0f)) {
             setMotion(0, -1.0f, 0);
             mTurnMode = 0;
         }
         break;
     case '0002':
-        if (step(fopAcM_searchPlayerAngleY(this), 0x11, 30.0f)) {
+        if (step(BODY_TURN_ANGLE(this), 0x11, 30.0f)) {
             setExpression(7, -1.0f);
             setMotion(0, -1.0f, 0);
             return 1;

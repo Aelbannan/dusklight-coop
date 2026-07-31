@@ -797,7 +797,7 @@ int daNpc_Raca_c::talk(void* param_1) {
             // fallthrough
         case MODE_RUN:
             if (!mStagger.checkStagger()) {
-                if (mTwilight || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mTwilight || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     if (talkProc(NULL, FALSE, NULL, FALSE)) {
                         mPlayerActorMngr.entry(daPy_getPlayerActorClass());
                         dComIfGp_event_reset();
@@ -811,7 +811,7 @@ int daNpc_Raca_c::talk(void* param_1) {
                     }
                 } else {
                     mJntAnm.lookPlayer(0);
-                    step(fopAcM_searchPlayerAngleY(this), 7, 8, 15, 0);
+                    step(BODY_TURN_ANGLE(this), 7, 8, 15, 0);
                 }
             }
             break;

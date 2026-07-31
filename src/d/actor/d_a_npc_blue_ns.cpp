@@ -928,7 +928,7 @@ int daNpcBlueNS_c::talk(int param_0) {
         field_0xdc0 = 2;
         break;
     case 2:
-        if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 int sp8 = 0;
@@ -936,7 +936,7 @@ int daNpcBlueNS_c::talk(int param_0) {
                 setAction(&daNpcBlueNS_c::wait);
                 var_r28 = 1;
             }
-        } else if (step(fopAcM_searchPlayerAngleY(this), 1)) {
+        } else if (step(BODY_TURN_ANGLE(this), 1)) {
             mTurnMode = 0;
         }
         break;

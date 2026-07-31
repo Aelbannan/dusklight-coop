@@ -266,14 +266,14 @@ BOOL daNpc_zrA_c::talk(void* param_0) {
         } else {
             setLookMode(LOOK_PLAYER_TALK);
             mActorMngr[0].entry(daPy_getPlayerActorClass());
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 bvar2 = true;
             } else if (mAcch.ChkWaterIn()) {
-                if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+                if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                     mTurnMode = 0;
                 }
             } else {
-                if (step(fopAcM_searchPlayerAngleY(this), EXPR_NONE, MOT_STEP, 15)) {
+                if (step(BODY_TURN_ANGLE(this), EXPR_NONE, MOT_STEP, 15)) {
                     setMotion(MOT_WAIT_A, -1.0f, false);
                     mTurnMode = 0;
                 }
@@ -817,7 +817,7 @@ BOOL daNpc_zrA_c::evasionCalc(cXyz& param_0, csXyz& param_1) {
     f32 dist;
     line.SetStartEnd(current.pos, param_0);
     if (cM3d_Len3dSqPntAndSegLine(&line, &player->current.pos, &proj, &dist) && dist <= 10000.0f) {
-        fopAcM_searchPlayerAngleY(this);
+        BODY_TURN_ANGLE(this);
         if ((s16)(param_1.y - current.angle.y) > 0) {
             mEvasionAngle = -0x1800;
         } else {
@@ -836,7 +836,7 @@ BOOL daNpc_zrA_c::evasionCalc(cXyz& param_0, csXyz& param_1) {
         line.SetStartEnd(current.pos, vec);
         if (cM3d_Len3dSqPntAndSegLine(&line, &player->current.pos, &proj, &dist)
                                                             && dist <= 10000.0f) {
-            if ((s16)(fopAcM_searchPlayerAngleY(this) - current.angle.y) > 0) {
+            if ((s16)(BODY_TURN_ANGLE(this) - current.angle.y) > 0) {
                 mEvasionAngle = -0x1800;
             } else {
                 mEvasionAngle = 0x1800;
@@ -1033,7 +1033,7 @@ BOOL daNpc_zrA_c::ECut_talkSwim(int i_staffID) {
 
         cLib_chaseAngleS(&current.angle.x, 0, mpHIO->m.mSwimAngleSpeed);
         cLib_chaseAngleS(&current.angle.z, 0, mpHIO->m.mSwimAngleSpeed);
-        cLib_chaseAngleS(&current.angle.y, fopAcM_searchPlayerAngleY(this),
+        cLib_chaseAngleS(&current.angle.y, BODY_TURN_ANGLE(this),
                          mpHIO->m.mSwimAngleSpeed);
         cLib_chaseF(&mScaleFactor, 1.0f, (mpHIO->m.mMaxScaleFactor - 1.0f) / 30.0f);
         cXyz zero(0.0f, 0.0f, 0.0f);
@@ -1349,9 +1349,9 @@ BOOL daNpc_zrA_c::talkSwim(void* param_0) {
                 bvar2 = true;
             } else {
                 setLookMode(LOOK_NONE);
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     bvar2 = true;
-                } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                     mTurnMode = 0;
                 }
             }
@@ -1510,7 +1510,7 @@ BOOL daNpc_zrA_c::ECut_carryWaterfall(int i_staffID) {
         if (mScaleFactor == 1.0f) {
             mSwimMode = SWIM_WAIT;
         }
-        cLib_chaseAngleS(&mCurAngle.y, fopAcM_searchPlayerAngleY(this),
+        cLib_chaseAngleS(&mCurAngle.y, BODY_TURN_ANGLE(this),
                          mpHIO->m.mSwimAngleSpeed);
         setAngle(mCurAngle.y);
         break;
@@ -1581,7 +1581,7 @@ BOOL daNpc_zrA_c::ECut_carryWaterfallSkip(int i_staffID) {
         if (mScaleFactor == 1.0f) {
             mSwimMode = SWIM_WAIT;
         }
-        cLib_chaseAngleS(&mCurAngle.y, fopAcM_searchPlayerAngleY(this),
+        cLib_chaseAngleS(&mCurAngle.y, BODY_TURN_ANGLE(this),
                          mpHIO->m.mSwimAngleSpeed);
         setAngle(mCurAngle.y);
         break;
@@ -1759,7 +1759,7 @@ BOOL daNpc_zrA_c::waitRiverDescend(void* param_0) {
                 }
             }
 
-            cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 2, 0x800);
+            cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 2, 0x800);
             setAngle(mCurAngle.y);
         }
 
@@ -2404,7 +2404,7 @@ BOOL daNpc_zrA_c::ECut_beforeBlastzrR(int i_staffID) {
     switch (prm) {
     case 0:
         calcWaitSwim(true);
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 0x20, 0x200);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 0x20, 0x200);
         setAngle(mCurAngle.y);
         ret = true;
         break;
@@ -2418,7 +2418,7 @@ BOOL daNpc_zrA_c::ECut_beforeBlastzrR(int i_staffID) {
             canoe->setPosAndAngle(&canoe_pos, -0x35e8);
         }
         calcWaitSwim(true);
-        cLib_addCalcAngleS2(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), 0x20, 0x200);
+        cLib_addCalcAngleS2(&mCurAngle.y, BODY_TURN_ANGLE(this), 0x20, 0x200);
         setAngle(mCurAngle.y);
         break;
 
@@ -2719,7 +2719,7 @@ BOOL daNpc_zrA_c::ECut_thanksBlast(int i_staffID) {
             field_0x1500 = player->current.pos;
         } else {
             calcWaitSwim(true);
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (mBaseMotionAnm == ANM_WAIT_SWIM) {
                     if (prm == 1) {
                         ret = true;
@@ -2727,7 +2727,7 @@ BOOL daNpc_zrA_c::ECut_thanksBlast(int i_staffID) {
                     mTurnMode = 0;
                 }
             } else {
-                cLib_chaseAngleS(&mCurAngle.y, fopAcM_searchPlayerAngleY(this),
+                cLib_chaseAngleS(&mCurAngle.y, BODY_TURN_ANGLE(this),
                                  mpHIO->m.mSwimAngleSpeed);
                 setAngle(mCurAngle.y);
             }
@@ -3034,7 +3034,7 @@ BOOL daNpc_zrA_c::ECut_resultAnnounce(int i_staffID) {
             field_0x1500 = player->current.pos;
         } else {
             calcWaitSwim(true);
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (mBaseMotionAnm == ANM_WAIT_SWIM) {
                     if (prm == 1) {
                         ret = true;
@@ -3042,7 +3042,7 @@ BOOL daNpc_zrA_c::ECut_resultAnnounce(int i_staffID) {
                     mTurnMode = 0;
                 }
             } else {
-                cLib_chaseAngleS(&mCurAngle.y, fopAcM_searchPlayerAngleY(this),
+                cLib_chaseAngleS(&mCurAngle.y, BODY_TURN_ANGLE(this),
                                  mpHIO->m.mSwimAngleSpeed);
                 setAngle(mCurAngle.y);
             }

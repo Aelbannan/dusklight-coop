@@ -1235,7 +1235,7 @@ void daNpc_Kolin_c::followPlayer(int param_1) {
         end.setall(0.0f);
         end.z = 50.0f;
 
-        mDoMtx_stack_c::YrotS(fopAcM_searchPlayerAngleY(this));
+        mDoMtx_stack_c::YrotS(BODY_TURN_ANGLE(this));
         mDoMtx_stack_c::multVec(&end, &end);
         end += start;
         mLinChk.Set(&start, &end, this);
@@ -1702,7 +1702,7 @@ int daNpc_Kolin_c::cutCacaricoConversation(int i_cutIndex) {
     if (dComIfGp_getEventManager().getIsAddvance(i_cutIndex)) {
         switch (prm) {
             case 0:
-                mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+                mPlayerAngle = BODY_TURN_ANGLE(this);
 
                 if (checkStep()) {
                     mStepMode = 0;

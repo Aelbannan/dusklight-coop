@@ -1136,7 +1136,7 @@ int daNpc_Post_c::cutDeliver(int i_staffId) {
                 }
 
                 old.pos = current.pos;
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
                 mAcch.SetWallNone();
                 mEventTimer = timer;
                 break;

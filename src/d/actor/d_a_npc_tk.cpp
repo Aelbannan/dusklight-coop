@@ -1554,10 +1554,10 @@ void daNPC_TK_c::executeAttackLink() {
             mSphere.SetAtSPrm(5);
             field_0x6ae = 1;
             if (playerPos.absXZ(current.pos) < 500.0f) {
-                cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x1000,
+                cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 4, 0x1000,
                                    0x100);
             } else {
-                cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x800,
+                cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 8, 0x800,
                                    0x100);
             }
             current.angle.y = shape_angle.y;
@@ -1655,7 +1655,7 @@ void daNPC_TK_c::executeAttackLink() {
         break;
     }
     case 5: {
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this) + 0x8000, 0x10, 0x300,
+        cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this) + 0x8000, 0x10, 0x300,
                            0x100);
         current.angle.y = shape_angle.y;
         cLib_chaseF(&speed.y, 0.0f, 1.0f);
@@ -1792,10 +1792,10 @@ void daNPC_TK_c::executeAttackDemo() {
         field_0x6ae = 1;
 
         if (fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e)) {
-            current.angle.y = shape_angle.y = fopAcM_searchPlayerAngleY(this);
+            current.angle.y = shape_angle.y = BODY_TURN_ANGLE(this);
             cLib_chasePos(&current.pos, posWithOffset, 200.0f);
         } else {
-            cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x2000, 0x200);
+            cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 4, 0x2000, 0x200);
             current.angle.y = shape_angle.y;
         }
 
@@ -2076,7 +2076,7 @@ void daNPC_TK_c::executeWolfPerch() {
         calcWolfDemoCam();
 
         shape_angle.x = cM_atan2s(speedF, speed.y) - 0x4000;
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 8, 0x800, 0x100);
 
         cLib_chaseF(&speedF, 0.0f, 1.0f + nREG_F(6));
         if (cLib_chaseF(&speed.y, 6.0f, 0.5f) != 0) {
@@ -2089,7 +2089,7 @@ void daNPC_TK_c::executeWolfPerch() {
         calcWolfDemoCam();
 
         cLib_addCalcAngleS(&shape_angle.x, 0, 8, 0x100, 0x10);
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 8, 0x800, 0x100);
 
         cLib_chaseF(&speedF, 0.0f, 0.5f + nREG_F(7));
         if (cLib_chaseF(&speed.y, -3.0f, 0.5f + nREG_F(8)) != 0) {
@@ -2103,7 +2103,7 @@ void daNPC_TK_c::executeWolfPerch() {
         calcWolfDemoCam();
 
         cLib_addCalcAngleS(&shape_angle.x, 0, 8, 0x100, 0x10);
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y, BODY_TURN_ANGLE(this), 8, 0x800, 0x100);
 
         cLib_chaseF(&speedF, 0.0f, 0.5f + nREG_F(7));
         if (cLib_chaseF(&speed.y, 0.0f, 0.5f + nREG_F(9)) != 0) {

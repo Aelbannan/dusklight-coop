@@ -1092,7 +1092,7 @@ int daNpc_Uri_c::cutStartCarryTutorial(int param_1) {
             mFaceMotionSeqMngr.setNo(17, 0.0f, 0, 0);
             mMotionSeqMngr.setNo(8, 0.0f, 0, 0);
             mJntAnm.lookPlayer(0);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
         case 2:
             initTalk(mFlowNodeNo, NULL);
@@ -1252,7 +1252,7 @@ int daNpc_Uri_c::cutFindWolf(int param_1) {
             mMotionSeqMngr.setNo(23, 0.0f, 0, 0);
             mSound.startCreatureVoice(JAISoundID(Z2SE_URI_V_SCREAM_S), -1);
             mEventTimer = local_30;
-            s16 sVar9 = fopAcM_searchPlayerAngleY(this);
+            s16 sVar9 = BODY_TURN_ANGLE(this);
             sVar9 -= home.angle.y;
             if (sVar9 > 0x4000) {
                 sVar9 = 0x4000;
@@ -1331,7 +1331,7 @@ int daNpc_Uri_c::cutMeetingAgain(int param_1) {
         case 1:
         case 3:
             acStack_40.set(0.0f, 100.0f, 150.0f);
-            cStack_48.y = fopAcM_searchPlayerAngleY(this);
+            cStack_48.y = BODY_TURN_ANGLE(this);
             mDoMtx_stack_c::YrotS(cStack_48.y);
             mDoMtx_stack_c::multVec(&acStack_40, &acStack_40);
             acStack_40 += current.pos;
@@ -1634,7 +1634,7 @@ int daNpc_Uri_c::walk(void* param_0) {
         }
     case MODE_RUN:
         if (chkPlayerCarryBasket()) {
-            fopAcM_searchPlayerAngleY(this);
+            BODY_TURN_ANGLE(this);
             switch (getTutorialCond(daPy_getPlayerActorClass()->current.pos)) {
             case 9:
                 field_0x1009 = 0;

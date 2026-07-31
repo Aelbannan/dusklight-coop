@@ -1017,7 +1017,7 @@ int daNpc_Len_c::wait(void* param_0) {
                 mMotionSeqMngr.setNo(MOT_UNK_0, -1.0f, 0, 0);
                 if (getBitSW() != 0xFF && !dComIfGs_isSwitch(getBitSW(), fopAcM_GetRoomNo(this))) {
                     mPlayerActorMngr.entry(daPy_getPlayerActorClass());
-                    setAngle(fopAcM_searchPlayerAngleY(this));
+                    setAngle(BODY_TURN_ANGLE(this));
                 }
                 break;
             case TYPE_3:

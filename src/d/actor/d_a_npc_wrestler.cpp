@@ -1837,10 +1837,10 @@ void daNpcWrestler_c::setExpression(int i_expression, f32 i_expressionMorfOvveri
 
 bool daNpcWrestler_c::setTalkAngle() {
 #if VERSION == VERSION_SHIELD_DEBUG
-    s16 playerAngleY = fopAcM_searchPlayerAngleY(this);
+    s16 playerAngleY = BODY_TURN_ANGLE(this);
 #else
     // FIXME: Possible fakematch?
-    s16 playerAngleY = (int) fopAcM_searchPlayerAngleY(this);
+    s16 playerAngleY = (int) BODY_TURN_ANGLE(this);
 #endif
     if (playerAngleY == mCurAngle.y) {
         return true;
@@ -2335,7 +2335,7 @@ void daNpcWrestler_c::sumouAI() {
 }
 
 s16 daNpcWrestler_c::oppositeToPlayer() {
-    s16 rv = cLib_addCalcAngleS(&mCurAngle.y, fopAcM_searchPlayerAngleY(this), field_0xbd8->rotation, 0x4000, 0x40);
+    s16 rv = cLib_addCalcAngleS(&mCurAngle.y, BODY_TURN_ANGLE(this), field_0xbd8->rotation, 0x4000, 0x40);
     setAngle(mCurAngle.y);
     return rv;
 }
@@ -2380,7 +2380,7 @@ bool daNpcWrestler_c::sumouWait(void* param_1) {
         case 2: {
             correctGraspPosAngle(true);
 
-            int dist_angle = cLib_distanceAngleS(mCurAngle.y, fopAcM_searchPlayerAngleY(this));
+            int dist_angle = cLib_distanceAngleS(mCurAngle.y, BODY_TURN_ANGLE(this));
             if (dist_angle < 0x600) {
                 setMotion(8, 6.0f, 0);
             } else {
@@ -2572,7 +2572,7 @@ bool daNpcWrestler_c::sumouPunchChaseHit(void* param_1) {
             break;
 
         case 2:
-            mCurAngle.y = fopAcM_searchPlayerAngleY(this);
+            mCurAngle.y = BODY_TURN_ANGLE(this);
             current.angle.y = mCurAngle.y;
             shape_angle.y = current.angle.y;
             mAnm_p->modelCalc();

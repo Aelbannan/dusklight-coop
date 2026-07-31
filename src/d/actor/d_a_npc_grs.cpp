@@ -1070,7 +1070,7 @@ int daNpc_grS_c::cutPushOut(int param_0) {
             setMotion(0, 0.0f, 1);
             setLookMode(1);
             initTalk(mFlowNodeNo,NULL);
-            setAngle(fopAcM_searchPlayerAngleY(this));
+            setAngle(BODY_TURN_ANGLE(this));
             break;
         }
     }
@@ -1176,10 +1176,10 @@ int daNpc_grS_c::talk(void* param_0) {
         } else {
             setLookMode(3);
             mActorMngrs[0].entry(daPy_getPlayerActorClass());
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 unkFlag1 = TRUE;
             } else {
-                if (step(fopAcM_searchPlayerAngleY(this), 3, 3, 15)) {
+                if (step(BODY_TURN_ANGLE(this), 3, 3, 15)) {
                     setExpression(3, -1.0f);
                     setMotion(0, -1.0f, 0);
                     mTurnMode = 0;

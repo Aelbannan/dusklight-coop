@@ -1278,9 +1278,9 @@ int daNpc_Hoz_c::talk(void* param_0) {
         if (!mTwilight) {
             mJntAnm.lookPlayer(0);
 
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 var_r29 = 1;
-            } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF, 0)) {
+            } else if (step(BODY_TURN_ANGLE(this), -1, -1, 0xF, 0)) {
                 var_r29 = 1;
             }
         } else {
@@ -1367,7 +1367,7 @@ int daNpc_Hoz_c::ECut_boatRace(int i_staffId) {
             break;
         }
         case 11:
-            current.angle.y = fopAcM_searchPlayerAngleY(this);
+            current.angle.y = BODY_TURN_ANGLE(this);
             setAngle(current.angle.y);
             mFaceMotionSeqMngr.setNo(0x22, -1.0f, 0, 0);
             mMotionSeqMngr.setNo(0x18, -1.0f, 0, 0);
@@ -1491,8 +1491,8 @@ int daNpc_Hoz_c::ECut_afterBattle(int i_staffId) {
 
     switch (prm) {
     case 0:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF, 0);
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            step(BODY_TURN_ANGLE(this), -1, -1, 0xF, 0);
         } else {
             rt = 1;
         }
@@ -1531,8 +1531,8 @@ int daNpc_Hoz_c::ECut_beforeBlast(int i_staffId) {
 
     switch (prm) {
     case 0:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF, 0);
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            step(BODY_TURN_ANGLE(this), -1, -1, 0xF, 0);
         } else {
             rt = 1;
         }
@@ -1571,8 +1571,8 @@ int daNpc_Hoz_c::ECut_afterBlast(int i_staffId) {
 
     switch (prm) {
     case 0:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF, 0);
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            step(BODY_TURN_ANGLE(this), -1, -1, 0xF, 0);
         } else {
             rt = 1;
         }
@@ -1648,8 +1648,8 @@ int daNpc_Hoz_c::ECut_talkBreak(int i_staffId) {
 
     switch (prm) {
     case 0:
-        if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-            step(fopAcM_searchPlayerAngleY(this), -1, -1, 0xF, 0);
+        if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+            step(BODY_TURN_ANGLE(this), -1, -1, 0xF, 0);
         } else {
             rt = 1;
         }

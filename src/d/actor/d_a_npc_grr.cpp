@@ -1326,9 +1326,9 @@ int daNpc_grR_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     bVar1 = TRUE;
-                } else if (step(fopAcM_searchPlayerAngleY(this), 7, 10, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), 7, 10, 15)) {
                     setExpression(EXPR_NONE, -1.0f);
                     setMotion(MOT_WAIT_A, -1.0f, 0);
                     mTurnMode = 0;

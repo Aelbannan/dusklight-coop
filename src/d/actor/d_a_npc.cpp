@@ -6,6 +6,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_body_turn_bridge.h"
 #include "dusk/coop/coop_render.h"
 #endif
 #include "d/actor/d_a_tag_evtarea.h"
@@ -1386,6 +1387,22 @@ int daNpcT_c::execute() {
 
     setParam();
 
+#if TARGET_PC
+    // Keep the common NPC body-turn target synchronized with the active
+    // dialogue owner before the event procedure runs.  Otherwise the
+    // per-NPC event logic can retain its vanilla P1 player manager even
+    // though the head/eyes use the co-op presentation owner.
+    if (dusk::coop::render::isConversationPresentationActive()) {
+        const dusk::coop::ViewId owner =
+            dusk::coop::render::getConversationPresentationOwner();
+        if (fopAc_ac_c* ownerActor = dusk::coop::getPlayerActor(owner)) {
+            if (mPlayerActorMngr.getActorP() != ownerActor) {
+                mPlayerActorMngr.entry(ownerActor);
+            }
+        }
+    }
+#endif
+
     procResult = evtProc();
     if (!procResult) {
         action();
@@ -2404,6 +2421,22 @@ BOOL daNpcT_c::chkFindWolf(s16 i_angleY, int i_distIndex, int param_2, f32 i_bou
 }
 
 BOOL daNpcT_c::srchPlayerActor() {
+#if TARGET_PC
+    // During co-op dialogue, keep the NPC's body-turn target aligned with
+    // the player who owns the active presentation.  The vanilla search path
+    // below always falls back to player 0, which can leave the head looking at
+    // P2/P3 while the body continues facing P1.
+    if (dusk::coop::render::isConversationPresentationActive()) {
+        const dusk::coop::ViewId owner =
+            dusk::coop::render::getConversationPresentationOwner();
+        if (fopAc_ac_c* ownerActor = dusk::coop::getPlayerActor(owner)) {
+            if (mPlayerActorMngr.getActorP() != ownerActor) {
+                mPlayerActorMngr.entry(ownerActor);
+            }
+            return TRUE;
+        }
+    }
+#endif
     if (mPlayerActorMngr.getActorP() != NULL) {
         if (!chkFindPlayer(TRUE, mCurAngle.y)) {
             mPlayerActorMngr.remove();
@@ -2547,7 +2580,7 @@ int daNpcT_c::getActorDistance(fopAc_ac_c* i_actor, int i_distIndex1, int i_dist
 
 BOOL daNpcT_c::initTalk(int i_flowID, fopAc_ac_c** i_partnerList_p) {
     mFlow.init(this, i_flowID, 0, i_partnerList_p);
-    mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+    mPlayerAngle = BODY_TURN_ANGLE(this);
 
     if (checkStep()) {
         mStepMode = 0;

@@ -3,6 +3,7 @@
 #include "d/actor/d_a_npc_cd2.h"
 #include "d/actor/d_a_player.h"
 #include "d/d_path.h"
+#include "dusk/coop/coop_body_turn_bridge.h"
 #include "f_op/f_op_actor_mng.h"
 
 static int jntNodeCallBack(J3DJoint* i_jnt, int param_1) {
@@ -910,7 +911,7 @@ static void* s_sub1(void* param_0, void* param_1) {
 
 daTagEscape_c* daNpcCd2_c::getEscapeTag() {
     target = NULL;
-    wolfAngle = fopAcM_searchPlayerAngleY(this);
+    wolfAngle = BODY_TURN_ANGLE(this);
     fpcM_Search(s_sub1, this);
     return (daTagEscape_c*)target;
 }

@@ -878,7 +878,7 @@ int daNpcKasiMich_c::fear(int param_1) {
 
 daTagEscape_c* daNpcKasiMich_c::srchWolfTag() {
     mTargetTag = NULL;
-    mWolfAngle = fopAcM_searchPlayerAngleY(this);
+    mWolfAngle = BODY_TURN_ANGLE(this);
     fpcM_Search(_srch_escape_tag, this);
     return mTargetTag;
 }

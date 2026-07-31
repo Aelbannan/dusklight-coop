@@ -668,7 +668,7 @@ bool daNpcDoorBoy_c::talk(void* param_1) {
             break;
 
         case 2:
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     mActorMngr[0].entry(daPy_getPlayerActorClass());
                     itemNo = 0;
@@ -692,7 +692,7 @@ bool daNpcDoorBoy_c::talk(void* param_1) {
                 } else if (ctrlMsgAnm(iVar1, i_motion, this, FALSE) != 0) {
                     setMotion(i_motion, -1.0f, 0);
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), 0)) {
+            } else if (step(BODY_TURN_ANGLE(this), 0)) {
                 setMotion(MOT_WAIT_A, -1.0f, 0);
                 mTurnMode = 0;
             }
@@ -762,7 +762,7 @@ bool daNpcDoorBoy_c::dummyTalk(void* param_1) {
             break;
 
         case 2:
-            if (step(fopAcM_searchPlayerAngleY(this), 0)) {
+            if (step(BODY_TURN_ANGLE(this), 0)) {
                 setMotion(MOT_TALK_A, -1.0f, 0);
             }
 

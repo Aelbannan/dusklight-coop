@@ -1470,7 +1470,7 @@ int daNpcIns_c::talk(void* param_1) {
             mTurnMode = 0;
             mMsgTimer = 0;
             mOrderSpeakEvent = 0;
-            field_0xe14 = fopAcM_searchPlayerAngleY(this);
+            field_0xe14 = BODY_TURN_ANGLE(this);
             setLookMode(LOOK_PLAYER_TALK);
             mMode = 2;
             break;

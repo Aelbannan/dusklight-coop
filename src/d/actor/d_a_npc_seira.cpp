@@ -1305,8 +1305,8 @@ int daNpc_Seira_c::talk(void* param_0) {
                 reg_r30 = 1;
             } else {
                 mJntAnm.lookPlayer(0);
-                if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-                    step(fopAcM_searchPlayerAngleY(this), 13, 24, 15, 0);
+                if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+                    step(BODY_TURN_ANGLE(this), 13, 24, 15, 0);
                     if (daPy_getPlayerActorClass()->checkHorseRide()) {
                         reg_r30 = 1;
                     }

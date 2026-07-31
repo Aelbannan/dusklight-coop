@@ -444,10 +444,10 @@ int daNpc_solA_c::talk(void* param_0) {
     case MODE_RUN:
         if (!mTwilight) {
             mJntAnm.lookPlayer(0);
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 bVar1 = TRUE;
             } else {
-                if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0)) {
+                if (step(BODY_TURN_ANGLE(this), -1, -1, 15, 0)) {
                     bVar1 = TRUE;
                 }
             }

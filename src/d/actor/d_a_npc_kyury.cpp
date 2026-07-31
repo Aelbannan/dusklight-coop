@@ -684,7 +684,7 @@ int daNpc_Kyury_c::cutConversation(int param_0) {
         case 0:
             actor_p = mActorMngr[0].getActorP();
             dComIfGp_getEvent()->setPt2(actor_p);
-            mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+            mPlayerAngle = BODY_TURN_ANGLE(this);
             if (checkStep()) {
                 mStepMode = 0;
             }

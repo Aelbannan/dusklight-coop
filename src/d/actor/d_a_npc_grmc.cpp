@@ -704,8 +704,8 @@ int daNpc_grMC_c::talk(void* param_1) {
 
                 if (&daNpc_grMC_c::tend == mNextAction) {
                     bVar1 = TRUE;
-                } else if (mCurAngle.y != fopAcM_searchPlayerAngleY(this)) {
-                    step(fopAcM_searchPlayerAngleY(this), -1, -1, 15, 0);
+                } else if (mCurAngle.y != BODY_TURN_ANGLE(this)) {
+                    step(BODY_TURN_ANGLE(this), -1, -1, 15, 0);
                 } else {
                     bVar1 = TRUE;
                 }

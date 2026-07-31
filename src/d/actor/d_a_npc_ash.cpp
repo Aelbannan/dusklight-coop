@@ -915,7 +915,7 @@ bool daNpcAsh_c::talk(void* param_0) {
         break;
 
     case 2:
-        if (field_0xf5f <= 2 || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+        if (field_0xf5f <= 2 || mCurAngle.y == BODY_TURN_ANGLE(this)) {
             if (talkProc(NULL, 1, NULL)) {
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
                 setAction(&daNpcAsh_c::wait_type0);
@@ -933,7 +933,7 @@ bool daNpcAsh_c::talk(void* param_0) {
                 }
             }
         } else {
-            if (step(fopAcM_searchPlayerAngleY(this), true)) {
+            if (step(BODY_TURN_ANGLE(this), true)) {
                 setMotion(MOT_WAIT_A, -1.0f, false);
                 mTurnMode = 0;
             }

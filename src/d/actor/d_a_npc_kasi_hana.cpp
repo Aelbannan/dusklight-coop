@@ -1477,7 +1477,7 @@ DUSK_GAME_DATA s16 daNpcKasiHana_c::mWolfAngle;
 
 daTagEscape_c* daNpcKasiHana_c::srchWolfTag() {
     mTargetTag = NULL;
-    mWolfAngle = fopAcM_searchPlayerAngleY(this);
+    mWolfAngle = BODY_TURN_ANGLE(this);
     fpcM_Search(_srch_escape_tag, this);
     return mTargetTag;
 }

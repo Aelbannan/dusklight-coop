@@ -1258,7 +1258,7 @@ bool daNpcShad_c::wait_type1(void* param_1) {
             setLookMode(LOOK_NONE, NULL, NULL);
             mTurnMode = 0;
             speedF = 0.0f;
-            field_0xe1c = fopAcM_searchPlayerAngleY(this);
+            field_0xe1c = BODY_TURN_ANGLE(this);
             field_0xe1a = 2;
             break;
 
@@ -1268,7 +1268,7 @@ bool daNpcShad_c::wait_type1(void* param_1) {
 
                 if (mCurAngle.y == field_0xe1c) {
                     if (fopAcM_seenPlayerAngleY(this) > cM_deg2s(mpHIO->m.common.body_angleY_max + mpHIO->m.common.head_angleY_max)) {
-                        field_0xe1c = fopAcM_searchPlayerAngleY(this);
+                        field_0xe1c = BODY_TURN_ANGLE(this);
                     }
                 } else if (step(field_0xe1c, MOT_STEPB, 30.0f)) {
                     setExpression(EXPR_NONE, -1.0f);
@@ -1296,7 +1296,7 @@ bool daNpcShad_c::wait_type1(void* param_1) {
 
                 if (mCurAngle.y == field_0xe1c) {
                     if (fopAcM_seenPlayerAngleY(this) > cM_deg2s(mpHIO->m.common.body_angleY_max + mpHIO->m.common.head_angleY_max)) {
-                        field_0xe1c = fopAcM_searchPlayerAngleY(this);
+                        field_0xe1c = BODY_TURN_ANGLE(this);
                     }
                 } else if (step(field_0xe1c, MOT_STEPB, 30.0f)) {
                     setExpression(EXPR_NONE, -1.0f);
@@ -1482,7 +1482,7 @@ bool daNpcShad_c::talk(void* param_1) {
             break;
 
         case 2:
-            if (strcmp(dComIfGp_getStartStageName(), "R_SP116") == 0 || mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (strcmp(dComIfGp_getStartStageName(), "R_SP116") == 0 || mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     mActorMngr[0].entry(daPy_getPlayerActorClass());
                     itemNo = 0;
@@ -1513,7 +1513,7 @@ bool daNpcShad_c::talk(void* param_1) {
                         setExpressionTalkAfter();
                     }
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            } else if (step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
             }
@@ -1764,7 +1764,7 @@ BOOL daNpcShad_c::EvCut_ToChantSpell1(int i_cutIndex) {
     cXyz sp30;
     switch (*cutName) {
         case '0001':
-            if (!step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            if (!step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 break;
             }
 
@@ -1775,11 +1775,11 @@ BOOL daNpcShad_c::EvCut_ToChantSpell1(int i_cutIndex) {
 
         case '0002':
         case '0005':
-            if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+            if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     return TRUE;
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            } else if (step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
             }
@@ -1829,7 +1829,7 @@ BOOL daNpcShad_c::EvCut_ToChantSpell1(int i_cutIndex) {
                 Z2GetAudioMgr()->unMuteSceneBgm(70);
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
-                setAngle(fopAcM_searchPlayerAngleY(this));
+                setAngle(BODY_TURN_ANGLE(this));
                 return TRUE;
             }
             break;
@@ -1936,7 +1936,7 @@ BOOL daNpcShad_c::EvCut_ToChantSpell2(int i_cutIndex) {
     cXyz sp30;
     switch (*cutName) {
         case '0002':
-            if (step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            if (step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 setExpression(EXPR_NONE, -1.0f);
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
@@ -1945,11 +1945,11 @@ BOOL daNpcShad_c::EvCut_ToChantSpell2(int i_cutIndex) {
             break;
 
         case '0003':
-            if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+            if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     return TRUE;
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            } else if (step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
             }
@@ -2276,12 +2276,12 @@ BOOL daNpcShad_c::EvCut_Disappear(int i_cutIndex) {
     cXyz* pos2;
     switch (*cutName) {
         case '0001':
-            if (fopAcM_searchPlayerAngleY(this) == mCurAngle.y) {
+            if (BODY_TURN_ANGLE(this) == mCurAngle.y) {
                 if (talkProc(NULL, TRUE, NULL)) {
                     setLookMode(LOOK_NONE, NULL, NULL);
                     return TRUE;
                 }
-            } else if (step(fopAcM_searchPlayerAngleY(this), MOT_STEP, 15.0f)) {
+            } else if (step(BODY_TURN_ANGLE(this), MOT_STEP, 15.0f)) {
                 setMotion(MOT_WAIT_A, -1.0f, FALSE);
                 mTurnMode = 0;
             }

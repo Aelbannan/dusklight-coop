@@ -2,6 +2,7 @@
 #define D_A_NPC4
 
 #include "d/actor/d_a_player.h"
+#include "dusk/coop/coop_body_turn_bridge.h"
 #include "d/d_msg_flow.h"
 #include "d/d_bg_s_gnd_chk.h"
 #include "d/d_bg_s_lin_chk.h"

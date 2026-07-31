@@ -1614,7 +1614,7 @@ int daNpc_Toby_c::cutConversationAboutSCannon(int arg0) {
             break;
 
         case 7:
-            mPlayerAngle = fopAcM_searchPlayerAngleY(this);
+            mPlayerAngle = BODY_TURN_ANGLE(this);
             break;
 
         case 8:
@@ -1890,7 +1890,7 @@ int daNpc_Toby_c::wait(void*) {
                     field_0x1000 = 0;
                 } else if (mMotionSeqMngr.getNo() == 24) {
                     if (mMotionSeqMngr.getStepNo() < 2) {
-                        cLib_chaseS(&current.angle.y, fopAcM_searchPlayerAngleY(this), 0x1000);
+                        cLib_chaseS(&current.angle.y, BODY_TURN_ANGLE(this), 0x1000);
                         shape_angle.y = current.angle.y;
                         mCurAngle.y = shape_angle.y;
                     } else if (mMotionSeqMngr.getStepNo() > 2) {

@@ -966,9 +966,9 @@ int daNpc_SoldierA_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngrs[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     unkFlag = TRUE;
-                } else if (step(fopAcM_searchPlayerAngleY(this), -1, -1, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), -1, -1, 15)) {
                     setMotion(MOT_WAIT, -1.0f, 0);
                     mTurnMode = 0;
                 }

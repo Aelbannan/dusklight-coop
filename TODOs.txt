@@ -4,9 +4,61 @@ z target cursor per view
 what is incompatible with grid mode? (render) coopMultiView check
 frustum culling on world/items/npcs/enemies
 
-DON'T USE DRAW METHODS!!!
+
+ - X/Y item icons (textures are shared resource — needs per-player texture assignment)
+ - Life gauge, magic meter, rupees (uses shared save data)
+ - Item wheel (separate overlay, needs per-player instance)
 
 
 
 
 Keep grabbing and matching batches from claim-smallest.py until there's no more left
+/goal add Keep grabbing and matching batches from criware! Keep going and don't give up! Do them all manually
+in batches
+/goal add Keep grabbing and matching batches from kyoshin! Keep going and don't give up! Do them all manually
+in batches
+
+
+ Also worth fixing: CScn.cpp has a pre-existing duplicate extern "C" build error blocking 2 recertifications.
+ 
+  Can you grab a fully matched TU (matched except data) and do the following:
+ 1. Create the proper classes and structs
+ 2. Get rid of all void pointers and pointer arithmetic
+ 3. Remove as much extern "C" as possible
+ 4. Rename parameters and variables to human friendly names, IF you are confident
+ 5. Add comments for complicated code sections or functions
+ 6. Clean up code if possible
+
+ Make SURE you keep functions matching! NO REGRESSIONS!
+ 
+ 
+ 
+I want you to discuss writing a new llm-harness from scratch with me. Here's what I'm thinking, and I will
+include ideas from other projects later:
+
+The new harness would be a more conversational flow. The LLM would be provided with inital input (asm, full
+header, full cpp (if c++), language, etc) and be provided with a few tools: (compile, hexdiff, search
+includes, look at file, etc). The conversation would continue until the agent submits the c++ changes
+(function, optional includes/header changes/cpp changes). Here's my questions:
+
+1. Would this flow be fitting for decomp vs our current llm harness?
+2. What tools would be useful in this flow? (I want only what's needed and useful)
+3. How should we structure the agent patches/changes (create header, add at line, replace lines?)? What
+format would the llm work best with?
+4. I want to ensure the llm doesn't cheat, and outputs quality code (no extern "C", no void pointers, create
+structs and classes as needed)
+5. Should we allow the LLM to edit other functions in the file as well?
+
+
+It's using array accessors to get around pointer arithmetic bans
+same thing with stupid code like this:
+
+u32* p = (u32*)self;
+    return p[0x2c / sizeof(u32)] + p[0x28 / sizeof(u32)];
+	
+every reinterpret_cast should be looked at
+
+
+pi harness light pipeline (1 pass on every file
+- pointer arith -> types and field access
+- remove void * and convert to class members

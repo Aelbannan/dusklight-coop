@@ -1231,7 +1231,7 @@ void daNpc_grC_c::lookat() {
 BOOL daNpc_grC_c::chkFindPlayer() {
     BOOL rv;
 
-    if (abs((s16)(fopAcM_searchPlayerAngleY(this) - current.angle.y)) < 0x3C00) {
+    if (abs((s16)(BODY_TURN_ANGLE(this) - current.angle.y)) < 0x3C00) {
         if (mActorMngr[0].getActorP() == NULL) {
             rv = chkActorInAttnArea(daPy_getPlayerActorClass(), this, getDistTableIdx(10, 6));
         } else {
@@ -1463,9 +1463,9 @@ BOOL daNpc_grC_c::talk(void* param_1) {
                 setLookMode(LOOK_PLAYER_TALK);
                 mActorMngr[0].entry(daPy_getPlayerActorClass());
 
-                if (mCurAngle.y == fopAcM_searchPlayerAngleY(this)) {
+                if (mCurAngle.y == BODY_TURN_ANGLE(this)) {
                     bVar1 = TRUE;
-                } else if (step(fopAcM_searchPlayerAngleY(this), 14, 8, 15)) {
+                } else if (step(BODY_TURN_ANGLE(this), 14, 8, 15)) {
                     setExpression(EXPR_NONE, -1.0f);
                     setMotion(MOT_WAIT_A, -1.0f, 0);
                     mTurnMode = 0;
