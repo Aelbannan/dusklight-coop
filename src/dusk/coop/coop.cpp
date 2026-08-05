@@ -1,5 +1,7 @@
 #include "dusk/coop/coop.h"
 
+#include "dusk/frame_interpolation.h"
+
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_enemy.h"
 #include "dusk/coop/coop_time.h"
@@ -540,6 +542,22 @@ void ApplyPuppetState(daAlink_c* link) {
     Mtx baseMtx;
     std::memcpy(baseMtx, st.baseTR, sizeof(Mtx));
     link->mpLinkModel->setBaseTRMtx(baseMtx);
+
+    // MAJOR M1 (puppet render fix): the Link body model is primarily
+    // weight-envelope-skinned (133 envelope matrices vs 35 anm matrices;
+    // drawFullWgt=23, drawMtxNum=156). calc() computed the envelope matrices
+    // from the puppet's OWN anm just above (modelCalc), so without this the
+    // rigid joints follow the synced pose while the envelope-weighted
+    // vertices (feet, whole back, shoulders) hold the puppet's local pose —
+    // "some vertexes are not following the rest of the animation". Recompute
+    // the envelopes from the pasted anm matrices (a pure function of
+    // mpAnmMtx + inv-joint matrices), and re-record them for frame interp.
+    link->mpLinkModel->calcWeightEnvelopeMtx();
+#ifdef TARGET_PC
+    for (u16 i = 0; i < link->mpLinkModel->getModelData()->getWEvlpMtxNum(); ++i) {
+        dusk::frame_interp::record_final_mtx(link->mpLinkModel->getWeightAnmMtx(i));
+    }
+#endif
 
     // 7) item/face/hat model attachment at the (synced) item joints
     if (!link->checkWolf()) {
