@@ -212,3 +212,22 @@ decides the host-leave UX; M2 verifies context-swap coverage per whitelisted typ
 - `docs/design/mod-coop/00-network.md` — transport/session/protocol (amended: everything 60 Hz)
 - `docs/design/mod-coop/01-puppet-link.md`…`04-time-weather.md` — mechanics (attachment framing = guards)
 - `docs/design/mod-coop/review-kimi-k3.md`, `review-glm-5.2.md` — adversarial validation
+
+## 9. M1 review resolutions (adversarial pass)
+
+Adversarial reviews of the M1 player-replication milestone
+(`review-m1-deepseek-v4-flash.md`, `review-m1-glm-5.2.md`) found one build
+blocker, one create-path correctness blocker, and four majors. All are resolved
+in the `net-coop` follow-up (M1.5). Commit mapping below.
+
+| Finding | Fix (commit) |
+|---------|--------------|
+| **A1** HEAD unbuildable at the upstream aurora: the game stub `AIInitDMA(u32,u32)` never satisfied JASAiCtrl's `_AIInitDMA` reference (the pinned fork had masked it). | Stub now matches `AIInitDMA(uintptr_t, u32)` (C linkage via `dolphin/ai.h`) → emits `_AIInitDMA`. Verified with a forced rebuild (touched the stub + `JASAiCtrl.cpp`, deleted+rebuilt `libaurora_os.a` against `6c4c27f9`): the full game links and boots. aurora stays on the upstream pointer. (`1d80fded5d fix: AIInitDMA stub linkage`) |
+| **B1** `setStartProcInit()` ran in full for puppets (host horse repositioned/force-ridden, story procs/demos started). | Puppets now call `procWaitInit()` **instead** of `setStartProcInit()` (`midna_prm = 0; procWaitInit();` in the puppet branch). The phase-2 wait terms that read the host save/global entry mode (`isHorseStart`, `checkCanoeStart()`, `checkBoarStart()`, `startPoint == -4` portal search) are suppressed for puppets so a puppet create cannot spin on, or bind to, host ride actors/portal. (`0b7f8bb5d1 alink: skip setStartProcInit for puppets ...`) |
+| **M1** roster never rebroadcast on join → 3rd+ players invisible to earlier joiners. | On a successful join the host now `SendToAll(WorldInit, current roster, exceptPlayer=newId)`; `WorldInit` is documented as a roster-refresh. Selftest extended (join A, join B; assert A's roster shows B and B's shows A). (`5d2cbe6be0 net: broadcast roster on join`) |
+| **M2** mutual room-change sender-gate deadlock (both puppets held hidden forever). | `PlayerEvent(SceneChange)` is now sent regardless of the sender gate (moved ahead of it in `sendPlayerState`), and the gate opens when our room changed since the remote's last state (`ReceiveSlot::myRoomAtLastRecv`), so one packet un-sticks both sides. (`74d5a1dce2`) |
+| **M3** a create stuck on `cPhs_INIT_e` locked `g_createInFlight` forever. | Create-phase deadline (`kCreateDeadlineFrames = 600`): a puppet whose create exceeds it is deleted (destructor clears the entry + lock); after 3 strikes the spawn is dropped until the player leaves or a create succeeds. (`74d5a1dce2`) |
+| **M4** `enet_deinitialize` ran before the coop teardown that sends SessionEnd/PlayerLeave. | `dusk::config::shutdown()` now calls `dusk::coop::shutdown()` **before** `dusk::net::shutdown()` and the misleading comment is fixed. (`46409fba68 net: shutdown order`) |
+| **Doc drift** 00-network.md §5 joint-list layout, §6 ~2.7 KB. | §5 rewritten to the v3 raw-matrix `PlayerStateMsg`/`PlayerEventMsg` (2001 B, 48-B 3x4 Mtx; state-flags table; event table). §6 corrected to ~2.0 KB/player/frame → ~1.0 MB/s worst case. `WorldInit` documented as a roster-refresh broadcast. (`647a91f49c`) |
+| **`seq`** (02-player-state.md §2 `seq u16`) never shipped. | Reconciled the docs: `seq` dropped from §2; M1 stale policy is "stale = last pose held, no fade" (seq-gap timeout deferred to a future internet milestone). `ReceiveSlot::lastFrame` dead-coded. (`647a91f49c`) |
+| **Minor a/b/c/d/e/f** | (a) wire-size comment 2657→2001 computed from `sizeof(Mtx)`; (b) `modelCalc` mtxCalc re-assert gated on `remoteCount() > 0 || isPuppet(this)` so single-player with net off is byte-for-byte vanilla; (c) face/hat re-assert deferred with a playtest-verify note (their calc is driven by direct `setAnmMtx` + body base, not the anm-blend calc); (d) `RelayPolicy(type)` seam in `HandleData`/`ForwardGameMessage` (M2 CombatIntent must not relay to all; EnemySnapshot owner→clients only — seam only, not wired); (e) `lastFrame` removed per the `seq` decision; (f) `hostRole()`/`sessionActive()` documented as retained for the M4 host-leave/discovery UI. |
