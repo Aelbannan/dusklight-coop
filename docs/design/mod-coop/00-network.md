@@ -103,7 +103,7 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
 | Accept | `JoinAccept` | reliable | assigned `PlayerId` (session-wide 0–7), roster, stage, time, weather |
 | Reject | `JoinReject` | reliable | reason (full, version mismatch) |
-| Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages. **Doubles as a roster-refresh**: on every successful join the host re-broadcasts `WorldInit` (current roster) to all already-joined peers so earlier joiners learn about later players (M1 fix; without it 3+ players were invisible to earlier joiners) |
+| Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + time + weather (v5) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages. **Doubles as a roster-refresh**: on every successful join the host re-broadcasts `WorldInit` (current roster) to all already-joined peers so earlier joiners learn about later players (M1 fix; without it 3+ players were invisible to earlier joiners) |
 | Leave | `PlayerLeave` | reliable | host relays; puppet despawns |
 
 - **PlayerId mapping**: host assigns session-wide ids 0–7 (`MAX_LOCAL_PLAYERS`).
@@ -126,16 +126,16 @@ Packet version in `JoinRequest`; mismatches rejected.
 | Message | Channel | Cadence | Payload |
 |---------|---------|---------|---------|
 | `JoinRequest` / `JoinAccept` / `JoinReject` / `PlayerLeave` / `SessionEnd` | reliable | event | see §4 |
-| `WorldInit` | reliable | on join **+ re-broadcast as roster-refresh on every later join** | stage (name/room/layer/point) + full roster — no embedded state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
+| `WorldInit` | reliable | on join **+ re-broadcast as roster-refresh on every later join** | stage (name/room/layer/point) + time + weather (v5) + full roster — no other state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
 | `PlayerState` (per remote player, same scene) | unreliable seq | every frame | see PlayerState below |
 | `PlayerEvent` (form change, mount/dismount, respawn, scene change, equip, attention) | reliable | on change | player id + event + scene + data + data2 (see PlayerEvent below) |
 | `EnemySnapshot` (per enemy) | unreliable seq | every frame | see EnemyState below |
 | `EnemyEvent` (spawn, die, room-clear, boss phase) | reliable | on change | enemy id + event + data |
 | `CombatIntent` | reliable | on attack | attacker, target enemy id, attack kind, position |
 | `CombatResult` | reliable | host→all | target enemy id, damage, new HP, outcome |
-| `TimeSync` | unreliable seq | 1 Hz | time phase (u32) + elapsed delta |
-| `TimeEvent` (new day, dusk/dawn) | reliable | on change | event id + time |
-| `WeatherChange` | reliable | on change | weather id + intensity |
+| `TimeSync` | unreliable seq | **1 Hz** (real — M3.5: a 1 Hz `NetClock` gate; immediate on stage/rate change) | absolute phase `f32` 0..360 + day + rate + flags (v5; `protocol.h` `TimeSyncMsg` is normative) |
+| `TimeEvent` (new day, dusk/dawn) | reliable | on change | event id + time + day (v5) |
+| `WeatherChange` | reliable | on change | mode + thunder + intensity + colpat (v5) |
 
 Field order in the struct blocks below **is the wire order** (version-gated by
 `kProtocolVersion`); the hand-written serializers in `src/dusk/net/protocol.cpp`
@@ -234,7 +234,10 @@ pos       f32 x3
   Re-applying an unchanged enemy snapshot on intermediate frames is stated behavior; per-enemy
   dirty flags suppress unchanged enemies anyway.
 - Time: `TimeSync` at 1 Hz (it's a clock — absolute phase self-corrects), events
-  reliable.
+  reliable. The 1 Hz cadence is real since M3.5: a `NetClock::AtRate(1)` gate in
+  the host publisher (it was mistakenly driven by the 60 Hz snapshot clock in
+  M3, sending 60×/s); stage changes and rate transitions still send
+  immediately.
 
 ### Bandwidth
 
@@ -271,8 +274,9 @@ client (attacker)                  host / sim owner                  all clients
 ## 8. Time & weather sync
 
 - Host owns the clock and the sky.
-- `TimeSync` (phase + delta, 1 Hz, unreliable) keeps clients advancing; a lost
-  packet self-corrects on the next one (absolute phase included).
+- `TimeSync` (absolute phase `f32` 0..360 + day + rate + flags, 1 Hz,
+  unreliable) keeps clients advancing; a lost packet self-corrects on the next
+  one (absolute phase included).
 - `TimeEvent` (new day, dusk/dawn) and `WeatherChange` are reliable events.
 - Client application: force the time value + weather state each frame via the
   hook points from investigation 04; side effects (lighting, night-only
