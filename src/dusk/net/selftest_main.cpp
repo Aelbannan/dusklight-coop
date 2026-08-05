@@ -254,6 +254,10 @@ Message MakeMessage(MsgType type) {
         p.data = 99;
         p.eventId = static_cast<u8>(EnemyEventId::Died);
         p.flags = 0x0F;
+        p.flagMask = 0x2A;
+        p.reserved[0] = 0x11;
+        p.reserved[1] = 0x22;
+        p.reserved[2] = 0x33;
         break;
     }
     case MsgType::CombatIntent: {

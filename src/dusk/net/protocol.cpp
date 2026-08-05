@@ -166,7 +166,7 @@ u16 WireSize(MsgType type) {
         // = 2+2+2+2+1+1+2+4+12+12+1+3 = 44
         return 2 + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 12 + 12 + 1 + 3;  // 44
     case MsgType::EnemyEvent:
-        return 2 + 2 + 1 + 1;  // 6
+        return 2 + 2 + 1 + 1 + 1 + 3;  // 10 (flagMask + reserved)
     case MsgType::CombatIntent:
         // attackerId,powerType,hitType,targetPlayerId,targetEnemyId,atp,reserved,
         // computedPower,seq,atType,hitPos,attackerPos
@@ -226,7 +226,9 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteBytes(msg.payload.enemySnapshot.reserved, 3);
     case MsgType::EnemyEvent:
         return w.WriteU16(msg.payload.enemyEvent.enemyId) && w.WriteU16(msg.payload.enemyEvent.data) &&
-               w.WriteU8(msg.payload.enemyEvent.eventId) && w.WriteU8(msg.payload.enemyEvent.flags);
+               w.WriteU8(msg.payload.enemyEvent.eventId) && w.WriteU8(msg.payload.enemyEvent.flags) &&
+               w.WriteU8(msg.payload.enemyEvent.flagMask) &&
+               w.WriteBytes(msg.payload.enemyEvent.reserved, 3);
     case MsgType::CombatIntent:
         return w.WriteU8(msg.payload.combatIntent.attackerId) &&
                w.WriteU8(msg.payload.combatIntent.powerType) &&
@@ -318,7 +320,9 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
         return r.ReadU16(out.payload.enemyEvent.enemyId) &&
                r.ReadU16(out.payload.enemyEvent.data) &&
                r.ReadU8(out.payload.enemyEvent.eventId) &&
-               r.ReadU8(out.payload.enemyEvent.flags);
+               r.ReadU8(out.payload.enemyEvent.flags) &&
+               r.ReadU8(out.payload.enemyEvent.flagMask) &&
+               r.ReadBytes(out.payload.enemyEvent.reserved, 3);
     case MsgType::CombatIntent:
         return r.ReadU8(out.payload.combatIntent.attackerId) &&
                r.ReadU8(out.payload.combatIntent.powerType) &&

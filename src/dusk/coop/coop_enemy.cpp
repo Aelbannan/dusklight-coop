@@ -257,7 +257,7 @@ const std::array<NetEnemyAdapter, 6> kAdapters{{
         dfDriveModel, dfInjectHit, dfIsDead, dfDeathSwitch},
     {fpcNm_E_YC_e, "E_YC", DamageSemantics::Hp, 0xFF, 0, false, ycRefreshColliders,
         ycDriveModel, ycInjectHit, ycIsDead, ycDeathSwitch},
-    {fpcNm_E_MD_e, "E_MD", DamageSemantics::Special, 0xFF, 1, false, mdRefreshColliders,
+    {fpcNm_E_MD_e, "E_MD", DamageSemantics::Special, 0xFF, 0, false, mdRefreshColliders,
         mdDriveModel, mdInjectHit, mdIsDead, mdDeathSwitch},
     {fpcNm_B_TN_e, "B_TN", DamageSemantics::Hp, 29, 1, true, tnRefreshColliders,
         tnDriveModel, tnInjectHit, tnIsDead, tnDeathSwitch},
@@ -660,6 +660,12 @@ void SetTgHitSynthetic(EnemyEntry& e, cCcD_ObjHitInf* damageCollider,
     }
     cXyz hitPos(intent.hitPos.x, intent.hitPos.y, intent.hitPos.z);
     e.synthAt.SetAtHitPos(hitPos);
+    // Hit-position consumers on the enemy side read the contact point from
+    // the ENEMY's collider (the real collision pass sets it; the injection
+    // must too, or hitmarks land at a stale/zero spot).
+    if (dCcD_GObjInf* g = static_cast<dCcD_GObjInf*>(damageCollider)) {
+        g->SetTgHitPos(hitPos);
+    }
 
     // The enemy's own handler re-binds mAtInfo.mpCollider from GetTgHitObj(),
     // so the only AtInfo field the injection must pre-seed is the power type

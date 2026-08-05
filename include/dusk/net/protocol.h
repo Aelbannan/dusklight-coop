@@ -308,9 +308,15 @@ struct EnemySnapshotMsg {
 
 struct EnemyEventMsg {
     u16 enemyId = 0xFFFF;
-    u16 data = 0;  // event-specific (drop table id, flag mask, phase...)
+    u16 data = 0;    // event-specific: drop table id (Died)
     u8 eventId = 0;  // EnemyEventId
-    u8 flags = 0;
+    u8 flags = 0;    // kEnemyEventFlag_* bits
+    /// Per-player save switch to grant on death (dComIfGs_onSwitch), 0xFF =
+    /// none. Carried for every died event: bosses grant their story switch
+    /// (D9), regular enemies grant their room switch (enemy-caused world
+    /// changes ride the enemy channel — network.md §5).
+    u8 flagMask = 0xFF;
+    u8 reserved[3] = {};
 };
 
 struct CombatIntentMsg {
