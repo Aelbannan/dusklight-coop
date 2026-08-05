@@ -94,11 +94,24 @@ void shutdown();
 // ---------------------------------------------------------------------------
 
 /// Sends a game message into the session (host: simulcast to all clients;
-/// client: to the host). M2 enemy/combat traffic uses this.
+/// client: to the host). M2 enemy/combat + M3 time/weather traffic use this.
 bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload);
 /// True when a remote roster slot is present in the session.
 bool rosterPresent(net::PlayerId pid);
 /// The real Link's current room (s8), or -1 when no real Link.
 s8 localRoomNo();
+
+// ---------------------------------------------------------------------------
+// M3 time/weather world state
+// ---------------------------------------------------------------------------
+
+/// Host publishes its clock/sky into the session every frame so a mid-game
+/// joiner receives current values in JoinAccept/WorldInit (M3 task 6).
+void setWorldTime(const net::TimeStateInfo& time);
+void setWorldWeather(const net::WeatherStateInfo& weather);
+/// Latest world time/weather the session carries (host: last publish; client:
+/// JoinAccept/WorldInit receipt) — the M3 replica seeds from these.
+const net::TimeStateInfo& worldTime();
+const net::WeatherStateInfo& worldWeather();
 
 }  // namespace dusk::coop

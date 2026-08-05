@@ -2,6 +2,7 @@
 
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_enemy.h"
+#include "dusk/coop/coop_time.h"
 
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
@@ -234,6 +235,14 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
     } else if (type == net::MsgType::CombatResult) {
         // M2: result ack — the authoritative HP always rides the next
         // EnemySnapshot; nothing to apply client-side in v1.
+    } else if (type == net::MsgType::TimeSync || type == net::MsgType::TimeEvent ||
+               type == net::MsgType::WeatherChange)
+    {
+        // M3: the client clock/weather replica (absolute adopt, events,
+        // weather target + re-pin). The host never receives these from a
+        // peer (they are host-generated, host->all); a forged inbound copy is
+        // ignored here.
+        dusk::coop::timeweather::onGameMessage(type, payload);
     }
 }
 
@@ -979,6 +988,11 @@ void onGameFrame() {
     // M2: enemy authority — host registration/snapshots/deaths, client
     // freeze/apply state, room-clear. No-op when the session is not live.
     dusk::coop::enemy::onGameFrame();
+    // M3: time of day & weather — host publisher (TimeSync 1 Hz / TimeEvent /
+    // WeatherChange + world info for joiners), client world-state re-seed.
+    // The actual client replica/force hooks live in d_kankyo.cpp /
+    // d_a_kytag06.cpp under TARGET_PC. No-op when the session is not live.
+    dusk::coop::timeweather::onGameFrame();
 }
 
 void shutdown() {
@@ -995,6 +1009,8 @@ void shutdown() {
     }
     // M2: clear per-stage enemy state (registry, receive slots, room-clear).
     dusk::coop::enemy::shutdown();
+    // M3: clear host/clients time-weather module state.
+    dusk::coop::timeweather::shutdown();
 }
 
 bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
@@ -1013,6 +1029,22 @@ bool rosterPresent(net::PlayerId pid) {
 
 s8 localRoomNo() {
     return LocalRoomNo();
+}
+
+void setWorldTime(const net::TimeStateInfo& time) {
+    g_session.setWorldTime(time);
+}
+
+void setWorldWeather(const net::WeatherStateInfo& weather) {
+    g_session.setWorldWeather(weather);
+}
+
+const net::TimeStateInfo& worldTime() {
+    return g_session.worldTime();
+}
+
+const net::WeatherStateInfo& worldWeather() {
+    return g_session.worldWeather();
 }
 
 }  // namespace dusk::coop

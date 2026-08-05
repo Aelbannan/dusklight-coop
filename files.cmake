@@ -1423,6 +1423,7 @@ set(DUSK_FILES
         include/dusk/coop/coop_combat.h
         include/dusk/coop/coop_context.h
         include/dusk/coop/coop_enemy.h
+        include/dusk/coop/coop_time.h
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/OSContext.cpp
         src/dusk/OSMutex.cpp
@@ -1440,6 +1441,7 @@ set(DUSK_FILES
         src/dusk/coop/coop_combat.cpp
         src/dusk/coop/coop_context.cpp
         src/dusk/coop/coop_enemy.cpp
+        src/dusk/coop/coop_time.cpp
         src/dusk/config.hpp
         src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp
