@@ -46,20 +46,22 @@ bool DeserializeStage(StageInfo& s, ByteReader& r) {
            r.ReadS8(s.layer) && r.ReadS16(s.point);
 }
 
-bool SerializeTime(const TimeInfo& t, ByteWriter& w) {
-    return w.WriteU32(t.phase) && w.WriteU32(t.elapsedMs);
+bool SerializeTimeState(const TimeStateInfo& t, ByteWriter& w) {
+    return w.WriteF32(t.time) && w.WriteU16(t.day) && w.WriteU8(t.rate) && w.WriteU8(t.flags);
 }
 
-bool DeserializeTime(TimeInfo& t, ByteReader& r) {
-    return r.ReadU32(t.phase) && r.ReadU32(t.elapsedMs);
+bool DeserializeTimeState(TimeStateInfo& t, ByteReader& r) {
+    return r.ReadF32(t.time) && r.ReadU16(t.day) && r.ReadU8(t.rate) && r.ReadU8(t.flags);
 }
 
-bool SerializeWeather(const WeatherInfo& wth, ByteWriter& w) {
-    return w.WriteU8(wth.id) && w.WriteU8(wth.intensity) && w.WriteU16(wth.reserved);
+bool SerializeWeatherState(const WeatherStateInfo& wth, ByteWriter& w) {
+    return w.WriteU8(wth.mode) && w.WriteU8(wth.thunder) && w.WriteU16(wth.intensity) &&
+           w.WriteU8(wth.colpat) && w.WriteU8(wth.pad);
 }
 
-bool DeserializeWeather(WeatherInfo& wth, ByteReader& r) {
-    return r.ReadU8(wth.id) && r.ReadU8(wth.intensity) && r.ReadU16(wth.reserved);
+bool DeserializeWeatherState(WeatherStateInfo& wth, ByteReader& r) {
+    return r.ReadU8(wth.mode) && r.ReadU8(wth.thunder) && r.ReadU16(wth.intensity) &&
+           r.ReadU8(wth.colpat) && r.ReadU8(wth.pad);
 }
 
 bool SerializeJoinRequest(const JoinRequestMsg& m, ByteWriter& w) {
@@ -74,22 +76,24 @@ bool DeserializeJoinRequest(JoinRequestMsg& m, ByteReader& r) {
 
 bool SerializeJoinAccept(const JoinAcceptMsg& m, ByteWriter& w) {
     return w.WriteU8(m.assignedPlayerId) && w.WriteBytes(m.reserved, 3) &&
-           SerializeStage(m.stage, w) && SerializeTime(m.time, w) &&
-           SerializeWeather(m.weather, w) && SerializeRoster(m.roster, w);
+           SerializeStage(m.stage, w) && SerializeTimeState(m.time, w) &&
+           SerializeWeatherState(m.weather, w) && SerializeRoster(m.roster, w);
 }
 
 bool DeserializeJoinAccept(JoinAcceptMsg& m, ByteReader& r) {
     return r.ReadU8(m.assignedPlayerId) && r.ReadBytes(m.reserved, 3) &&
-           DeserializeStage(m.stage, r) && DeserializeTime(m.time, r) &&
-           DeserializeWeather(m.weather, r) && DeserializeRoster(m.roster, r);
+           DeserializeStage(m.stage, r) && DeserializeTimeState(m.time, r) &&
+           DeserializeWeatherState(m.weather, r) && DeserializeRoster(m.roster, r);
 }
 
 bool SerializeWorldInit(const WorldInitMsg& m, ByteWriter& w) {
-    return SerializeStage(m.stage, w) && SerializeRoster(m.roster, w);
+    return SerializeStage(m.stage, w) && SerializeTimeState(m.time, w) &&
+           SerializeWeatherState(m.weather, w) && SerializeRoster(m.roster, w);
 }
 
 bool DeserializeWorldInit(WorldInitMsg& m, ByteReader& r) {
-    return DeserializeStage(m.stage, r) && DeserializeRoster(m.roster, r);
+    return DeserializeStage(m.stage, r) && DeserializeTimeState(m.time, r) &&
+           DeserializeWeatherState(m.weather, r) && DeserializeRoster(m.roster, r);
 }
 
 bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
@@ -145,13 +149,15 @@ u16 WireSize(MsgType type) {
     case MsgType::JoinRequest:
         return 4 + 1 + 3 + kMaxNameLength;  // 40
     case MsgType::JoinAccept:
-        return 1 + 3 + 20 + 8 + 4 + kMaxLocalPlayers * 36;  // 324
+        // assignedPlayerId + reserved + stage(20) + time(8) + weather(6) + roster
+        return 1 + 3 + 20 + 8 + 6 + kMaxLocalPlayers * 36;  // 326
     case MsgType::JoinReject:
     case MsgType::PlayerLeave:
     case MsgType::SessionEnd:
         return 4;
     case MsgType::WorldInit:
-        return 20 + kMaxLocalPlayers * 36;  // 308 — stage + roster, no state sections
+        // stage(20) + time(8) + weather(6) + roster (M3 v5: time+weather added)
+        return 20 + 8 + 6 + kMaxLocalPlayers * 36;  // 322
     case MsgType::PlayerState:
         // raw-matrix pose (Rev 3 D4): 5 (id/room/form/flags/jointCount)
         // + 5 scaleFlags + 10 (yaw/pitch face bck/btp/frame/reserved)
@@ -175,11 +181,14 @@ u16 WireSize(MsgType type) {
     case MsgType::CombatResult:
         return 2 + 2 + 2 + 1 + 1 + 4;  // 12
     case MsgType::TimeSync:
-        return 8;
+        // f32 time + u16 day + u8 rate + u8 flags
+        return 4 + 2 + 1 + 1;  // 8
     case MsgType::TimeEvent:
-        return 1 + 3 + 4;  // 8
+        // u8 eventId + u8 pad + f32 time + u16 day
+        return 1 + 1 + 4 + 2;  // 8
     case MsgType::WeatherChange:
-        return 1 + 1 + 2;  // 4
+        // u8 mode + u8 thunder + u16 intensity + u8 colpat + u8 pad
+        return 1 + 1 + 2 + 1 + 1;  // 6
     }
     return 0;
 }
@@ -250,15 +259,16 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU8(msg.payload.combatResult.attackerId) &&
                w.WriteU32(msg.payload.combatResult.seq);
     case MsgType::TimeSync:
-        return w.WriteU32(msg.payload.timeSync.phase) && w.WriteU32(msg.payload.timeSync.elapsedMs);
+        return w.WriteF32(msg.payload.timeSync.time) && w.WriteU16(msg.payload.timeSync.day) &&
+               w.WriteU8(msg.payload.timeSync.rate) && w.WriteU8(msg.payload.timeSync.flags);
     case MsgType::TimeEvent:
-        return w.WriteU8(msg.payload.timeEvent.eventId) &&
-               w.WriteBytes(msg.payload.timeEvent.reserved, 3) &&
-               w.WriteU32(msg.payload.timeEvent.timePhase);
+        return w.WriteU8(msg.payload.timeEvent.eventId) && w.WriteU8(msg.payload.timeEvent.pad) &&
+               w.WriteF32(msg.payload.timeEvent.time) && w.WriteU16(msg.payload.timeEvent.day);
     case MsgType::WeatherChange:
-        return w.WriteU8(msg.payload.weatherChange.weatherId) &&
-               w.WriteU8(msg.payload.weatherChange.intensity) &&
-               w.WriteU16(msg.payload.weatherChange.reserved);
+        return w.WriteU8(msg.payload.weatherChange.mode) &&
+               w.WriteU8(msg.payload.weatherChange.thunder) &&
+               w.WriteU16(msg.payload.weatherChange.intensity) &&
+               w.WriteU8(msg.payload.weatherChange.colpat) && w.WriteU8(msg.payload.weatherChange.pad);
     }
     return false;
 }
@@ -344,16 +354,16 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.combatResult.attackerId) &&
                r.ReadU32(out.payload.combatResult.seq);
     case MsgType::TimeSync:
-        return r.ReadU32(out.payload.timeSync.phase) &&
-               r.ReadU32(out.payload.timeSync.elapsedMs);
+        return r.ReadF32(out.payload.timeSync.time) && r.ReadU16(out.payload.timeSync.day) &&
+               r.ReadU8(out.payload.timeSync.rate) && r.ReadU8(out.payload.timeSync.flags);
     case MsgType::TimeEvent:
-        return r.ReadU8(out.payload.timeEvent.eventId) &&
-               r.ReadBytes(out.payload.timeEvent.reserved, 3) &&
-               r.ReadU32(out.payload.timeEvent.timePhase);
+        return r.ReadU8(out.payload.timeEvent.eventId) && r.ReadU8(out.payload.timeEvent.pad) &&
+               r.ReadF32(out.payload.timeEvent.time) && r.ReadU16(out.payload.timeEvent.day);
     case MsgType::WeatherChange:
-        return r.ReadU8(out.payload.weatherChange.weatherId) &&
-               r.ReadU8(out.payload.weatherChange.intensity) &&
-               r.ReadU16(out.payload.weatherChange.reserved);
+        return r.ReadU8(out.payload.weatherChange.mode) &&
+               r.ReadU8(out.payload.weatherChange.thunder) &&
+               r.ReadU16(out.payload.weatherChange.intensity) &&
+               r.ReadU8(out.payload.weatherChange.colpat) && r.ReadU8(out.payload.weatherChange.pad);
     }
     return false;
 }

@@ -51,7 +51,14 @@ namespace dusk::net {
 /// was rebuilt to carry the RAW attack fields the sim owner needs to reproduce
 /// damage deterministically (atp, powerType, hitType, AtType bits) plus the
 /// contract hitPos/attackerPos — see m2-design-notes.md §1.
-constexpr u16 kProtocolVersion = 4;
+///
+/// v5 (M3): TimeSync/TimeEvent/WeatherChange moved from the M0 placeholder
+/// layouts (phase f32/u32 opaque) to the absolute-phase contract of
+/// 04-time-weather.md §4 (time f32 0..360 + day + rate + flags; event +
+/// time + day; mode + thunder + intensity + colpat). JoinAccept/WorldInit
+/// carry the same TimeStateInfo/WeatherStateInfo so a mid-game joiner starts
+/// with the host's sky.
+constexpr u16 kProtocolVersion = 5;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -150,18 +157,43 @@ enum class CombatOutcome : u8 {
     Rejected = 4,
 };
 
+/// Day-clock boundary events (04-time-weather.md §4.2): NEW_DAY fires on the
+/// 360 wrap (host mDate++ + dKankyo_DayProc), DAWN/DUSK on the upward
+/// crossing of phase 90 / 285 (dKy_daynight_check edges).
 enum class TimeEventId : u8 {
     NewDay = 0,
-    Dusk = 1,
-    Dawn = 2,
+    Dawn = 1,
+    Dusk = 2,
 };
 
-enum class WeatherId : u8 {
-    None = 0,
-    Rain = 1,
-    Storm = 2,
-    Snow = 3,
+/// Semantic weather mode (04-time-weather.md §4.3). The host derives it from
+/// the live sky state (dice machine / kytag06 / snow); clients use its
+/// canonical per-mode raincnt target for the local ramp.
+enum class WeatherMode : u8 {
+    Clear = 0,
+    Cloudy = 1,
+    RainLight = 2,   // raincnt ~40, colpat 1
+    RainHeavy = 3,   // raincnt ~250, colpat 2
+    ThunderLight = 4, // thunder on + colpat 1
+    ThunderHeavy = 5, // thunder on + colpat 2
+    Snow = 6,         // mSnowCount 0..500 (Snowpeak stages)
 };
+
+// ---------------------------------------------------------------------------
+// Time/weather constants (04-time-weather.md §1.2/§4.1)
+// ---------------------------------------------------------------------------
+
+/// TimeSync rate bucket: the client replicates the absolute phase by
+/// `ratePerTick * simTicks` between absolute syncs.
+constexpr u8 kTimeRateFrozen = 0;  // no advance (event/message/tag/room-gate)
+constexpr u8 kTimeRateNormal = 1;  // 0.012 / sim tick
+constexpr u8 kTimeRateFast = 2;    // 1.0 / tick (wolf-howl fast-forward)
+constexpr u8 kTimeRatePond2x = 3;  // Fishing Pond / Hena's Hut double-advance
+
+/// TimeSync flags bit 0: the host's twilight (darkworld) clock is active —
+/// its daytime is pinned to 0 and the synced value is fixed twilight lighting
+/// (04-time-weather.md §5.5).
+constexpr u8 kTimeFlagDarkworld = 1 << 0;
 
 // ---------------------------------------------------------------------------
 // Primitives (fixed layout; mirror cXyz / Vec3s but self-contained)
@@ -199,15 +231,23 @@ struct StageInfo {
     s16 point = 0;
 };
 
-struct TimeInfo {
-    u32 phase = 0;      // absolute day phase (00-network.md §8)
-    u32 elapsedMs = 0;  // delta since the previous TimeSync
+/// Absolute day-clocked state (04-time-weather.md §4.1): f32 phase 0..360
+/// (15 units = 1 hour), save day counter, advance-rate bucket, flags.
+struct TimeStateInfo {
+    f32 time = 0.0f;  // absolute phase 0..360
+    u16 day = 0;      // dComIfGs_getDate()
+    u8 rate = 0;      // kTimeRate*
+    u8 flags = 0;     // kTimeFlag* bits
 };
 
-struct WeatherInfo {
-    u8 id = 0;        // WeatherId
-    u8 intensity = 0; // 0..100
-    u16 reserved = 0;
+/// Sky state (04-time-weather.md §4.3): semantic mode + mThunderEff.mMode +
+/// intensity (raincnt 0..250 or mSnowCount 0..500) + mColpatWeather.
+struct WeatherStateInfo {
+    u8 mode = 0;       // WeatherMode
+    u8 thunder = 0;    // mThunderEff.mMode (0/1)
+    u16 intensity = 0; // raincnt (rain modes) or mSnowCount (Snow)
+    u8 colpat = 0;     // mColpatWeather: 0 clear | 1 cloudy/light | 2 heavy/storm
+    u8 pad = 0;
 };
 
 struct JoinRequestMsg {
@@ -221,8 +261,8 @@ struct JoinAcceptMsg {
     u8 assignedPlayerId = kInvalidPlayerId;
     u8 reserved[3] = {};
     StageInfo stage;
-    TimeInfo time;
-    WeatherInfo weather;
+    TimeStateInfo time;
+    WeatherStateInfo weather;
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
@@ -242,11 +282,16 @@ struct SessionEndMsg {
 };
 
 /// Sent to a joining client right after JoinAccept (00-network.md §4). Fixed
-/// size by contract: stage + roster only. M1's snapshot-on-join is a burst of
-/// ordinary per-frame PlayerState / EnemySnapshot messages sent right after
-/// WorldInit — no count-prefixed full-state sections live here.
+/// size by contract: stage + time + weather + roster. M1's snapshot-on-join is
+/// a burst of ordinary per-frame PlayerState / EnemySnapshot messages sent
+/// right after WorldInit — no count-prefixed full-state sections live here.
+/// M3 (v5): carries the host's current time/weather so a mid-game joiner
+/// starts with the host's sky; the roster-refresh broadcast on later joins
+/// keeps already-joined peers' sky targets current at the same time.
 struct WorldInitMsg {
     StageInfo stage;
+    TimeStateInfo time;
+    WeatherStateInfo weather;
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
@@ -344,21 +389,41 @@ struct CombatResultMsg {
     u32 seq = 0;
 };
 
+// ---------------------------------------------------------------------------
+// Time & weather messages (04-time-weather.md §4; M3 absolute-phase contract)
+// ---------------------------------------------------------------------------
+
+/// Unreliable-sequenced, 1 Hz. Absolute phase self-corrects; the rate lets
+/// clients advance by `ratePermTick * simTicks` between syncs (frozen during
+/// events/messages/time-control tags — rate=0).
 struct TimeSyncMsg {
-    u32 phase = 0;
-    u32 elapsedMs = 0;
+    f32 time = 0.0f;  // absolute phase 0..360
+    u16 day = 0;      // dComIfGs_getDate()
+    u8 rate = 0;      // kTimeRate*
+    u8 flags = 0;     // kTimeFlag* bits
 };
 
+/// Reliable, on boundary crossing (360 wrap / 90 / 285). Advisory: the phase
+/// in TimeSync already encodes the boundary; the reliable event exists so
+/// local one-shot behavior (temp-bit clears, future per-player forms) fires
+/// exactly once.
 struct TimeEventMsg {
     u8 eventId = 0;  // TimeEventId
-    u8 reserved[3] = {};
-    u32 timePhase = 0;
+    u8 pad = 0;
+    f32 time = 0.0f;  // phase at the event
+    u16 day = 0;      // day at the event
 };
 
+/// Reliable, on mode change + after every stage change (weather is fully
+/// reset per stage, 04 §5.6). Carries the current intensity; clients re-pin
+/// on receipt and re-run the vanilla dice ramp toward the per-mode target
+/// between receipts (04 §4.3 — do not stream the ±1-3/frame ramp).
 struct WeatherChangeMsg {
-    u8 weatherId = 0;  // WeatherId
-    u8 intensity = 0;  // 0..100
-    u16 reserved = 0;
+    u8 mode = 0;       // WeatherMode
+    u8 thunder = 0;    // mThunderEff.mMode
+    u16 intensity = 0; // current raincnt / mSnowCount
+    u8 colpat = 0;     // mColpatWeather
+    u8 pad = 0;
 };
 
 // ---------------------------------------------------------------------------

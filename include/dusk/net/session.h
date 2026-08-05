@@ -106,11 +106,20 @@ public:
     [[nodiscard]] PlayerId selfId() const { return selfId_; }
     [[nodiscard]] u16 boundPort() const { return transport_.BoundPort(); }
     [[nodiscard]] const std::array<PlayerSlot, kMaxLocalPlayers>& roster() const { return roster_; }
-    /// Stage/time/weather from the last JoinAccept (client) — what the host
-    /// believes the world looks like. M1+ fills real values.
+    /// Stage/time/weather from the last JoinAccept/WorldInit (client) — what
+    /// the host believes the world looks like; on the host these are the
+    /// values the game side published with setWorldTime/Weather (M3: filled
+    /// every frame from the real sim) and are what joiners receive.
     [[nodiscard]] const StageInfo& worldStage() const { return worldStage_; }
-    [[nodiscard]] const TimeInfo& worldTime() const { return worldTime_; }
-    [[nodiscard]] const WeatherInfo& worldWeather() const { return worldWeather_; }
+    [[nodiscard]] const TimeStateInfo& worldTime() const { return worldTime_; }
+    [[nodiscard]] const WeatherStateInfo& worldWeather() const { return worldWeather_; }
+
+    /// Host-side: publish the current world time/weather so a mid-game joiner
+    /// starts with the host's sky (JoinAccept/WorldInit, M3 task 6). The coop
+    /// tick calls these every frame; the session snapshots the latest value
+    /// into the join handshake.
+    void setWorldTime(const TimeStateInfo& t) { worldTime_ = t; }
+    void setWorldWeather(const WeatherStateInfo& w) { worldWeather_ = w; }
     [[nodiscard]] u64 sessionFrames() const { return frame_; }
     [[nodiscard]] const char* rejectReasonName() const { return rejectReasonName_; }
 
@@ -153,8 +162,8 @@ private:
     std::array<PlayerId, Transport::kMaxPeers> peerToPlayer_{};
     GameMessageHandler gameHandler_;
     StageInfo worldStage_;
-    TimeInfo worldTime_;
-    WeatherInfo worldWeather_;
+    TimeStateInfo worldTime_;
+    WeatherStateInfo worldWeather_;
     u64 frame_ = 0;
     u64 connectedAtMs_ = 0;
     // Last-observed reliable-ring drop counters (for surfacing explicit

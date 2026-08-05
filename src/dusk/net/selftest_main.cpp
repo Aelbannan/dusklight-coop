@@ -29,6 +29,12 @@
  *     consumed by the sim owner and never echoed to other clients; the
  *     owner's EnemySnapshot/CombatResult/EnemyEvent simulcasts reach every
  *     client; a buggy client's EnemySnapshot/CombatResult is not echoed;
+ *   - M3 time/weather contract: v5 absolute-phase wire round-trips (TimeSync
+ *     f32 time + day + rate + flags; TimeEvent; WeatherChange mode + thunder
+ *     + intensity + colpat); host->all broadcasts of TimeSync/TimeEvent/
+ *     WeatherChange; a buggy client's time/weather messages are consumed but
+ *     never relayed; JoinAccept/WorldInit carry the host's clock+sky so a
+ *     mid-game joiner starts with the host's time of day and weather;
  *   - clean shutdown: every transport thread joined, every ENet host
  *     destroyed (leak-free exit).
  *
@@ -155,10 +161,14 @@ Message MakeMessage(MsgType type) {
         p.stage.room = 2;
         p.stage.layer = 1;
         p.stage.point = 7;
-        p.time.phase = 1234567;
-        p.time.elapsedMs = 4321;
-        p.weather.id = static_cast<u8>(WeatherId::Rain);
-        p.weather.intensity = 42;
+        p.time.time = 123.5f;
+        p.time.day = 7;
+        p.time.rate = kTimeRateFast;
+        p.time.flags = kTimeFlagDarkworld;
+        p.weather.mode = static_cast<u8>(WeatherMode::RainHeavy);
+        p.weather.thunder = 1;
+        p.weather.intensity = 240;
+        p.weather.colpat = 2;
         for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
             auto& e = p.roster[i];
             e.playerId = i;
@@ -186,6 +196,12 @@ Message MakeMessage(MsgType type) {
         p.stage.room = 3;
         p.stage.layer = 0;
         p.stage.point = 11;
+        p.time.time = 205.75f;
+        p.time.day = 2;
+        p.time.rate = kTimeRateNormal;
+        p.weather.mode = static_cast<u8>(WeatherMode::Cloudy);
+        p.weather.intensity = 0;
+        p.weather.colpat = 1;
         for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
             auto& e = p.roster[i];
             e.playerId = i;
@@ -287,20 +303,25 @@ Message MakeMessage(MsgType type) {
     }
     case MsgType::TimeSync: {
         auto& p = m.payload.timeSync;
-        p.phase = 999999;
-        p.elapsedMs = 16;
+        p.time = 123.25f;
+        p.day = 3;
+        p.rate = kTimeRateNormal;
+        p.flags = 0;
         break;
     }
     case MsgType::TimeEvent: {
         auto& p = m.payload.timeEvent;
         p.eventId = static_cast<u8>(TimeEventId::Dawn);
-        p.timePhase = 43210;
+        p.time = 90.0f;
+        p.day = 2;
         break;
     }
     case MsgType::WeatherChange: {
         auto& p = m.payload.weatherChange;
-        p.weatherId = static_cast<u8>(WeatherId::Storm);
-        p.intensity = 100;
+        p.mode = static_cast<u8>(WeatherMode::ThunderHeavy);
+        p.thunder = 1;
+        p.intensity = 250;
+        p.colpat = 2;
         break;
     }
     }
@@ -347,13 +368,21 @@ void RunProtocolChecks() {
         const auto type = static_cast<MsgType>(t);
         Check(RoundTrip(type), WireSize(type) > 0 ? "round-trip ok" : "round-trip ok (size 0)");
     }
-    Check(WireSize(MsgType::JoinAccept) == 1 + 3 + 20 + 8 + 4 + kMaxLocalPlayers * 36,
+    Check(WireSize(MsgType::JoinAccept) == 1 + 3 + 20 + 8 + 6 + kMaxLocalPlayers * 36,
         "JoinAccept wire size");
+    Check(WireSize(MsgType::WorldInit) == 20 + 8 + 6 + kMaxLocalPlayers * 36,
+        "WorldInit wire size (stage + time + weather + roster)");
+    Check(WireSize(MsgType::TimeSync) == 8 && WireSize(MsgType::TimeEvent) == 8 &&
+              WireSize(MsgType::WeatherChange) == 6,
+        "time/weather message sizes (absolute-phase contract)");
     Check(WireSize(MsgType::PlayerState) == PlayerStateWireSize(),
         "PlayerState wire size");
     Check(ChannelFor(MsgType::PlayerState) == kChannelUnreliable &&
-              ChannelFor(MsgType::JoinRequest) == kChannelReliable,
-        "channel mapping (snapshots unreliable, control reliable)");
+              ChannelFor(MsgType::JoinRequest) == kChannelReliable &&
+              ChannelFor(MsgType::TimeSync) == kChannelUnreliable &&
+              ChannelFor(MsgType::TimeEvent) == kChannelReliable &&
+              ChannelFor(MsgType::WeatherChange) == kChannelReliable,
+        "channel mapping (snapshots unreliable, control reliable; TimeSync 1 Hz unreliable, events reliable)");
 
     // Malformed input must be rejected.
     {
@@ -1019,6 +1048,204 @@ void RunM2RelayPolicyCheck() {
 /// A sends a snapshot while owning slot 0, then disconnects GRACEFULLY (a
 /// hard enet_host_destroy never notifies the peer — ENet destroys the socket
 /// before flushing the disconnect command, so the host would only free the
+/// M3 time/weather (v5 absolute-phase contract): field-exact wire round-trips
+/// (04 §4); the host broadcasts TimeSync/TimeEvent/WeatherChange host->all; a
+/// client's (buggy/forged) time/weather messages are consumed on the host but
+/// never relayed; JoinAccept/WorldInit carry the host's clock+sky so a
+/// mid-game joiner starts with the host's time of day and weather (task 6).
+void RunM3TimeWeatherCheck() {
+    std::printf("m3: time/weather sync contract\n");
+    Demo demo;
+
+    // 1) Field-exact wire round-trips (absolute-phase contract, 04 §4).
+    {
+        Message ts = MakeMessage(MsgType::TimeSync);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(ts, w), "TimeSync serializes");
+        ByteReader r(buf, w.size());
+        Message parsed;
+        Check(DeserializeMessage(r, parsed), "TimeSync deserializes");
+        Check(parsed.payload.timeSync.time == ts.payload.timeSync.time &&
+                  parsed.payload.timeSync.day == ts.payload.timeSync.day &&
+                  parsed.payload.timeSync.rate == ts.payload.timeSync.rate &&
+                  parsed.payload.timeSync.flags == ts.payload.timeSync.flags,
+            "TimeSync fields survive the round-trip");
+
+        Message te = MakeMessage(MsgType::TimeEvent);
+        u8 buf2[kMaxMessageSize];
+        ByteWriter w2(buf2, sizeof(buf2));
+        Check(SerializeMessage(te, w2), "TimeEvent serializes");
+        ByteReader r2(buf2, w2.size());
+        Message parsed2;
+        Check(DeserializeMessage(r2, parsed2), "TimeEvent deserializes");
+        Check(parsed2.payload.timeEvent.eventId == static_cast<u8>(TimeEventId::Dawn) &&
+                  parsed2.payload.timeEvent.time == 90.0f &&
+                  parsed2.payload.timeEvent.day == 2,
+            "TimeEvent fields survive the round-trip");
+
+        Message wc = MakeMessage(MsgType::WeatherChange);
+        u8 buf3[kMaxMessageSize];
+        ByteWriter w3(buf3, sizeof(buf3));
+        Check(SerializeMessage(wc, w3), "WeatherChange serializes");
+        ByteReader r3(buf3, w3.size());
+        Message parsed3;
+        Check(DeserializeMessage(r3, parsed3), "WeatherChange deserializes");
+        Check(parsed3.payload.weatherChange.mode == static_cast<u8>(WeatherMode::ThunderHeavy) &&
+                  parsed3.payload.weatherChange.thunder == 1 &&
+                  parsed3.payload.weatherChange.intensity == 250 &&
+                  parsed3.payload.weatherChange.colpat == 2,
+            "WeatherChange fields survive the round-trip");
+    }
+
+    Session host;
+    SessionConfig hostCfg;
+    hostCfg.port = 0;
+    hostCfg.name = "M3 Host";
+    hostCfg.maxPlayers = 3;
+    Check(host.StartHost(hostCfg), "m3 host starts (Listening)");
+    demo.live.push_back(&host);
+    const u16 port = host.boundPort();
+
+    // The host has a clock and a sky BEFORE joiners arrive (task 6 — the
+    // coop publisher updates this every frame in-game; here the test seeds
+    // the session world info directly).
+    TimeStateInfo hostTime = {};
+    hostTime.time = 331.25f;  // 22:05 — near dusk
+    hostTime.day = 5;
+    hostTime.rate = kTimeRateNormal;
+    WeatherStateInfo hostWeather = {};
+    hostWeather.mode = static_cast<u8>(WeatherMode::RainLight);
+    hostWeather.intensity = 40;
+    hostWeather.colpat = 1;
+    host.setWorldTime(hostTime);
+    host.setWorldWeather(hostWeather);
+
+    Session a;
+    SessionConfig aCfg;
+    aCfg.joinHost = "127.0.0.1";
+    aCfg.port = port;
+    aCfg.name = "M3 A";
+    aCfg.version = kProtocolVersion;
+    Check(a.StartClient(aCfg), "m3 client A starts");
+    demo.live.push_back(&a);
+    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000), "A joined");
+    Check(a.worldTime().time == hostTime.time && a.worldTime().day == hostTime.day &&
+              a.worldTime().rate == hostTime.rate,
+        "JoinAccept carries the host's clock to the joiner");
+    Check(a.worldWeather().mode == hostWeather.mode &&
+              a.worldWeather().intensity == hostWeather.intensity &&
+              a.worldWeather().colpat == hostWeather.colpat,
+        "JoinAccept carries the host's sky to the joiner");
+
+    Session b;
+    SessionConfig bCfg;
+    bCfg.joinHost = "127.0.0.1";
+    bCfg.port = port;
+    bCfg.name = "M3 B";
+    bCfg.version = kProtocolVersion;
+    Check(b.StartClient(bCfg), "m3 client B starts");
+    demo.live.push_back(&b);
+    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000), "B joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+        "host roster has 3 players");
+    Check(demo.WaitFor([&] { return a.roster()[b.selfId()].present; }, 10000),
+        "A learned about B via the WorldInit re-broadcast");
+
+    int hostSyncs = 0, aSyncs = 0, bSyncs = 0;
+    int hostEvents = 0, aEvents = 0;
+    int hostWeatherCount = 0, aWeatherCount = 0, bWeatherCount = 0;
+    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::TimeSync:
+            ++hostSyncs;
+            break;
+        case MsgType::TimeEvent:
+            ++hostEvents;
+            break;
+        case MsgType::WeatherChange:
+            ++hostWeatherCount;
+            break;
+        default:
+            break;
+        }
+    });
+    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::TimeSync:
+            ++aSyncs;
+            break;
+        case MsgType::TimeEvent:
+            ++aEvents;
+            break;
+        case MsgType::WeatherChange:
+            ++aWeatherCount;
+            break;
+        default:
+            break;
+        }
+    });
+    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::TimeSync:
+            ++bSyncs;
+            break;
+        case MsgType::WeatherChange:
+            ++bWeatherCount;
+            break;
+        default:
+            break;
+        }
+    });
+
+    // Host -> all broadcasts (the host owns the clock and the sky).
+    PayloadUnion sync = {};
+    sync.timeSync.time = 332.0f;
+    sync.timeSync.day = 5;
+    sync.timeSync.rate = kTimeRateNormal;
+    Check(host.SendGameMessage(MsgType::TimeSync, sync), "host sends TimeSync");
+    Check(demo.WaitFor([&] { return aSyncs >= 1 && bSyncs >= 1; }, 10000),
+        "TimeSync reached both clients");
+
+    PayloadUnion ev = {};
+    ev.timeEvent.eventId = static_cast<u8>(TimeEventId::Dusk);
+    ev.timeEvent.time = 332.0f;
+    ev.timeEvent.day = 5;
+    Check(host.SendGameMessage(MsgType::TimeEvent, ev), "host sends TimeEvent(Dusk)");
+    Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000), "TimeEvent reached client A");
+
+    PayloadUnion wc = {};
+    wc.weatherChange.mode = static_cast<u8>(WeatherMode::RainHeavy);
+    wc.weatherChange.thunder = 0;
+    wc.weatherChange.intensity = 250;
+    wc.weatherChange.colpat = 2;
+    Check(host.SendGameMessage(MsgType::WeatherChange, wc), "host sends WeatherChange");
+    Check(demo.WaitFor([&] { return aWeatherCount >= 1 && bWeatherCount >= 1; }, 10000),
+        "WeatherChange reached both clients");
+
+    // Clients NEVER relay time/weather: a buggy client's messages are
+    // consumed by the host (handler) but not echoed to the other client.
+    PayloadUnion rogueSync = {};
+    rogueSync.timeSync.time = 42.0f;
+    Check(a.SendGameMessage(MsgType::TimeSync, rogueSync), "A sends a rogue TimeSync");
+    Check(demo.WaitFor([&] { return hostSyncs >= 1; }, 10000),
+        "host consumed A's rogue TimeSync");
+    PayloadUnion rogueWc = {};
+    rogueWc.weatherChange.mode = static_cast<u8>(WeatherMode::Clear);
+    Check(a.SendGameMessage(MsgType::WeatherChange, rogueWc), "A sends a rogue WeatherChange");
+    Check(demo.WaitFor([&] { return hostWeatherCount >= 1; }, 10000),
+        "host consumed A's rogue WeatherChange");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(bSyncs == 1 && bWeatherCount == 1,
+        "A's rogue TimeSync/WeatherChange are NOT relayed to B");
+
+    for (Session* s : demo.live) {
+        s->Stop();
+    }
+    demo.live.clear();
+    host.Stop();
+}
+
 /// slot after its ~5 s peer timeout). The generation bumps on release and
 /// reassign; A's stale snapshot is dropped at Poll time and D's fresh
 /// traffic flows normally.
@@ -1334,6 +1561,7 @@ int main() {
     RunHandshakeDemo();
     RunGameMessageDemo();
     RunM2RelayPolicyCheck();
+    RunM3TimeWeatherCheck();
 
     dusk::net::shutdown();
 

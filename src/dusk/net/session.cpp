@@ -58,6 +58,15 @@ RelayPolicy PolicyFor(MsgType type) {
         // inbound copy from a peer is handed to the game handler (session.cpp
         // HandleData) and NOT re-broadcast.
         return RelayPolicy::None;
+    case MsgType::TimeSync:
+    case MsgType::TimeEvent:
+    case MsgType::WeatherChange:
+        // M3: time/weather are HOST-GENERATED the same way enemy authority is
+        // — host->all via SendGameMessage, never client->host-then-relayed.
+        // The host owns one clock and one sky (00-network.md §8); a peer that
+        // sends these is reported into the handler (for diagnostics) and not
+        // echoed to anyone else.
+        return RelayPolicy::None;
     default:
         // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd) is handled
         // directly by the session, never via ForwardGameMessage.
@@ -86,8 +95,8 @@ bool Session::StartHost(const SessionConfig& config) {
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
     worldStage_ = StageInfo{};
-    worldTime_ = TimeInfo{};
-    worldWeather_ = WeatherInfo{};
+    worldTime_ = TimeStateInfo{};
+    worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartHost(config_.port)) {
         NetLog.error("net: failed to start host transport on port {}", config_.port);
@@ -124,8 +133,8 @@ bool Session::StartClient(const SessionConfig& config) {
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
     worldStage_ = StageInfo{};
-    worldTime_ = TimeInfo{};
-    worldWeather_ = WeatherInfo{};
+    worldTime_ = TimeStateInfo{};
+    worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartClient(config_.joinHost, config_.port)) {
         NetLog.error("net: failed to start client transport to {}:{}", config_.joinHost, config_.port);
@@ -312,11 +321,20 @@ void Session::HandleData(const InboundPacket& pkt) {
             gameHandler_(msg.type, msg.payload);
         }
         break;
+    case MsgType::TimeSync:
+    case MsgType::TimeEvent:
+    case MsgType::WeatherChange:
+        // M3 time/weather traffic. Consumed by the game handler; NEVER
+        // relayed (PolicyFor returns None) — the host generates these and
+        // broadcasts them host->all via SendGameMessage; a client sending
+        // them is a buggy/forged peer and is ignored rather than echoed.
+        if (gameHandler_) {
+            gameHandler_(msg.type, msg.payload);
+        }
+        break;
     default:
-        // M0: snapshot/combat/time traffic is parsed but not acted on — no
-        // game integration yet. The serializer round-trip is covered by the
-        // selftest; application lands in M2/M3.
-        NetLog.debug("net: ignoring {} for now (M0)", static_cast<u16>(msg.type));
+        // Handshake leftovers — parsed but not acted on here.
+        NetLog.debug("net: ignoring {} (no handler)", static_cast<u16>(msg.type));
         break;
     }
 }
@@ -374,7 +392,8 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     peerToPlayer_[peerIndex] = id;
     NetLog.info("net: player {} '{}' joined (peer {})", id, roster_[id].name, peerIndex);
 
-    // JoinAccept: assigned id + full roster + world info (00-network.md §4).
+    // JoinAccept: assigned id + full roster + world info (00-network.md §4;
+    // M3: time/weather so a mid-game joiner starts with the host's sky).
     PayloadUnion accept = {};
     accept.joinAccept.assignedPlayerId = id;
     accept.joinAccept.stage = worldStage_;
@@ -383,11 +402,14 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     FillWireRoster(accept.joinAccept.roster);
     SendToPeer(peerIndex, MsgType::JoinAccept, accept);
 
-    // WorldInit: fixed stage + roster (00-network.md §4/§5 — no state
-    // sections); M1's snapshot-on-join is a burst of ordinary per-frame
-    // PlayerState/EnemySnapshot messages sent right after this.
+    // WorldInit: fixed stage + time + weather + roster (00-network.md
+    // §4/§5); M1's snapshot-on-join is a burst of ordinary per-frame
+    // PlayerState/EnemySnapshot messages sent right after this; M3 carries
+    // the current sky (task 6).
     PayloadUnion init = {};
     init.worldInit.stage = worldStage_;
+    init.worldInit.time = worldTime_;
+    init.worldInit.weather = worldWeather_;
     FillWireRoster(init.worldInit.roster);
     SendToPeer(peerIndex, MsgType::WorldInit, init);
 
@@ -475,6 +497,8 @@ void Session::OnSessionEnd(const Message& msg) {
 void Session::OnWorldInit(const Message& msg) {
     const auto& init = msg.payload.worldInit;
     worldStage_ = init.stage;
+    worldTime_ = init.time;
+    worldWeather_ = init.weather;
     ApplyRoster(init.roster);  // roster refresh; may include players who joined later
     NetLog.info("net: world init: stage '{}' room {} (players {})", init.stage.stage,
         static_cast<s32>(init.stage.room), init.roster.size());
