@@ -3,6 +3,7 @@
 #include <aurora/lib/logging.hpp>
 
 #include <chrono>
+#include <cstring>
 
 namespace dusk::net {
 
@@ -45,6 +46,12 @@ bool Transport::StartHost(u16 port, size_t maxPeers) {
     host_ = host;
     stop_.store(false, std::memory_order_relaxed);
     peerSlots_.fill(nullptr);
+    for (auto& gen : peerGenerations_) {
+        gen.store(0, std::memory_order_relaxed);
+    }
+    // Visible before the thread spawns so IsRunning() is true immediately
+    // after StartHost returns (GLM MINOR-2).
+    running_.store(true, std::memory_order_relaxed);
     thread_ = std::thread(&Transport::SocketThreadMain, this);
     NetLog.info("host transport up on port {}", host_->address.port);
     return true;
@@ -81,8 +88,13 @@ bool Transport::StartClient(const std::string& host, u16 port) {
     host_ = clientHost;
     stop_.store(false, std::memory_order_relaxed);
     peerSlots_.fill(nullptr);
-    // The client's single peer is not yet "connected"; the CONNECT event on
-    // the socket thread assigns it slot 0.
+    for (auto& gen : peerGenerations_) {
+        gen.store(0, std::memory_order_relaxed);
+    }
+    // Visible before the thread spawns (GLM MINOR-2); the client's single
+    // peer is not yet "connected" — the CONNECT event on the socket thread
+    // assigns it slot 0.
+    running_.store(true, std::memory_order_relaxed);
     thread_ = std::thread(&Transport::SocketThreadMain, this);
     NetLog.info("client transport connecting to {}:{}", host, port);
     return true;
@@ -114,24 +126,57 @@ u16 Transport::BoundPort() const {
 }
 
 bool Transport::Send(u8 peerIndex, u8 channel, const void* data, u16 size) {
-    if (host_ == nullptr || size > kMaxMessageSize) {
+    if (host_ == nullptr || size > kMaxMessageSize || peerIndex >= kMaxPeers) {
         return false;
     }
     OutboundPacket p;
     p.peerIndex = peerIndex;
     p.channel = channel;
     p.size = size;
+    p.generation = PeerGeneration(peerIndex);
     std::memcpy(p.data, data, size);
-    if (!outbox_.Push(p)) {
-        outboundDropped_.fetch_add(1, std::memory_order_relaxed);
-        NetLog.warn("outbox ring full; dropping {} bytes to peer {}", size, peerIndex);
+    if (channel == kChannelUnreliable) {
+        // Snapshots: replace-newest under pressure — Send never fails.
+        if (snapshotOutbox_.PushOrReplace(p)) {
+            snapshotOutboundReplaced_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return true;
+    }
+    // Reliable: a full ring is an explicit, visible failure, never a silent
+    // drop (deepseek M2 / glm MAJOR-1). The counter is the session-visible
+    // error signal.
+    if (!reliableOutbox_.Push(p)) {
+        reliableOutboundDropped_.fetch_add(1, std::memory_order_relaxed);
+        NetLog.warn("reliable outbox ring full; dropping {} bytes to peer {} (explicit failure)",
+            size, peerIndex);
         return false;
     }
     return true;
 }
 
 bool Transport::Poll(InboundPacket& out) {
-    return inbox_.Pop(out);
+    // Reliable inbox first (control/events keep priority), then snapshots.
+    for (;;) {
+        if (!reliableInbox_.Pop(out)) {
+            break;
+        }
+        if (out.type == NetEventType::Data && out.generation != PeerGeneration(out.peerIndex)) {
+            inboundGenerationDropped_.fetch_add(1, std::memory_order_relaxed);
+            continue;  // slot reused by a newer connection; drop the stale packet
+        }
+        return true;
+    }
+    for (;;) {
+        if (!snapshotInbox_.Pop(out)) {
+            break;
+        }
+        if (out.type == NetEventType::Data && out.generation != PeerGeneration(out.peerIndex)) {
+            inboundGenerationDropped_.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,62 +184,24 @@ bool Transport::Poll(InboundPacket& out) {
 // ---------------------------------------------------------------------------
 
 void Transport::SocketThreadMain() {
-    running_.store(true, std::memory_order_relaxed);
+    // running_ was set under the lifecycle mutex before the thread spawned
+    // (GLM MINOR-2); nothing to do here.
     while (!stop_.load(std::memory_order_relaxed)) {
-        ENetEvent event;
-        while (enet_host_service(host_, &event, kServiceTimeoutMs) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT: {
-                const u8 index = AssignPeerSlot(event.peer);
-                if (index == kInvalidPlayerId) {
-                    NetLog.warn("peer limit reached; resetting incoming connection");
-                    enet_peer_reset(event.peer);
-                    break;
-                }
-                InboundPacket pkt;
-                pkt.type = NetEventType::Connected;
-                pkt.peerIndex = index;
-                pkt.size = 0;
-                if (!inbox_.Push(pkt)) {
-                    inboundDropped_.fetch_add(1, std::memory_order_relaxed);
-                }
-                NetLog.info("peer {} connected", index);
-                break;
+        // Process at most kMaxEventsPerDrain events, then drain the outbox:
+        // a continuous inbound stream cannot starve outbound drain (deepseek
+        // M6). The first service call of each burst waits up to the timeout;
+        // the rest are non-blocking.
+        int processed = 0;
+        while (!stop_.load(std::memory_order_relaxed)) {
+            ENetEvent event;
+            const int result =
+                enet_host_service(host_, &event, processed == 0 ? kServiceTimeoutMs : 0);
+            if (result <= 0) {
+                break;  // no (more) events in this burst
             }
-            case ENET_EVENT_TYPE_DISCONNECT: {
-                const u8 index = PeerSlot(event.peer);
-                ReleasePeerSlot(index);
-                InboundPacket pkt;
-                pkt.type = NetEventType::Disconnected;
-                pkt.peerIndex = index;
-                pkt.size = 0;
-                if (!inbox_.Push(pkt)) {
-                    inboundDropped_.fetch_add(1, std::memory_order_relaxed);
-                }
-                NetLog.info("peer {} disconnected", index);
-                break;
-            }
-            case ENET_EVENT_TYPE_RECEIVE: {
-                const u8 index = PeerSlot(event.peer);
-                if (index != kInvalidPlayerId && event.packet->dataLength <= kMaxMessageSize) {
-                    InboundPacket pkt;
-                    pkt.type = NetEventType::Data;
-                    pkt.peerIndex = index;
-                    pkt.channel = static_cast<u8>(event.channelID);
-                    pkt.size = static_cast<u16>(event.packet->dataLength);
-                    std::memcpy(pkt.data, event.packet->data, pkt.size);
-                    if (!inbox_.Push(pkt)) {
-                        inboundDropped_.fetch_add(1, std::memory_order_relaxed);
-                        NetLog.warn("inbox ring full; dropping {} bytes from peer {}", pkt.size, index);
-                    } else {
-                        packetsReceived_.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-                enet_packet_destroy(event.packet);
-                break;
-            }
-            case ENET_EVENT_TYPE_NONE:
-                break;
+            HandleSocketEvent(event);
+            if (++processed >= kMaxEventsPerDrain) {
+                break;  // bounded burst; drain below, then service again
             }
         }
         DrainOutbox();
@@ -205,32 +212,122 @@ void Transport::SocketThreadMain() {
     // enet_host_destroy resets every peer, so this never blocks on disconnect
     // acks; run it here (on the socket thread) after the service loop exits.
     enet_host_destroy(host_);
-    running_.store(false, std::memory_order_relaxed);
     NetLog.info("transport socket thread exited");
 }
 
-void Transport::DrainOutbox() {
-    OutboundPacket p;
-    while (outbox_.Pop(p)) {
-        ENetPeer* peer = PeerAt(p.peerIndex);
-        if (peer == nullptr) {
-            continue;  // peer vanished between enqueue and drain; drop silently
+void Transport::HandleSocketEvent(ENetEvent& event) {
+    switch (event.type) {
+    case ENET_EVENT_TYPE_CONNECT: {
+        const u8 index = AssignPeerSlot(event.peer);
+        if (index == kInvalidPeer) {
+            NetLog.warn("peer limit reached; resetting incoming connection");
+            enet_peer_reset(event.peer);
+            break;
         }
-        const enet_uint32 flags =
-            (p.channel == kChannelReliable) ? ENET_PACKET_FLAG_RELIABLE : 0;
-        ENetPacket* packet = enet_packet_create(p.data, p.size, flags);
-        if (packet == nullptr) {
-            NetLog.warn("enet_packet_create failed for {} bytes", p.size);
-            continue;
+        InboundPacket pkt;
+        pkt.type = NetEventType::Connected;
+        pkt.peerIndex = index;
+        pkt.size = 0;
+        if (!reliableInbox_.Push(pkt)) {
+            reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
+            NetLog.warn("reliable inbox full; dropping connect event for peer {}", index);
         }
-        if (enet_peer_send(peer, p.channel, packet) < 0) {
-            enet_packet_destroy(packet);
-            NetLog.warn("enet_peer_send failed for peer {}", p.peerIndex);
-            continue;
-        }
-        packetsSent_.fetch_add(1, std::memory_order_relaxed);
+        NetLog.info("peer {} connected", index);
+        break;
     }
-    enet_host_flush(host_);
+    case ENET_EVENT_TYPE_DISCONNECT: {
+        const u8 index = PeerSlot(event.peer);
+        ReleasePeerSlot(index);
+        InboundPacket pkt;
+        pkt.type = NetEventType::Disconnected;
+        pkt.peerIndex = index;
+        pkt.size = 0;
+        if (!reliableInbox_.Push(pkt)) {
+            reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
+            NetLog.warn("reliable inbox full; dropping disconnect event for peer {}", index);
+        }
+        NetLog.info("peer {} disconnected", index);
+        break;
+    }
+    case ENET_EVENT_TYPE_RECEIVE: {
+        const u8 index = PeerSlot(event.peer);
+        if (index == kInvalidPeer) {
+            enet_packet_destroy(event.packet);
+            break;
+        }
+        if (event.packet->dataLength > kMaxMessageSize) {
+            // Separate, visible metric for oversized inbound packets (GLM
+            // MINOR-5): a misbehaving/legacy peer is not silently ignored.
+            inboundOversized_.fetch_add(1, std::memory_order_relaxed);
+            NetLog.warn("oversized inbound packet ({} bytes) from peer {} dropped",
+                event.packet->dataLength, index);
+            enet_packet_destroy(event.packet);
+            break;
+        }
+        InboundPacket pkt;
+        pkt.type = NetEventType::Data;
+        pkt.peerIndex = index;
+        pkt.channel = static_cast<u8>(event.channelID);
+        pkt.size = static_cast<u16>(event.packet->dataLength);
+        pkt.generation = PeerGeneration(index);
+        std::memcpy(pkt.data, event.packet->data, pkt.size);
+        if (pkt.channel == kChannelUnreliable) {
+            if (snapshotInbox_.PushOrReplace(pkt)) {
+                snapshotInboundReplaced_.fetch_add(1, std::memory_order_relaxed);
+            }
+            packetsReceived_.fetch_add(1, std::memory_order_relaxed);
+        } else if (reliableInbox_.Push(pkt)) {
+            packetsReceived_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
+            NetLog.warn("reliable inbox ring full; dropping {} bytes from peer {}", pkt.size, index);
+        }
+        enet_packet_destroy(event.packet);
+        break;
+    }
+    case ENET_EVENT_TYPE_NONE:
+        break;
+    }
+}
+
+void Transport::DrainOutbox() {
+    // Reliable (control/events/combat) first, then snapshots.
+    OutboundPacket p;
+    while (reliableOutbox_.Pop(p)) {
+        SendPacket(p);
+    }
+    while (snapshotOutbox_.Pop(p)) {
+        SendPacket(p);
+    }
+    if (host_ != nullptr) {
+        enet_host_flush(host_);
+    }
+}
+
+void Transport::SendPacket(const OutboundPacket& p) {
+    ENetPeer* peer = PeerAt(p.peerIndex);
+    if (peer == nullptr) {
+        return;  // peer vanished between enqueue and drain; nothing to send to
+    }
+    if (p.generation != PeerGeneration(p.peerIndex)) {
+        // The slot was freed and reused by a newer connection after this entry
+        // was enqueued — never misdeliver a stale packet (deepseek M4).
+        outboundGenerationDropped_.fetch_add(1, std::memory_order_relaxed);
+        NetLog.warn("dropping stale outbound packet for peer {} (slot reused)", p.peerIndex);
+        return;
+    }
+    const enet_uint32 flags = (p.channel == kChannelReliable) ? ENET_PACKET_FLAG_RELIABLE : 0;
+    ENetPacket* packet = enet_packet_create(p.data, p.size, flags);
+    if (packet == nullptr) {
+        NetLog.warn("enet_packet_create failed for {} bytes", p.size);
+        return;
+    }
+    if (enet_peer_send(peer, p.channel, packet) < 0) {
+        enet_packet_destroy(packet);
+        NetLog.warn("enet_peer_send failed for peer {}", p.peerIndex);
+        return;
+    }
+    packetsSent_.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,15 +338,17 @@ u8 Transport::AssignPeerSlot(ENetPeer* peer) {
     for (size_t i = 0; i < kMaxPeers; ++i) {
         if (peerSlots_[i] == nullptr) {
             peerSlots_[i] = peer;
+            peerGenerations_[i].fetch_add(1, std::memory_order_relaxed);
             return static_cast<u8>(i);
         }
     }
-    return kInvalidPlayerId;
+    return kInvalidPeer;
 }
 
 void Transport::ReleasePeerSlot(u8 index) {
     if (index < kMaxPeers) {
         peerSlots_[index] = nullptr;
+        peerGenerations_[index].fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -259,7 +358,7 @@ u8 Transport::PeerSlot(ENetPeer* peer) const {
             return static_cast<u8>(i);
         }
     }
-    return kInvalidPlayerId;
+    return kInvalidPeer;
 }
 
 ENetPeer* Transport::PeerAt(u8 index) const {
@@ -267,6 +366,13 @@ ENetPeer* Transport::PeerAt(u8 index) const {
         return nullptr;
     }
     return peerSlots_[index];
+}
+
+u16 Transport::PeerGeneration(u8 index) const {
+    if (index >= kMaxPeers) {
+        return 0;
+    }
+    return peerGenerations_[index].load(std::memory_order_relaxed);
 }
 
 }  // namespace dusk::net
