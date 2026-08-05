@@ -51,6 +51,12 @@ void updateActionBindings() {
 
         // Update current frame with whether action button is pressed
         for (auto& [action, boundAction] : getActionBinds()) {
+            // The bind config surface covers 4 controller ports while
+            // PAD_CHANMAX is 8 (aurora's 8-controller pad system); ports
+            // beyond the config array have no bindings and must be skipped.
+            if (port >= boundAction.configVars->size()) {
+                continue;
+            }
             // If the action isn't bound, or if documents are visible and the action isn't
             // opening the dusklight menu, don't update. Otherwise, we may accidentally
             // perform actions while the dusklight menu is open.
