@@ -730,6 +730,25 @@ if (DUSK_SELECTED_OPT)
     target_compile_options(freeverb PRIVATE ${_opt_flags})
 endif ()
 
+# Standalone network-layer self-test / LAN handshake demo (M0). Desktop only;
+# it owns its main() and must not join the game binary.
+if (NOT ANDROID AND NOT IOS AND NOT TVOS)
+    add_executable(dusk_net_selftest
+            src/dusk/net/selftest_main.cpp
+            src/dusk/net/protocol.cpp
+            src/dusk/net/transport.cpp
+            src/dusk/net/session.cpp
+            src/dusk/net/clock.cpp)
+    target_compile_definitions(dusk_net_selftest PRIVATE TARGET_PC=1)
+    target_include_directories(dusk_net_selftest PRIVATE
+            include
+            third_party/enet/include
+            extern
+            extern/aurora/include)
+    target_link_libraries(dusk_net_selftest PRIVATE enet fmt::fmt Threads::Threads)
+    set_target_properties(dusk_net_selftest PROPERTIES FOLDER "dusklight")
+endif ()
+
 # Packaging logic
 function(get_target_output_name target result_var)
     get_target_property(output_name ${target} OUTPUT_NAME)
