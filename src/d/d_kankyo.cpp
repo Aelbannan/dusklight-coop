@@ -37,6 +37,7 @@
 #include "dusk/settings.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/game_clock.h"
+#include "dusk/coop/coop_time.h"
 static f32 timeScale = 1.0f;
 #endif
 
@@ -1529,6 +1530,17 @@ dScnKy_env_light_c::dScnKy_env_light_c() {
 void dScnKy_env_light_c::setDaytime() {
     mDate = dComIfGs_getDate();
     daytime = dComIfGs_getTime();
+
+    #if TARGET_PC
+    // M3: a synced client replaces the vanilla clock advance with the
+    // replicated host clock (rate x sim ticks, absolute adopt on packet
+    // receipt). The replica writes the save/audio clock/using_time_control_tag
+    // itself — return before the vanilla advance and its DEBUG/HIO variants.
+    // Host / offline: vanilla unchanged.
+    if (dusk::coop::timeweather::clientClockReplica()) {
+        return;
+    }
+    #endif
 
     #if DEBUG
     switch (g_kankyoHIO.time_change) {
@@ -8219,6 +8231,14 @@ static int dKy_Draw(sub_kankyo__class* i_this) {
 static int dKy_Execute(sub_kankyo__class* i_this) {
     UNUSED(i_this);
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
+    #if TARGET_PC
+    // M3: pre-exeKankyo weather force on synced clients — the sky is
+    // host-owned; the client converges raincnt toward the synced mode's
+    // target and pins snow/thunder/colpat so CalcTevColor (inside exeKankyo)
+    // and the following dKyw_wether_move see the replicated sky. Host /
+    // offline: vanilla unchanged.
+    dusk::coop::timeweather::clientWeatherForce();
+    #endif
     g_env_light.exeKankyo();
     dKyw_wind_set();
     dKy_twilight_camelight_set();
@@ -8349,6 +8369,16 @@ static int dKy_Create(void* i_this) {
         dComIfGs_onEventBit(dSv_event_flag_c::saveBitLabels[142]);
         dComIfGs_onEventBit(dSv_event_flag_c::saveBitLabels[167]);
     }
+    #endif
+
+    #if TARGET_PC
+    // M3: a synced client re-asserts the replicated time into the save before
+    // room-layer resolution (04 §5.10) and re-asserts the synced weather
+    // before the first dKyw_wether_move of the new stage (04 §5.6) — the
+    // stage's envcolor_init/dKyw_wether_init just overwrote both. Host /
+    // offline: vanilla unchanged (the host's own stage-init time is the
+    // authoritative clock).
+    dusk::coop::timeweather::onStageCreate();
     #endif
 
     return cPhs_COMPLEATE_e;
