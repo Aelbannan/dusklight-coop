@@ -354,22 +354,25 @@ static int fopAc_Execute(void* i_this) {
             print_error_check_c error_check(actor, print_error_check_c::sEXECUTE);
             #endif
 
-            ret = [&]() {
 #if TARGET_PC
-                // Co-op (M2, D3): on the host, whitelisted enemies run their
-                // AI inside a targeting context so the inline player reads
-                // (fopAcM_searchPlayerAngleY/Distance*, daPy_getPlayer*
-                // ActorClass) resolve the NEAREST real player — the host's
-                // Link or a remote puppet — instead of slot 0. Clients never
-                // push (their enemies are frozen).
+            // Co-op (M2, D3): on the host, whitelisted enemies run their AI
+            // inside a targeting context so the inline player reads
+            // (fopAcM_searchPlayerAngleY/Distance*, daPy_getPlayer*ActorClass)
+            // resolve the NEAREST real player — the host's Link or a remote
+            // puppet — instead of slot 0. Clients never push (their enemies are
+            // frozen).
+            ret = [&]() {
                 std::optional<dusk::coop::ScopedEnemyTarget> scopedTarget;
                 if (dusk::coop::enemy::hostNeedsContext(actor)) {
                     scopedTarget.emplace(actor);
                 }
-#endif
                 return fpcMtd_Execute(
                     (process_method_class DUSK_CONST*)actor->sub_method, actor);
             }();
+#else
+            // Non-PC builds stay byte-identical to vanilla.
+            ret = fpcMtd_Execute((process_method_class DUSK_CONST*)actor->sub_method, actor);
+#endif
 
 #if TARGET_PC
             // Co-op (M2): host-side snapshot + death-window capture after the
