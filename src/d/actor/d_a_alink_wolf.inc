@@ -218,7 +218,14 @@ void daAlink_c::changeWolf() {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(1);
+#if TARGET_PC
+    // Co-op (M1): a puppet's form change must not write the host save's
+    // transform status (risk 3) — form is per-player state.
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
+        dComIfGs_setTransformStatus(1);
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     changeModelDataDirectWolf(0);
     mEyeHL1.entry(field_0x064C, "wl_eye_Hilight");
@@ -416,7 +423,14 @@ void daAlink_c::changeLink(int param_0) {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(0);
+#if TARGET_PC
+    // Co-op (M1): a puppet's form change must not write the host save's
+    // transform status (risk 3) — form is per-player state.
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
+        dComIfGs_setTransformStatus(0);
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     mpLinkHatModel->setUserArea((uintptr_t)this);
     changeModelDataDirect(param_0);

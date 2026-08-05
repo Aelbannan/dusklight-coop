@@ -53,6 +53,7 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/coop/coop.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
 #include "res/Object/Alink.h"
@@ -4454,8 +4455,13 @@ BOOL daAlink_c::checkCanoeStart() {
 void daAlink_c::playerInit() {
     mHeavySpeedMultiplier = 1.0f;
 
+#if TARGET_PC
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
     if (!checkDungeon() && !checkBossRoom() && checkItemGet(dItemNo_DUNGEON_EXIT_e, 1)) {
         dComIfGs_setItem(SLOT_18, dItemNo_TKS_LETTER_e);
+    }
     }
 
     u16 i;
@@ -4600,6 +4606,9 @@ void daAlink_c::playerInit() {
     int startMode = getStartMode();
     int startEvent = getStartEvent();
 
+#if TARGET_PC
+    if (!dusk::coop::isPuppet(this)) {
+#endif
     if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
         mStartEventID = dComIfGp_evmng_startDemo(-1);
     } else if (dComIfGp_getStartStagePoint() == -4) {
@@ -4641,6 +4650,13 @@ void daAlink_c::playerInit() {
     }
 
     dComIfGp_getPEvtManager()->orderStartDemo();
+#if TARGET_PC
+    } else {
+        // Puppets never register story demos with the event manager (a
+        // frozen puppet must not run demo code).
+        mStartEventID = 0xFF;
+    }
+#endif
     field_0x2f94 = -1;
     field_0x2f95 = -1;
     field_0x2f96 = -1;
@@ -4900,7 +4916,20 @@ int daAlink_c::create() {
                           && dComIfG_play_c::getLayerNo(0) == 0
                           && current.pos.y > 7500.0f;
 
+    // Co-op (M1): this is a remote-player puppet. Its create runs the same
+    // resource loads and per-instance setup, but must never write the host's
+    // save, never become "the Link" (slot-0 pointers are restored around the
+    // create), and must not fan out story actors (Midna/NPC/ride actors) or
+    // start demos.
+#if TARGET_PC
+    const BOOL isPuppetCreate = dusk::coop::isPuppet(this);
+#endif
+
     if (!bgWaitFlg) {
+#if TARGET_PC
+        if (!isPuppetCreate)
+#endif
+        {
         #if DEBUG
         if (g_playerKind == 2) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_CASUAL_e);
@@ -4920,9 +4949,24 @@ int daAlink_c::create() {
         if (isEnteringLV7 && checkMagicArmorHeavy()) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_KOKIRI_e);
         }
+        }
 
+#if TARGET_PC
+        // A puppet must never occupy the native slot-0 player pointers (the
+        // whole engine resolves "the Link" through them). Snapshot and restore
+        // around the create so the real Link stays authoritative even while a
+        // puppet's create is mid-flight.
+        fopAc_ac_c* savedPlayer0 = dComIfGp_getPlayer(0);
+        fopAc_ac_c* savedLinkPlayer = (fopAc_ac_c*)dComIfGp_getLinkPlayer();
+#endif
         dComIfGp_setPlayer(0, this);
         dComIfGp_setLinkPlayer(this);
+#if TARGET_PC
+        if (isPuppetCreate) {
+            dComIfGp_setPlayer(0, savedPlayer0);
+            dComIfGp_setLinkPlayer(savedLinkPlayer);
+        }
+#endif
         fopAcM_setStageLayer(&LEAFDRAW_BASE(this));
 
         if (sceneMode == 7) {
@@ -4994,6 +5038,10 @@ int daAlink_c::create() {
         playerInit();
         bgWaitFlg = TRUE;
 
+#if TARGET_PC
+        if (!isPuppetCreate)
+#endif
+        {
         if (checkCanoeStart()) {
             mRideActorID = fopAcM_create(fpcNm_CANOE_e, 0, &current.pos, fopAcM_GetRoomNo(this),
                                          &shape_angle, NULL, -1);
@@ -5003,6 +5051,14 @@ int daAlink_c::create() {
         } else {
             mRideActorID = fpcM_ERROR_PROCESS_ID_e;
         }
+        }
+#if TARGET_PC
+        else {
+            // Puppets never spawn ride actors (canoe/ice-leaf); the remote
+            // pose carries the riding state and the horse/boar is M5.
+            mRideActorID = fpcM_ERROR_PROCESS_ID_e;
+        }
+#endif
     }
 
     mLinkAcch.CrrPos(dComIfG_Bgsp());
@@ -5023,12 +5079,23 @@ int daAlink_c::create() {
     }
 
     if (portalActor != NULL) {
-        dComIfGp_getEvent()->setPtD(portalActor);
+#if TARGET_PC
+        if (!isPuppetCreate)
+#endif
+        {
+            dComIfGp_getEvent()->setPtD(portalActor);
+        }
     }
 
     bgWaitFlg = FALSE;
 
-    dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());
+#if TARGET_PC
+    // A puppet must never write the host's save restart point (risk 3).
+    if (!isPuppetCreate)
+#endif
+    {
+        dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());
+    }
     field_0x3780 = current.pos;
     mLinkAcch.ClrGndThinCellingOff();
 
@@ -5059,6 +5126,16 @@ int daAlink_c::create() {
     }
 
     int midna_prm = setStartProcInit();
+#if TARGET_PC
+    if (isPuppetCreate) {
+        // No story init for puppets: setStartProcInit reads the host save
+        // (equip, damage, horse) and starts story procs/demos. The puppet
+        // spawns into a neutral wait and is driven purely by the received
+        // pose from the first PlayerState.
+        midna_prm = 0;
+        procWaitInit();
+    }
+#endif
     setSelectEquipItem(FALSE);
     setMatrix();
     allAnimePlay();
@@ -5077,7 +5154,12 @@ int daAlink_c::create() {
     mTgCyls[0].SetC(current.pos);
     field_0x3454 = field_0x3834.y;
     setAttentionPos();
-    setItemActor();
+#if TARGET_PC
+    if (!isPuppetCreate)
+#endif
+    {
+        setItemActor();
+    }
 
     if ((dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
         !isHorseStart && !isEnteringLV7)
@@ -5091,8 +5173,13 @@ int daAlink_c::create() {
     }
 
     if (checkCarryStartLightBallA() || checkCarryStartLightBallB()) {
-        setForceGrab((fopAc_ac_c*)fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL),
-                     1, 1);
+#if TARGET_PC
+        if (!isPuppetCreate)
+#endif
+        {
+            setForceGrab((fopAc_ac_c*)fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL),
+                         1, 1);
+        }
     }
 
     #if DEBUG
@@ -5101,9 +5188,21 @@ int daAlink_c::create() {
     l_jumpTop = 0.0f;
     #endif
 
-    fopAcM_create(fpcNm_MIDNA_e, midna_prm, &current.pos, fopAcM_GetRoomNo(this), &shape_angle, NULL, -1);
-    checkSetNpcTks(&current.pos, fopAcM_GetRoomNo(this), 1);
+#if TARGET_PC
+    // A puppet must not spawn Midna/NPCs — they follow "the Link" (slot 0,
+    // the real player) and would otherwise duplicate story actors.
+    if (!isPuppetCreate)
+#endif
+    {
+        fopAcM_create(fpcNm_MIDNA_e, midna_prm, &current.pos, fopAcM_GetRoomNo(this),
+                      &shape_angle, NULL, -1);
+        checkSetNpcTks(&current.pos, fopAcM_GetRoomNo(this), 1);
+    }
 
+#if TARGET_PC
+    if (!isPuppetCreate)
+#endif
+    {
     if (startPoint == -4 && dComIfGp_TargetWarpPt_get() != 0xFF && !dComIfGp_TransportWarp_check()) {
         daTagMhint_c::createPortalWarpMissTag(0xBBE, fopAcM_GetID(this));
     }
@@ -5117,7 +5216,11 @@ int daAlink_c::create() {
             fopAcM_offSwitch(this, 0x6F);
         }
     }
+    }
 
+#if TARGET_PC
+    dusk::coop::onLinkCreated(this);
+#endif
     return cPhs_COMPLEATE_e;
 }
 
@@ -7262,7 +7365,14 @@ void daAlink_c::allAnimePlay() {
     J3DAnmTransform* upper1_bck = getNowAnmPackUpper(UPPER_1);
 
     if (checkWolf()) {
-        setWolfAnmVoice();
+#if TARGET_PC
+        // Co-op (M1): frozen puppets are silent — the wolf voice sampling
+        // reads the face/voice frame state that the received pose replaces.
+        if (!dusk::coop::isPuppet(this))
+#endif
+        {
+            setWolfAnmVoice();
+        }
     }
 
     for (int i = 0; i < 3; i++) {
@@ -17796,6 +17906,14 @@ int daAlink_c::procGoronRideWait() {
 }
 
 int daAlink_c::execute() {
+#if TARGET_PC
+    // Co-op (M1): puppet instances are frozen — no input, no action state
+    // machine, no damage/death procs, no demo code. They are driven purely
+    // from the latest received PlayerState (dusk::coop::puppetExecute).
+    if (dusk::coop::isPuppet(this)) {
+        return dusk::coop::puppetExecute(this);
+    }
+#endif
     loadModelDVD();
 
     if (checkEndResetFlg0(ERFLG0_BOSS_ROOM_WAIT) && getMidnaActor() != NULL) {
@@ -18918,6 +19036,14 @@ int daAlink_c::execute() {
     }
     #endif
 
+#if TARGET_PC
+    // Co-op (M1) sender: after the real Link's execute, the pose is frame-
+    // final (setMatrix -> modelCalc -> setItemMatrix -> setBodyPartPos all
+    // ran). Read it and enqueue PlayerState for the session (gated on a
+    // remote player being in the same room).
+    dusk::coop::sendPlayerState(this);
+#endif
+
     return 1;
 }
 
@@ -19363,6 +19489,25 @@ void daAlink_c::shadowDraw() {
 
 void daAlink_c::modelCalc(J3DModel* i_model) {
     if (mClothesChangeWaitTimer == 0) {
+#if TARGET_PC
+        // Co-op (M1): re-assert this Link's animation calc on the shared
+        // J3DModelData joints before calc(). Two Links share the same model
+        // data, and changeModelDataDirect/changeWolf overwrite the per-joint
+        // mtxCalc pointers — without this, the last Link to initialize would
+        // drive every other Link's animation (risk 2).
+        if (i_model == mpLinkModel) {
+            J3DModelData* md = i_model->getModelData();
+            if (checkWolf()) {
+                md->getJointNodePointer(0)->setMtxCalc(field_0x1f20);
+                md->getJointNodePointer(3)->setMtxCalc(field_0x1f24);
+                md->getJointNodePointer(15)->setMtxCalc(field_0x1f20);
+            } else {
+                md->getJointNodePointer(0)->setMtxCalc(field_0x1f20);
+                md->getJointNodePointer(1)->setMtxCalc(field_0x1f24);
+                md->getJointNodePointer(16)->setMtxCalc(field_0x1f20);
+            }
+        }
+#endif
         i_model->calc();
     }
 }
@@ -19464,6 +19609,14 @@ void daAlink_c::initTevCustomColor() {
 }
 
 int daAlink_c::draw() {
+#if TARGET_PC
+    // Co-op (M1): a puppet whose remote player is in another room is hidden
+    // (pose work skipped in update, draw skipped here) — Anchor's off-scene
+    // -9999 handled via a draw gate so the actor never looks teleported.
+    if (dusk::coop::puppetDrawHidden(this)) {
+        return 1;
+    }
+#endif
     if (checkWolf()) {
         g_env_light.settingTevStruct(9, &current.pos, &tevStr);
     } else {
@@ -19864,8 +20017,17 @@ static int daAlink_Draw(daAlink_c* i_this) {
 }
 
 daAlink_c::~daAlink_c() {
+#if TARGET_PC
+    // Co-op (M1): a puppet's destructor must not touch the native slot-0
+    // player pointers/status — they belong to the real Link (risk 1). The
+    // registry entry is cleared by dusk::coop::onLinkDestroyed at the end.
+    if (!dusk::coop::isPuppet(this)) {
+#endif
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
     dComIfGp_clearPlayerStatus1(0, 0x7FB7B78);
+#if TARGET_PC
+    }
+#endif
 
     #if DEBUG
     mpHIO->removeHIO();
@@ -19899,8 +20061,18 @@ daAlink_c::~daAlink_c() {
 
     dKy_plight_cut(&mMagneBootsPlight);
 
+#if TARGET_PC
+    // Co-op (M1): slot-0 pointers only belong to the real Link; a puppet
+    // never registered itself there (create neutralization) and must not
+    // clear the real Link's pointers when it is destroyed mid-stage.
+    if (!dusk::coop::isPuppet(this)) {
+#endif
     dComIfGp_setPlayer(0, NULL);
     dComIfGp_setLinkPlayer(NULL);
+#if TARGET_PC
+    }
+    dusk::coop::onLinkDestroyed(this);
+#endif
 }
 
 static int daAlink_Delete(daAlink_c* i_this) {

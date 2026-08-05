@@ -175,6 +175,14 @@ f32 daAlink_c::damageMagnification(BOOL i_checkZoraMag, int param_1) {
 }
 
 int daAlink_c::setDamagePoint(int i_dmgAmount, BOOL i_checkZoraMag, BOOL i_setDmgTimer, int param_3) {
+#if TARGET_PC
+    // Co-op (M1): puppets never take damage — a hit would drain the HOST's
+    // hearts/save through the global life counter (risk 3). Friendly fire is
+    // off in v1; combat intents land in M2.
+    if (dusk::coop::isPuppet(this)) {
+        return 0;
+    }
+#endif
     if (i_dmgAmount <= 0) {
         dComIfGp_setItemLifeCount(-i_dmgAmount, 0);
         return 0;
@@ -226,10 +234,20 @@ int daAlink_c::setDamagePoint(int i_dmgAmount, BOOL i_checkZoraMag, BOOL i_setDm
 }
 
 int daAlink_c::setDamagePointNormal(int i_dmgAmount) {
+#if TARGET_PC
+    if (dusk::coop::isPuppet(this)) {
+        return 0;
+    }
+#endif
     return setDamagePoint(i_dmgAmount, FALSE, TRUE, 0);
 }
 
 int daAlink_c::setLandDamagePoint(int i_dmgAmount) {
+#if TARGET_PC
+    if (dusk::coop::isPuppet(this)) {
+        return 0;
+    }
+#endif
     onEndResetFlg2(ERFLG2_UNK_40);
     int rt = setDamagePoint(i_dmgAmount, FALSE, TRUE, 0);
     offEndResetFlg2(ERFLG2_UNK_40);
