@@ -853,7 +853,7 @@ void sendPlayerState(daAlink_c* link) {
     if (g_frameCount % 60 == 0) {
         CoopLog.info("coop: send player {} pos=({:.1f},{:.1f},{:.1f}) yaw={} j0=({:.3f},{:.3f},{:.3f},{:.3f})",
             st.playerId, st.pos.x, st.pos.y, st.pos.z, st.yaw, st.joints[0][0][3], st.joints[0][1][3],
-            st.joints[0][2][3], st.baseTR[3][2]);
+            st.joints[0][2][3], st.baseTR[2][3]);
     }
 
     SendEventsOnChange(link);
