@@ -908,7 +908,14 @@ void AIInit(u8* stack) {
     // In a real scenario, it would set up the audio interface and prepare it for use.
 }
 
-void AIInitDMA(u32 start_addr, u32 length) {
+// AIInitDMA carries C linkage (declared extern "C" in dolphin/ai.h) so
+// JSystem's JASAiCtrl links against the C symbol _AIInitDMA. The signature
+// must match the TARGET_PC declaration exactly: AIInitDMA(uintptr_t, u32).
+// A u32 first arg would compile as a fresh C++ overload (__Z9AIInitDMAjj),
+// never satisfying the _AIInitDMA reference (review m1, BLOCKER A1).
+void AIInitDMA(uintptr_t start_addr, u32 length) {
+    (void)start_addr;
+    (void)length;
     STUB_LOG();
 }
 
