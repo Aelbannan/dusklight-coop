@@ -147,7 +147,6 @@ PlayerState (per remote player, EVERY frame @ game fps, unreliable-sequenced)
 ┌───────────────────────┬────────┬──────────────────────────────────────────────┐
 │ field                 │ size   │ source (public reads on the local Link)      │
 ├───────────────────────┼────────┼──────────────────────────────────────────────┤
-│ seq                   │ u16    │ mod-local monotonic counter                   │
 │ playerId              │ u8     │ session id (host-assigned)                    │
 │ pos                   │ 3×f32  │ fopAc_ac_c::current.pos  (f_op_actor.h:297)   │
 │ yaw                   │ s16    │ fopAc_ac_c::shape_angle.y (f_op_actor.h:298)  │
@@ -164,9 +163,17 @@ PlayerState (per remote player, EVERY frame @ game fps, unreliable-sequenced)
 │ stateFlags            │ u8     │ see §2.1                                      │
 │ roomNo                │ s8     │ current.roomNo  (f_op_actor.h:248)            │
 ├───────────────────────┼────────┼──────────────────────────────────────────────┤
-│ TOTAL                 │ ~2.67KB│ ≈ 160 KB/s per player @ 60 Hz (see §6)        │
+│ TOTAL                 │ ~2.0KB │ ≈ 120 KB/s per player @ 60 Hz (see §6)       │
 └───────────────────────┴────────┴──────────────────────────────────────────────┘
 ```
+
+> Wire reconciliation (M1): `seq u16` was dropped from the shipped
+> `PlayerStateMsg` (00-network.md §5 / protocol.h). Stale-remote policy in M1
+> is "last pose held, no fade": a remote that stops sending (crash without
+> leaving the session) leaves its puppet frozen in the last applied pose. The
+> seq-gap timeout → freeze/fade mechanism is deferred (see §9 Q8). The
+> ~2.0 KB total assumes TP's 3x4 Mtx (48 B), not 4x4 (the earlier 2.67 KB
+> figure assumed 64-B matrices).
 
 ### 2.1 `stateFlags` byte (semantic state not carried by the pose)
 
@@ -277,12 +284,13 @@ downed/dead *behavior* bit (`stateFlags.3`, derived from the coop-local
 every frame over the internet as JSON and works; on LAN with a compact binary
 format, bandwidth is a non-issue. The hook runs every `execute`, gated by
 same-room presence (§3). Receivers apply the latest packet directly
-(Anchor-style); a stale/frozen remote player is detected by seq gaps + a
-timeout (puppet freezes in last pose).
+(Anchor-style); a stale/frozen remote player is handled in M1 by holding the
+last pose forever ("stale = last pose held, no fade") — the seq-gap timeout
+from earlier drafts was not shipped with the wire (00-network.md §5 / §12).
 
 | encoding | per-frame | per player @ 60 Hz | 8 players |
 |----------|-----------|--------------------|-----------|
-| v1 raw `Mtx` per joint (§2) | ~2.67 KB | ~160 KB/s | ~1.3 MB/s |
+| v1 raw `Mtx` per joint (§2) | ~2.0 KB | ~120 KB/s | ~0.96 MB/s |
 | v1.5 quat+trans (below) | ~0.73 KB | ~44 KB/s | ~350 KB/s |
 
 All within a LAN budget; even v1 raw is 8× smaller than Anchor's JSON per
@@ -381,6 +389,9 @@ The Link riding pose is already in the synced joint matrices (the
    collision on stateFlags; `invincibilityTimer` in Anchor is our
    `mDamageTimer`/`stateFlags.1`). Collision/combat details belong to the
    combat investigation; the pose surface feeds it `stateFlags` only.
-8. **Frozen/stale puppet policy.** seq-gap timeout → freeze last pose + fade;
-   no interpolation per Anchor. Revisit only if internet play appears
+8. **Frozen/stale puppet policy.** M1: "stale = last pose held, no fade" —
+   there is no seq counter on the wire (dropped from §2; 00-network.md §5 has
+   no seq either), so a remote that dies without leaving the session leaves
+   its puppet frozen in the last applied pose. A seq-gap timeout →
+   freeze/fade mechanism is deferred; revisit only if internet play appears
    (`network.md` §12 non-goal).

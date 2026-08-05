@@ -103,7 +103,7 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
 | Accept | `JoinAccept` | reliable | assigned `PlayerId` (session-wide 0–7), roster, stage, time, weather |
 | Reject | `JoinReject` | reliable | reason (full, version mismatch) |
-| Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages |
+| Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages. **Doubles as a roster-refresh**: on every successful join the host re-broadcasts `WorldInit` (current roster) to all already-joined peers so earlier joiners learn about later players (M1 fix; without it 3+ players were invisible to earlier joiners) |
 | Leave | `PlayerLeave` | reliable | host relays; puppet despawns |
 
 - **PlayerId mapping**: host assigns session-wide ids 0–7 (`MAX_LOCAL_PLAYERS`).
@@ -126,9 +126,9 @@ Packet version in `JoinRequest`; mismatches rejected.
 | Message | Channel | Cadence | Payload |
 |---------|---------|---------|---------|
 | `JoinRequest` / `JoinAccept` / `JoinReject` / `PlayerLeave` / `SessionEnd` | reliable | event | see §4 |
-| `WorldInit` | reliable | on join | stage (name/room/layer/point) + full roster — no embedded state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
+| `WorldInit` | reliable | on join **+ re-broadcast as roster-refresh on every later join** | stage (name/room/layer/point) + full roster — no embedded state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
 | `PlayerState` (per remote player, same scene) | unreliable seq | every frame | see PlayerState below |
-| `PlayerEvent` (form change, mount/dismount, respawn, scene change) | reliable | on change | player id + event + data |
+| `PlayerEvent` (form change, mount/dismount, respawn, scene change, equip, attention) | reliable | on change | player id + event + scene + data + data2 (see PlayerEvent below) |
 | `EnemySnapshot` (per enemy) | unreliable seq | every frame | see EnemyState below |
 | `EnemyEvent` (spawn, die, room-clear, boss phase) | reliable | on change | enemy id + event + data |
 | `CombatIntent` | reliable | on attack | attacker, target enemy id, attack kind, position |
@@ -139,34 +139,69 @@ Packet version in `JoinRequest`; mismatches rejected.
 
 Field order in the struct blocks below **is the wire order** (version-gated by
 `kProtocolVersion`); the hand-written serializers in `src/dusk/net/protocol.cpp`
-are normative.
+are normative, and `include/dusk/net/protocol.h` is the authoritative struct
+reference (M1: rewritten to the Rev 3 D4 raw-matrix pose — the joint-list
+layout below is history).
 
 ### PlayerState (per remote player, per frame)
 
-Modeled on Anchor's `PLAYER_UPDATE`: **full pose, not animation state**.
-Final joint count/read strategy comes from investigation 02. Field order
-matches the serializer (`src/dusk/net/protocol.cpp`).
+Modeled on Anchor's `PLAYER_UPDATE`: **full pose, not animation state**. The
+sender's per-joint `mAnmMtx` table is copied verbatim so a puppet renders the
+exact blended/callback-baked pose with zero animation-state coupling
+(investigation 02 §1.3). `protocol.h` is normative.
 
 ```
 playerId      u8
-scene         u8              // only same-scene peers receive/apply
-form          u8              // human / wolf (Anchor's modelGroup analog)
-movementFlags u8
-jointCount    u8              // 0..kMaxJoints; joints[jointCount..] are wire-zeroed
-cosmetics     u8 x3           // tunic/shield/boots (TP equivalents)
-itemAction    s8              // held item action, for model group
-invincibility u8
+roomNo        s8              // current.roomNo — same-scene/room scoping
+form          u8              // 0 human / 1 wolf (checkWolf())
+stateFlags    u8              // kPlayerStateFlag_* bits (table below)
+jointCount    u8              // 0..kMaxJoints; joints[jointCount..] wire-zeroed
+scaleFlags    u8[5]           // one bit per joint (setScaleFlag)
+yaw           s16             // shape_angle.y
+pitch         s16             // mBodyAngle.x
+faceBckIdx    u16             // mFaceBckHeap.getIdx()
+faceBtpIdx    u16             // mFaceBtpHeap.getIdx()
+faceFrame     s16             // face frame ctrl frame
 reserved      u8
-stateFlags    u32             // subset relevant to rendering/combat pose
-pos           f32 x3          // cXyz
-rot           s16 x3          // shape rotation
-upperLimbRot  s16 x3
-joints        Vec3s16[40]     // full joint pose (Anchor: 24; TP TBD); jointCount meaningful
-~= 279 bytes/player/frame (joint-dominated)
+pos           f32 x3          // current.pos
+baseTR        Mtx (3x4)       // mpLinkModel->getBaseTRMtx() — exact world placement
+joints        Mtx[40] (3x4)   // per-joint getAnmMtx(j), root-relative
+~= 2001 bytes/player/frame (Mtx is f32[3][4] = 48 B)
 ```
 
 `jointCount > kMaxJoints (40)` is rejected at parse (semantic validation,
 M0.5) so apply code can never index `joints[jointCount]` out of bounds.
+
+`stateFlags` byte (02-player-state.md §2.1):
+
+| bit | meaning | source |
+|-----|---------|--------|
+| 0 | riding (any RIDETYPE) | `mRideStatus != 0` |
+| 1 | invulnerable / damage-blink | `mDamageTimer > 0` |
+| 2 | subjectivity (first-person) | `mProcID == PROC_SUBJECTIVITY` |
+| 3 | downed/dead (local life state) | coop-local `PlayerLifeState` |
+| 4 | demo in progress | `mDemo.getDemoType() != 0` |
+| 5 | player no-draw (**never set on the wire**) | `checkPlayerNoDraw()` |
+
+### PlayerEvent (reliable, on change)
+
+```
+playerId  u8
+eventId   u8              // PlayerEventId
+scene     u8
+reserved  u8
+data      u32             // event-specific (see below)
+data2     u32             // extended payload (M1: item joints)
+```
+
+| event | data | data2 |
+|-------|------|-------|
+| `FormChange` | form (0 human / 1 wolf) | — |
+| `SceneChange` | roomNo | — |
+| `Equip` | equipItem u16 \| selectItemId u8 \| clothes u8 | leftItemJnt u16 \| rightItemJnt u16 |
+| `AttentionChange` | session entity id of the lock target (0xFFFF = none/local-only) | — |
+| `Mount` / `Dismount` / `Respawn` | (reserved; horse entity channel is M5) | — |
+
 
 ### EnemyState (per enemy, per frame)
 
@@ -203,9 +238,11 @@ pos       f32 x3
 
 ### Bandwidth
 
-- 8 players × ~2.7 KB (raw matrix pose) + 40 enemies × ~50 B, all at 60 Hz ≈
-  **~1.4 MB/s worst case**. Trivial on LAN; Anchor does more (JSON) over the
-  internet. ENet's `enet_host_bandwidth_limit` caps it if ever needed.
+- 8 players × ~2.0 KB (raw matrix pose, 48-B 3x4 Mtx) + 40 enemies × ~28 B,
+  all at 60 Hz ≈ **~1.0 MB/s worst case** (players ≈ 8 × 2001 B × 60 ≈ 0.96
+  MB/s; enemies ≈ 40 × 28 B × 60 ≈ 67 KB/s). Trivial on LAN; Anchor does more
+  (JSON) over the internet. ENet's `enet_host_bandwidth_limit` caps it if ever
+  needed. (Review m1 M3 corrected the earlier ~2.7 KB/4x4-Mtx figure.)
 
 ## 7. Enemy authority & combat
 
