@@ -652,6 +652,18 @@ int dAttention_c::SelectAttention(fopAc_ac_c* i_actor) {
         return 0;
     }
 
+#if TARGET_PC
+    // Co-op (M1): never add another player's Link to this attention's
+    // lock-on/action/check lists — a puppet in the check list makes the
+    // camera frame player + CheckObjectTarget(0) (chaseCamera zooms out to
+    // fit both), i.e. "the camera tries to keep all links in view at once".
+    // The real Link is the attention owner and never reaches here; any other
+    // ALINK (a remote puppet) is not a valid target for the local player.
+    if (fopAcM_GetName(i_actor) == fpcNm_ALINK_e) {
+        return 0;
+    }
+#endif
+
     mPlayerAttentionFlags = mpPlayer->attention_info.flags;
 
     cSGlobe globe(i_actor->attention_info.position - mOwnerAttnPos);

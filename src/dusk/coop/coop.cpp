@@ -228,6 +228,17 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         ReceiveSlot& slot = g_receive[ev.playerId];
         slot.event = ev;
         slot.hasEvent = true;
+        // MAJOR M1 (room visibility): PlayerState is unreliable and the
+        // sender's room-change send window is ~1 frame (the sender gate
+        // closes as soon as our reply lands), so the PlayerState carrying the
+        // remote's NEW room can drop while the reliable SceneChange event
+        // always arrives. Adopt the event's room into the slot now so the
+        // puppet's hidden gate (st.roomNo != local room) is deterministic
+        // instead of depending on an unreliable packet — otherwise a remote
+        // who left the room keeps rendering (and animating) on our screen.
+        if (static_cast<net::PlayerEventId>(ev.eventId) == net::PlayerEventId::SceneChange) {
+            slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
+        }
     } else if (type == net::MsgType::EnemySnapshot || type == net::MsgType::EnemyEvent) {
         // M2: enemy authority traffic (freeze/apply + drops/room-clear).
         dusk::coop::enemy::onGameMessage(type, payload);
@@ -385,10 +396,10 @@ void ApplyPendingEvent(daAlink_c* link, PlayerId pid) {
     default:
         // FormChange / AttentionChange are either carried per frame in
         // PlayerState (form) or not used for rendering (M1). SceneChange is
-        // the M2 deadlock-breaker: it is sent on room change before the
-        // sender gate, but the receiving side's room actually rides in
-        // PlayerState.roomNo (updated when the matching PlayerState lands) —
-        // the event itself is not consumed for rendering.
+        // consumed at receive time (OnGameMessage) — the reliable event is
+        // the room-change authority so a dropped PlayerState can't leave a
+        // room-leaver's puppet visible; PlayerState.roomNo then keeps it
+        // current while states flow.
         break;
     }
     slot.hasEvent = false;
