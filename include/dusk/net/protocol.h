@@ -1,0 +1,516 @@
+#pragma once
+
+/**
+ * \file protocol.h
+ * Network co-op wire protocol (docs/design/mod-coop/00-network.md §5).
+ *
+ * Wire format for every message:
+ *   u16 type   — MsgType, little-endian
+ *   u16 size   — payload size in bytes, little-endian
+ *   payload    — fixed-size little-endian struct, hand-written serializers
+ *
+ * All payloads are fixed-size (roster is a fixed 8-entry array, strings are
+ * fixed-capacity NUL-padded arrays), so the hot path never allocates and a
+ * received message can be validated against its expected size in one check.
+ * Channel 0 is reliable (control/events/combat), channel 1 is unreliable
+ * sequenced (snapshots), per 00-network.md §1.
+ *
+ * The pose fields in PlayerState follow 00-network.md §5's joint-list format.
+ * Rev 3 D4 (raw matrix pose) refines the same message in M1; only the
+ * serializer body and this struct change, never the envelope.
+ */
+
+#include <dolphin/types.h>
+
+#include <array>
+#include <cstring>
+
+namespace dusk::net {
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Bump when the byte layout of any message changes; JoinRequest carries it
+/// and mismatches are rejected with JoinReject(VersionMismatch).
+constexpr u16 kProtocolVersion = 1;
+
+/// Session-wide player id space (0..kMaxLocalPlayers-1), per
+/// docs/design/network.md §3.
+constexpr u8 kMaxLocalPlayers = 8;
+
+/// ENet channels (00-network.md §1): reliable control vs unreliable snapshots.
+constexpr u8 kChannelReliable = 0;
+constexpr u8 kChannelUnreliable = 1;
+
+/// Fixed-capacity string limits (include the NUL terminator on the wire).
+constexpr u8 kMaxNameLength = 32;
+constexpr u8 kMaxStageNameLength = 16;
+
+/// TP Link joint count for pose sync; plan risk R11: human 40 / wolf 37+.
+/// jointCount in PlayerState marks how many of the fixed kMaxJoints entries
+/// are meaningful (the rest are written zeroed so the wire size stays fixed).
+constexpr u8 kMaxJoints = 40;
+
+/// Largest message the transport ring slots carry; fits the Rev 3 D4 raw
+/// matrix pose (~2.7 KB) plus envelope with room to spare.
+constexpr u16 kMaxMessageSize = 4096;
+
+constexpr u8 kInvalidPlayerId = 0xFF;
+constexpr u8 kAnySlot = 0xFF;
+
+/// Session-wide player id (0..kMaxLocalPlayers-1), assigned by the host.
+using PlayerId = u8;
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum class MsgType : u16 {
+    JoinRequest = 1,
+    JoinAccept = 2,
+    JoinReject = 3,
+    PlayerLeave = 4,
+    SessionEnd = 5,
+    WorldInit = 6,
+    PlayerState = 7,
+    PlayerEvent = 8,
+    EnemySnapshot = 9,
+    EnemyEvent = 10,
+    CombatIntent = 11,
+    CombatResult = 12,
+    TimeSync = 13,
+    TimeEvent = 14,
+    WeatherChange = 15,
+};
+
+enum class JoinRejectReason : u8 {
+    SessionFull = 0,
+    VersionMismatch = 1,
+    InvalidSlot = 2,
+    /// Client-local only (join deadline expired); never sent on the wire.
+    Timeout = 3,
+};
+
+enum class SessionEndReason : u8 {
+    HostLeft = 0,
+    Kicked = 1,
+    Shutdown = 2,
+};
+
+enum class PlayerStateId : u8 {
+    Connected = 0,
+    Playing = 1,
+};
+
+enum class PlayerEventId : u8 {
+    FormChange = 0,
+    Mount = 1,
+    Dismount = 2,
+    Respawn = 3,
+    SceneChange = 4,
+};
+
+enum class EnemyEventId : u8 {
+    Spawned = 0,
+    Died = 1,
+    RoomClear = 2,
+    BossPhase = 3,
+};
+
+enum class CombatOutcome : u8 {
+    Hit = 0,
+    Miss = 1,
+    Blocked = 2,
+    Died = 3,
+    /// Sim owner refused the intent (out of range, invalid target, friendly
+    /// fire off — network.md §7).
+    Rejected = 4,
+};
+
+enum class TimeEventId : u8 {
+    NewDay = 0,
+    Dusk = 1,
+    Dawn = 2,
+};
+
+enum class WeatherId : u8 {
+    None = 0,
+    Rain = 1,
+    Storm = 2,
+    Snow = 3,
+};
+
+// ---------------------------------------------------------------------------
+// Primitives (fixed layout; mirror cXyz / Vec3s but self-contained)
+// ---------------------------------------------------------------------------
+
+struct Vec3f {
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+};
+
+struct Vec3s16 {
+    s16 x = 0;
+    s16 y = 0;
+    s16 z = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Payload structs (one per MsgType; all fixed-size)
+// ---------------------------------------------------------------------------
+
+/// One roster entry. present=0 marks an empty slot; name is NUL-padded.
+struct PlayerInfo {
+    u8 playerId = kInvalidPlayerId;
+    u8 present = 0;
+    u8 state = 0;  // PlayerStateId
+    u8 reserved = 0;
+    char name[kMaxNameLength] = {};
+};
+
+struct StageInfo {
+    char stage[kMaxStageNameLength] = {};  // e.g. "F_SP108", NUL-padded
+    s8 room = 0;
+    s8 layer = -1;
+    s16 point = 0;
+};
+
+struct TimeInfo {
+    u32 phase = 0;      // absolute day phase (00-network.md §8)
+    u32 elapsedMs = 0;  // delta since the previous TimeSync
+};
+
+struct WeatherInfo {
+    u8 id = 0;        // WeatherId
+    u8 intensity = 0; // 0..100
+    u16 reserved = 0;
+};
+
+struct JoinRequestMsg {
+    u32 version = 0;   // must equal kProtocolVersion
+    u8 requestedSlot = kAnySlot;
+    u8 reserved[3] = {};
+    char name[kMaxNameLength] = {};
+};
+
+struct JoinAcceptMsg {
+    u8 assignedPlayerId = kInvalidPlayerId;
+    u8 reserved[3] = {};
+    StageInfo stage;
+    TimeInfo time;
+    WeatherInfo weather;
+    std::array<PlayerInfo, kMaxLocalPlayers> roster;
+};
+
+struct JoinRejectMsg {
+    u8 reason = 0;  // JoinRejectReason
+    u8 reserved[3] = {};
+};
+
+struct PlayerLeaveMsg {
+    u8 playerId = kInvalidPlayerId;
+    u8 reserved[3] = {};
+};
+
+struct SessionEndMsg {
+    u8 reason = 0;  // SessionEndReason
+    u8 reserved[3] = {};
+};
+
+/// Sent to a joining client right after JoinAccept (00-network.md §4). M1
+/// appends player/enemy state snapshots as count-prefixed sections after the
+/// roster; M0 always carries count 0.
+struct WorldInitMsg {
+    StageInfo stage;
+    u16 playerStateCount = 0;
+    u16 enemyStateCount = 0;
+    std::array<PlayerInfo, kMaxLocalPlayers> roster;
+};
+
+/// Per-frame pose sync (00-network.md §5 PlayerState). Only the first
+/// jointCount joints are meaningful; the rest are wire-zeroed.
+struct PlayerStateMsg {
+    u8 playerId = kInvalidPlayerId;
+    u8 scene = 0;
+    u8 form = 0;         // human / wolf
+    u8 movementFlags = 0;
+    u8 jointCount = 0;
+    u8 cosmetics[3] = {};  // tunic / shield / boots
+    s8 itemAction = -1;
+    u8 invincibility = 0;
+    u8 reserved = 0;
+    u32 stateFlags = 0;
+    Vec3f pos;
+    Vec3s16 rot;         // shape rotation
+    Vec3s16 upperLimbRot;
+    std::array<Vec3s16, kMaxJoints> joints;
+};
+
+struct PlayerEventMsg {
+    u8 playerId = kInvalidPlayerId;
+    u8 eventId = 0;  // PlayerEventId
+    u8 scene = 0;
+    u8 reserved = 0;
+    u32 data = 0;  // event-specific payload (form id, mount actor id, ...)
+};
+
+struct EnemySnapshotMsg {
+    u16 enemyId = 0xFFFF;  // session-unique per room instance
+    u16 type = 0;          // procName / profile id
+    u16 hp = 0;
+    u16 maxHp = 0;
+    u8 aggro = kInvalidPlayerId;  // target player id; kInvalidPlayerId = none
+    u8 flags = 0;                 // frozen, dead, boss-phase...
+    s16 angle = 0;
+    u32 anim = 0;  // action/anim state hint
+    Vec3f pos;
+};
+
+struct EnemyEventMsg {
+    u16 enemyId = 0xFFFF;
+    u16 data = 0;  // event-specific (drop table id, flag mask, phase...)
+    u8 eventId = 0;  // EnemyEventId
+    u8 flags = 0;
+};
+
+struct CombatIntentMsg {
+    u8 attackerId = kInvalidPlayerId;
+    u8 attackKind = 0;      // weapon/effect id
+    u8 targetPlayerId = kInvalidPlayerId;  // friendly-fire target (v1: rejected)
+    u8 reserved = 0;
+    u16 targetEnemyId = 0xFFFF;
+    u16 damage = 0;
+    u32 seq = 0;  // attacker request counter, echoed by CombatResult
+    Vec3f position;
+};
+
+struct CombatResultMsg {
+    u16 targetEnemyId = 0xFFFF;
+    u16 damage = 0;
+    u16 newHp = 0;
+    u8 outcome = 0;   // CombatOutcome
+    u8 attackerId = kInvalidPlayerId;
+    u32 seq = 0;
+};
+
+struct TimeSyncMsg {
+    u32 phase = 0;
+    u32 elapsedMs = 0;
+};
+
+struct TimeEventMsg {
+    u8 eventId = 0;  // TimeEventId
+    u8 reserved[3] = {};
+    u32 timePhase = 0;
+};
+
+struct WeatherChangeMsg {
+    u8 weatherId = 0;  // WeatherId
+    u8 intensity = 0;  // 0..100
+    u16 reserved = 0;
+};
+
+// ---------------------------------------------------------------------------
+// ByteWriter / ByteReader: fixed little-endian primitives, bounds-checked,
+// no allocation.
+// ---------------------------------------------------------------------------
+
+class ByteWriter {
+public:
+    ByteWriter(u8* data, u16 capacity) : data_(data), capacity_(capacity) {}
+
+    [[nodiscard]] u16 size() const { return pos_; }
+    [[nodiscard]] bool ok() const { return ok_; }
+    [[nodiscard]] u8* data() { return data_; }
+
+    bool WriteBytes(const void* src, u16 len) {
+        if (pos_ + len > capacity_) {
+            ok_ = false;
+            return false;
+        }
+        if (len > 0) {
+            std::memcpy(data_ + pos_, src, len);
+            pos_ += len;
+        }
+        return true;
+    }
+    bool WriteU8(u8 v) { return WriteBytes(&v, 1); }
+    bool WriteS8(s8 v) { return WriteBytes(&v, 1); }
+    bool WriteU16(u16 v) {
+        u8 b[2] = {static_cast<u8>(v & 0xFF), static_cast<u8>((v >> 8) & 0xFF)};
+        return WriteBytes(b, 2);
+    }
+    bool WriteS16(s16 v) { return WriteU16(static_cast<u16>(v)); }
+    bool WriteU32(u32 v) {
+        u8 b[4] = {static_cast<u8>(v & 0xFF), static_cast<u8>((v >> 8) & 0xFF),
+            static_cast<u8>((v >> 16) & 0xFF), static_cast<u8>((v >> 24) & 0xFF)};
+        return WriteBytes(b, 4);
+    }
+    bool WriteF32(f32 v) {
+        static_assert(sizeof(f32) == 4, "f32 must be 32-bit");
+        u32 bits;
+        std::memcpy(&bits, &v, 4);
+        return WriteU32(bits);
+    }
+    bool WriteVec3f(const Vec3f& v) {
+        return WriteF32(v.x) && WriteF32(v.y) && WriteF32(v.z);
+    }
+    bool WriteVec3s16(const Vec3s16& v) {
+        return WriteS16(v.x) && WriteS16(v.y) && WriteS16(v.z);
+    }
+    /// Writes exactly `capacity` bytes: the string (truncated to capacity-1)
+    /// followed by NUL padding. Always leaves the field NUL-terminated.
+    bool WriteFixedString(const char* s, u8 capacity) {
+        if (capacity == 0) {
+            return false;
+        }
+        const u8 len = static_cast<u8>(std::strlen(s ? s : ""));
+        const u8 written = len < capacity ? len : capacity - 1;
+        if (!WriteBytes(s ? s : "", written)) {
+            return false;
+        }
+        u8 pad[kMaxStageNameLength > kMaxNameLength ? kMaxStageNameLength : kMaxNameLength] = {};
+        const u16 remaining = static_cast<u16>(capacity - written);
+        return WriteBytes(pad, remaining);
+    }
+
+private:
+    u8* data_;
+    u16 capacity_;
+    u16 pos_ = 0;
+    bool ok_ = true;
+};
+
+class ByteReader {
+public:
+    ByteReader(const u8* data, u16 len) : data_(data), len_(len) {}
+
+    [[nodiscard]] u16 remaining() const { return len_ - pos_; }
+    [[nodiscard]] bool ok() const { return ok_; }
+
+    bool ReadBytes(void* dst, u16 len) {
+        if (pos_ + len > len_) {
+            ok_ = false;
+            return false;
+        }
+        if (len > 0) {
+            std::memcpy(dst, data_ + pos_, len);
+            pos_ += len;
+        }
+        return true;
+    }
+    bool ReadU8(u8& v) { return ReadBytes(&v, 1); }
+    bool ReadS8(s8& v) { return ReadBytes(&v, 1); }
+    bool ReadU16(u16& v) {
+        u8 b[2];
+        if (!ReadBytes(b, 2)) {
+            return false;
+        }
+        v = static_cast<u16>(b[0] | (b[1] << 8));
+        return true;
+    }
+    bool ReadS16(s16& v) {
+        u16 u;
+        if (!ReadU16(u)) {
+            return false;
+        }
+        v = static_cast<s16>(u);
+        return true;
+    }
+    bool ReadU32(u32& v) {
+        u8 b[4];
+        if (!ReadBytes(b, 4)) {
+            return false;
+        }
+        v = static_cast<u32>(b[0]) | (static_cast<u32>(b[1]) << 8) |
+            (static_cast<u32>(b[2]) << 16) | (static_cast<u32>(b[3]) << 24);
+        return true;
+    }
+    bool ReadF32(f32& v) {
+        static_assert(sizeof(f32) == 4, "f32 must be 32-bit");
+        u32 bits;
+        if (!ReadU32(bits)) {
+            return false;
+        }
+        std::memcpy(&v, &bits, 4);
+        return true;
+    }
+    bool ReadVec3f(Vec3f& v) { return ReadF32(v.x) && ReadF32(v.y) && ReadF32(v.z); }
+    bool ReadVec3s16(Vec3s16& v) { return ReadS16(v.x) && ReadS16(v.y) && ReadS16(v.z); }
+    /// Reads exactly `capacity` bytes into `out` and forces a NUL terminator
+    /// at capacity-1.
+    bool ReadFixedString(char* out, u8 capacity) {
+        if (capacity == 0) {
+            return false;
+        }
+        if (!ReadBytes(out, capacity)) {
+            return false;
+        }
+        out[capacity - 1] = '\0';
+        return true;
+    }
+
+private:
+    const u8* data_;
+    u16 len_;
+    u16 pos_ = 0;
+    bool ok_ = true;
+};
+
+// ---------------------------------------------------------------------------
+// Message envelope: u16 type + u16 payloadSize + payload
+// ---------------------------------------------------------------------------
+
+/// Tagged union of every payload struct. All members are trivially copyable.
+union PayloadUnion {
+    JoinRequestMsg joinRequest;
+    JoinAcceptMsg joinAccept;
+    JoinRejectMsg joinReject;
+    PlayerLeaveMsg playerLeave;
+    SessionEndMsg sessionEnd;
+    WorldInitMsg worldInit;
+    PlayerStateMsg playerState;
+    PlayerEventMsg playerEvent;
+    EnemySnapshotMsg enemySnapshot;
+    EnemyEventMsg enemyEvent;
+    CombatIntentMsg combatIntent;
+    CombatResultMsg combatResult;
+    TimeSyncMsg timeSync;
+    TimeEventMsg timeEvent;
+    WeatherChangeMsg weatherChange;
+
+    PayloadUnion() {}
+    ~PayloadUnion() {}
+};
+
+struct Message {
+    MsgType type = MsgType::JoinRequest;
+    PayloadUnion payload;
+};
+
+/// Expected payload size in bytes for each message type (fixed).
+u16 WireSize(MsgType type);
+
+/// ENet channel for a message type (00-network.md §1).
+constexpr u8 ChannelFor(MsgType type) {
+    switch (type) {
+    case MsgType::PlayerState:
+    case MsgType::EnemySnapshot:
+    case MsgType::TimeSync:
+        return kChannelUnreliable;
+    default:
+        return kChannelReliable;
+    }
+}
+
+/// Serializes `msg` (header + payload) into `w`. Returns false on any
+/// bounds/type failure; the writer is left in an unspecified but safe state.
+bool SerializeMessage(const Message& msg, ByteWriter& w);
+
+/// Parses a header + payload from `r`, validating the type and exact payload
+/// size. Returns false if the buffer is malformed or truncated.
+bool DeserializeMessage(ByteReader& r, Message& out);
+
+}  // namespace dusk::net
