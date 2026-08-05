@@ -640,13 +640,19 @@ void shutdown() {
     s_changeTokenNames.clear();
     s_activeChangeNotifications.clear();
 
-    // Matched teardown for dusk::net::initialize() (src/dusk/net/module.cpp).
-    // Runs after any session transports are stopped, before aurora_shutdown().
-    dusk::net::shutdown();
-
-    // Network co-op (M1): graceful session stop before ENet tears down — a
-    // client sends PlayerLeave, the host broadcasts SessionEnd.
+    // Network co-op (M1): graceful session stop FIRST — a client sends
+    // PlayerLeave, the host broadcasts SessionEnd (00-network.md §4), both
+    // via the ENet transport. dusk::coop::shutdown() -> Session::Stop joins
+    // the socket thread whose final drain calls enet_peer_send; with ENet
+    // already deinitialized (dusk::net::shutdown below) that send would run
+    // on a torn-down transport (review m1, MAJOR M4). On macOS it worked by
+    // luck; on Windows enet_deinitialize tears down Winsock.
     dusk::coop::shutdown();
+
+    // Matched teardown for dusk::net::initialize() (src/dusk/net/module.cpp).
+    // Runs after the session transport is stopped and joined, before
+    // aurora_shutdown().
+    dusk::net::shutdown();
 }
 
 }  // namespace dusk::config
