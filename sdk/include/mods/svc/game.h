@@ -12,7 +12,14 @@
  * of letting them corrupt memory.
  */
 #define GAME_SERVICE_ID "dev.twilitrealm.dusklight.game"
-#define GAME_SERVICE_MAJOR 1u
+/*
+ * Dusklight fork hygiene: the co-op fork grew game-visible structs (per-slot
+ * player state etc.) beyond upstream, so the game ABI epoch is bumped. Mods
+ * built against the stock epoch fail the loader's version check with a clear
+ * message instead of corrupting memory (see plan Rev 3 D11/D12: the SDK stays
+ * available but unused by the co-op).
+ */
+#define GAME_SERVICE_MAJOR 2u
 #define GAME_SERVICE_MINOR 0u
 
 typedef struct GameService {
