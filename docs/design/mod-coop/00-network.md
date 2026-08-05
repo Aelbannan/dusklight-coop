@@ -80,34 +80,40 @@ What we deliberately change vs Anchor:
 ```
 socket thread (mod-owned)          game thread (mod_update + hooks)
   enet_host_service()                drain inbox  → apply state
-  recv → inbox ring                  build snapshots (per-frame clock)
-  outbox ring → enet_peer_send()     enqueue outbound → outbox ring
+  recv → inbox rings (rel+snap)      build snapshots (per-frame clock)
+  outbox rings → enet_peer_send()    enqueue outbound → outbox rings
 ```
 
 - Mod spawns the socket thread; ENet runs exclusively on it. Same shape as
   Anchor's network-thread queue / game-thread processing split.
 - Cross-thread handoff via fixed-size SPSC ring buffers (no allocs in the hot
-  path). Frames are batched at the frame boundary, so contention is ~zero.
+  path), **split by channel**: channel 0 (reliable control/events/combat) and
+  channel 1 (unreliable snapshots) never share a ring. Reliable overflow is
+  an explicit, session-visible failure — never a silent drop; snapshot
+  overflow keeps the freshest entry (replace-newest) under pressure.
 - `mod_shutdown`: set stop flag → join thread → `enet_host_destroy`.
 
 ## 4. Session lifecycle
 
 | Step | Message | Channel | Notes |
 |------|---------|---------|-------|
-| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players 0/8 |
+| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players 0/8 — **deferred to M4 (LAN discovery)**; v1 join is manual IP (`joinHost` CVar) |
 | Discover | (listen for announce) | — | also manual IP join via config var |
 | Connect | ENet handshake | — | ENet-level |
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
 | Accept | `JoinAccept` | reliable | assigned `PlayerId` (session-wide 0–7), roster, stage, time, weather |
 | Reject | `JoinReject` | reliable | reason (full, version mismatch) |
-| Mid-game | `WorldInit` | reliable | stage name, room, spawn anchor, full roster, all current player/enemy states |
+| Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages |
 | Leave | `PlayerLeave` | reliable | host relays; puppet despawns |
 
 - **PlayerId mapping**: host assigns session-wide ids 0–7 (`MAX_LOCAL_PLAYERS`).
   Each machine's `Runtime` keeps its local slot; remote slots are puppet-only
   (see `docs/design/network.md` §3).
 - **Join mid-game**: client warps to the host's stage/room via a forced stage
-  change, then receives `WorldInit` with the full current state.
+  change, then receives `WorldInit` (stage + roster), followed by the current
+  per-player/per-enemy state as a burst of ordinary `PlayerState`/
+  `EnemySnapshot` messages on the per-frame stream (no separate full-state
+  message — the first pose arrives within one frame).
 - **Host departure**: v1 ends the session with a `SessionEnd`; no host
   migration (listed as future work).
 
@@ -120,7 +126,7 @@ Packet version in `JoinRequest`; mismatches rejected.
 | Message | Channel | Cadence | Payload |
 |---------|---------|---------|---------|
 | `JoinRequest` / `JoinAccept` / `JoinReject` / `PlayerLeave` / `SessionEnd` | reliable | event | see §4 |
-| `WorldInit` | reliable | on join | stage, room, spawn, roster, full state snapshot |
+| `WorldInit` | reliable | on join | stage (name/room/layer/point) + full roster — no embedded state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
 | `PlayerState` (per remote player, same scene) | unreliable seq | every frame | see PlayerState below |
 | `PlayerEvent` (form change, mount/dismount, respawn, scene change) | reliable | on change | player id + event + data |
 | `EnemySnapshot` (per enemy) | unreliable seq | every frame | see EnemyState below |
@@ -131,40 +137,53 @@ Packet version in `JoinRequest`; mismatches rejected.
 | `TimeEvent` (new day, dusk/dawn) | reliable | on change | event id + time |
 | `WeatherChange` | reliable | on change | weather id + intensity |
 
+Field order in the struct blocks below **is the wire order** (version-gated by
+`kProtocolVersion`); the hand-written serializers in `src/dusk/net/protocol.cpp`
+are normative.
+
 ### PlayerState (per remote player, per frame)
 
 Modeled on Anchor's `PLAYER_UPDATE`: **full pose, not animation state**.
-Final joint count/read strategy comes from investigation 02.
+Final joint count/read strategy comes from investigation 02. Field order
+matches the serializer (`src/dusk/net/protocol.cpp`).
 
 ```
-playerId     u8
-scene        u8              // only same-scene peers receive/apply
-pos          f32 x3          // cXyz
-rot          s16 x3          // shape rotation
-joints       Vec3s[N]        // full joint pose (Anchor: 24; TP TBD)
-upperLimbRot Vec3s
+playerId      u8
+scene         u8              // only same-scene peers receive/apply
+form          u8              // human / wolf (Anchor's modelGroup analog)
 movementFlags u8
-form         u8              // human / wolf (Anchor's modelGroup analog)
-cosmetics    u8 x3           // tunic/shield/boots (TP equivalents)
-stateFlags   u32             // subset relevant to rendering/combat pose
-itemAction   s8              // held item action, for model group
+jointCount    u8              // 0..kMaxJoints; joints[jointCount..] are wire-zeroed
+cosmetics     u8 x3           // tunic/shield/boots (TP equivalents)
+itemAction    s8              // held item action, for model group
 invincibility u8
-~= 150–300 bytes/player/frame (joint-dominated)
+reserved      u8
+stateFlags    u32             // subset relevant to rendering/combat pose
+pos           f32 x3          // cXyz
+rot           s16 x3          // shape rotation
+upperLimbRot  s16 x3
+joints        Vec3s16[40]     // full joint pose (Anchor: 24; TP TBD); jointCount meaningful
+~= 279 bytes/player/frame (joint-dominated)
 ```
+
+`jointCount > kMaxJoints (40)` is rejected at parse (semantic validation,
+M0.5) so apply code can never index `joints[jointCount]` out of bounds.
 
 ### EnemyState (per enemy, per frame)
 
-Provisional — final schema from investigation 03:
+Provisional — final schema from investigation 03. Field order matches the
+serializer (`src/dusk/net/protocol.cpp`).
+
 ```
 enemyId   u16             // session-unique per room instance
 type      u16             // procName / profile id
-pos       f32 x3
-angle     s16
-hp / maxHp u16/u16
-anim      u32             // action/anim state hint (see §7 note)
+hp        u16
+maxHp     u16
 aggro     u8              // target player id (0xFF = none)
 flags     u8              // frozen, dead, boss-phase…
-~= 40–60 bytes/enemy/frame
+angle     s16
+anim      u32             // action/anim state hint (see §7 note)
+pos       f32 x3
+~= 28 bytes/enemy/frame
 ```
 
 ## 6. Cadence — every frame, no interpolation
