@@ -131,6 +131,10 @@ private:
     WeatherInfo worldWeather_;
     u64 frame_ = 0;
     u64 connectedAtMs_ = 0;
+    // Last-observed reliable-ring drop counters (for surfacing explicit
+    // reliable-overflow failures in Update()).
+    u64 lastReliableOutboundDropped_ = 0;
+    u64 lastReliableInboundDropped_ = 0;
 };
 
 }  // namespace dusk::net

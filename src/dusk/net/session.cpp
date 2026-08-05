@@ -97,17 +97,19 @@ bool Session::StartClient(const SessionConfig& config) {
 }
 
 void Session::Stop() {
-    if (role_ == SessionRole::None && state_ == SessionState::Idle) {
-        return;  // never started
+    // Idempotent by guard (GLM MINOR-6): a never-started or already-stopped
+    // session has nothing to tear down.
+    if (state_ == SessionState::Idle || state_ == SessionState::Ended) {
+        return;
     }
     if (role_ == SessionRole::Host && state_ == SessionState::Listening) {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.sessionEnd.reason = static_cast<u8>(SessionEndReason::HostLeft);
         SendToAll(MsgType::SessionEnd, payload);
         NetLog.info("net: host stopping, sent SessionEnd to {} player(s)",
             static_cast<u32>(PresentCount()));
     } else if (role_ == SessionRole::Client && state_ == SessionState::Joined) {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.playerLeave.playerId = selfId_;
         SendToPeer(0, MsgType::PlayerLeave, payload);
         NetLog.info("net: client stopping, sent PlayerLeave for player {}", selfId_);
@@ -146,6 +148,22 @@ void Session::Update() {
         state_ = SessionState::Rejected;
         NetLog.warn("net: join timed out after {} ms", config_.joinTimeoutMs);
     }
+
+    // Reliable overflow is an explicit failure, never a silent drop (deepseek
+    // M2): surface the transport counters so a dropped control/event message
+    // is visible at the session layer.
+    const u64 roDropped = transport_.ReliableOutboundDropped();
+    if (roDropped != lastReliableOutboundDropped_) {
+        NetLog.warn("net: {} reliable outbound message(s) dropped (reliable outbox full)",
+            roDropped - lastReliableOutboundDropped_);
+        lastReliableOutboundDropped_ = roDropped;
+    }
+    const u64 riDropped = transport_.ReliableInboundDropped();
+    if (riDropped != lastReliableInboundDropped_) {
+        NetLog.warn("net: {} reliable inbound message(s) dropped (reliable inbox full)",
+            riDropped - lastReliableInboundDropped_);
+        lastReliableInboundDropped_ = riDropped;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +179,7 @@ void Session::HandleConnect(u8 peerIndex) {
     if (state_ == SessionState::Connecting) {
         state_ = SessionState::Connected;
         connectedAtMs_ = NowMs();
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.joinRequest.version = config_.version;
         payload.joinRequest.requestedSlot = config_.requestedSlot;
         CopyName(payload.joinRequest.name, config_.name.c_str());
@@ -243,10 +261,18 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     if (peerIndex >= Transport::kMaxPeers) {
         return;
     }
+    // Duplicate JoinRequest guard (deepseek m2): a peer that already holds a
+    // PlayerId must not get a second slot — ignore the re-join (a buggy or
+    // malicious client would otherwise orphan the first assignment).
+    if (peerToPlayer_[peerIndex] != kInvalidPlayerId) {
+        NetLog.warn("net: duplicate JoinRequest from peer {} (already player {}); ignoring",
+            peerIndex, peerToPlayer_[peerIndex]);
+        return;
+    }
     const auto& req = msg.payload.joinRequest;
 
     if (req.version != kProtocolVersion) {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::VersionMismatch);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
         NetLog.warn("net: rejecting peer {} (version {} != {})", peerIndex, req.version,
@@ -257,7 +283,7 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     if (req.requestedSlot != kAnySlot &&
         (req.requestedSlot >= config_.maxPlayers || roster_[req.requestedSlot].present))
     {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::InvalidSlot);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
         NetLog.warn("net: rejecting peer {} (slot {} unavailable)", peerIndex, req.requestedSlot);
@@ -265,7 +291,7 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     }
 
     if (PresentCount() >= config_.maxPlayers) {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::SessionFull);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
         NetLog.warn("net: rejecting peer {} (session full, {}/{} players)", peerIndex,
@@ -281,7 +307,7 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     NetLog.info("net: player {} '{}' joined (peer {})", id, roster_[id].name, peerIndex);
 
     // JoinAccept: assigned id + full roster + world info (00-network.md §4).
-    PayloadUnion accept;
+    PayloadUnion accept = {};
     accept.joinAccept.assignedPlayerId = id;
     accept.joinAccept.stage = worldStage_;
     accept.joinAccept.time = worldTime_;
@@ -289,17 +315,34 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     FillWireRoster(accept.joinAccept.roster);
     SendToPeer(peerIndex, MsgType::JoinAccept, accept);
 
-    // WorldInit: stage + roster; player/enemy state sections carry 0 in M0.
-    PayloadUnion init;
+    // WorldInit: fixed stage + roster (00-network.md §4/§5 — no state
+    // sections); M1's snapshot-on-join is a burst of ordinary per-frame
+    // PlayerState/EnemySnapshot messages sent right after this.
+    PayloadUnion init = {};
     init.worldInit.stage = worldStage_;
-    init.worldInit.playerStateCount = 0;
-    init.worldInit.enemyStateCount = 0;
     FillWireRoster(init.worldInit.roster);
     SendToPeer(peerIndex, MsgType::WorldInit, init);
 }
 
 void Session::OnJoinAccept(const Message& msg) {
     const auto& accept = msg.payload.joinAccept;
+    // Semantic validation on receive (deepseek M5): never store an out-of-
+    // range assigned id, and require the roster to back the assignment (the
+    // host always sends both; anything else is a buggy/forged accept).
+    if (accept.assignedPlayerId >= kMaxLocalPlayers) {
+        NetLog.warn("net: JoinAccept assigns invalid player id {}; rejecting",
+            accept.assignedPlayerId);
+        rejectReasonName_ = "invalid join accept";
+        state_ = SessionState::Rejected;
+        return;
+    }
+    if (accept.roster[accept.assignedPlayerId].present == 0) {
+        NetLog.warn("net: JoinAccept roster does not mark player {} present; rejecting",
+            accept.assignedPlayerId);
+        rejectReasonName_ = "invalid join accept";
+        state_ = SessionState::Rejected;
+        return;
+    }
     selfId_ = accept.assignedPlayerId;
     worldStage_ = accept.stage;
     worldTime_ = accept.time;
@@ -355,8 +398,8 @@ void Session::OnWorldInit(const Message& msg) {
     const auto& init = msg.payload.worldInit;
     worldStage_ = init.stage;
     ApplyRoster(init.roster);  // roster refresh; may include players who joined later
-    NetLog.info("net: world init: stage '{}' room {} (players {}, enemies {})", init.stage.stage,
-        static_cast<s32>(init.stage.room), init.playerStateCount, init.enemyStateCount);
+    NetLog.info("net: world init: stage '{}' room {} (players {})", init.stage.stage,
+        static_cast<s32>(init.stage.room), init.roster.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +482,7 @@ void Session::RemovePlayer(u8 playerId, bool broadcastLeave) {
     roster_[playerId].name[0] = '\0';
     NetLog.info("net: player {} left the session", playerId);
     if (broadcastLeave) {
-        PayloadUnion payload;
+        PayloadUnion payload = {};
         payload.playerLeave.playerId = playerId;
         SendToAll(MsgType::PlayerLeave, payload, /*exceptPlayer=*/playerId);
     }
@@ -449,7 +492,9 @@ void Session::ApplyRoster(const std::array<PlayerInfo, kMaxLocalPlayers>& wireRo
     roster_ = {};
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         const auto& entry = wireRoster[i];
-        if (entry.present != 0) {
+        // Range-check the advertised player id too (deepseek M5): a roster
+        // entry pointing outside the player-id space is ignored.
+        if (entry.present != 0 && entry.playerId < kMaxLocalPlayers) {
             roster_[i].playerId = entry.playerId;
             roster_[i].present = true;
             CopyName(roster_[i].name, entry.name);
