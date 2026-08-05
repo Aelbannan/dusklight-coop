@@ -1,5 +1,8 @@
 #include "dusk/coop/coop.h"
 
+#include "dusk/coop/coop_combat.h"
+#include "dusk/coop/coop_enemy.h"
+
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/net/config.h"
@@ -222,6 +225,15 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         ReceiveSlot& slot = g_receive[ev.playerId];
         slot.event = ev;
         slot.hasEvent = true;
+    } else if (type == net::MsgType::EnemySnapshot || type == net::MsgType::EnemyEvent) {
+        // M2: enemy authority traffic (freeze/apply + drops/room-clear).
+        dusk::coop::enemy::onGameMessage(type, payload);
+    } else if (type == net::MsgType::CombatIntent) {
+        // M2: combat intents are validated by the sim owner (host role).
+        dusk::coop::combat::onGameMessage(type, payload);
+    } else if (type == net::MsgType::CombatResult) {
+        // M2: result ack — the authoritative HP always rides the next
+        // EnemySnapshot; nothing to apply client-side in v1.
     }
 }
 
@@ -813,6 +825,17 @@ net::PlayerId puppetPlayerId(fpc_ProcID pid) {
     return kInvalidPlayerId;
 }
 
+fopAc_ac_c* puppetActorFor(net::PlayerId playerId) {
+    if (playerId >= kMaxLocalPlayers) {
+        return nullptr;
+    }
+    const PuppetEntry& e = g_puppets[playerId];
+    if (e.state != SpawnState::Active || e.actor == nullptr) {
+        return nullptr;
+    }
+    return reinterpret_cast<fopAc_ac_c*>(e.actor);
+}
+
 void onLinkCreated(daAlink_c* link) {
     if (isPuppet(link)) {
         const PlayerId pid = puppetPlayerId(fopAcM_GetID(link));
@@ -953,6 +976,9 @@ void onGameFrame() {
         g_session.Update();
     }
     PumpSessionAndSpawns();
+    // M2: enemy authority — host registration/snapshots/deaths, client
+    // freeze/apply state, room-clear. No-op when the session is not live.
+    dusk::coop::enemy::onGameFrame();
 }
 
 void shutdown() {
@@ -967,6 +993,26 @@ void shutdown() {
         g_startFailed = false;
         CoopLog.info("coop: session stopped on shutdown");
     }
+    // M2: clear per-stage enemy state (registry, receive slots, room-clear).
+    dusk::coop::enemy::shutdown();
+}
+
+bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
+    if (!g_sessionStarted) {
+        return false;
+    }
+    return g_session.SendGameMessage(type, payload);
+}
+
+bool rosterPresent(net::PlayerId pid) {
+    if (pid >= kMaxLocalPlayers || !g_sessionStarted) {
+        return false;
+    }
+    return g_session.roster()[pid].present;
+}
+
+s8 localRoomNo() {
+    return LocalRoomNo();
 }
 
 }  // namespace dusk::coop

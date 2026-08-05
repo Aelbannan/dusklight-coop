@@ -49,6 +49,10 @@ int remoteCount();
 bool isPuppet(const daAlink_c* link);
 /// The session PlayerId of the puppet owning pid, or kInvalidPlayerId.
 net::PlayerId puppetPlayerId(fpc_ProcID pid);
+/// The remote-player puppet actor for a session PlayerId (registered and
+/// currently alive), or nullptr. M2: used as the synthetic attacker for
+/// owner-side combat validation (m2-design-notes.md §1).
+fopAc_ac_c* puppetActorFor(net::PlayerId playerId);
 
 /// Called at the end of daAlink_c::create() (cPhs_COMPLEATE_e): registers the
 /// real Link, or flips the matching puppet entry to active.
@@ -84,5 +88,17 @@ void onGameFrame();
 /// Graceful session teardown on game exit (wired into dusk::config::shutdown):
 /// a client sends PlayerLeave, the host broadcasts SessionEnd.
 void shutdown();
+
+// ---------------------------------------------------------------------------
+// M2 session accessors (enemy registry / combat / room-clear)
+// ---------------------------------------------------------------------------
+
+/// Sends a game message into the session (host: simulcast to all clients;
+/// client: to the host). M2 enemy/combat traffic uses this.
+bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload);
+/// True when a remote roster slot is present in the session.
+bool rosterPresent(net::PlayerId pid);
+/// The real Link's current room (s8), or -1 when no real Link.
+s8 localRoomNo();
 
 }  // namespace dusk::coop
