@@ -244,10 +244,22 @@ void Session::HandleData(const InboundPacket& pkt) {
             OnWorldInit(msg);
         }
         break;
+    case MsgType::PlayerState:
+    case MsgType::PlayerEvent:
+        // M1 game traffic: the session owns transport/roster only. The game
+        // side consumes the message; on the host the message is then relayed
+        // to every other joined peer (star topology, 00-network.md §2).
+        if (gameHandler_) {
+            gameHandler_(msg.type, msg.payload);
+        }
+        if (role_ == SessionRole::Host) {
+            ForwardGameMessage(pkt.peerIndex, msg.type, msg.payload);
+        }
+        break;
     default:
         // M0: snapshot/combat/time traffic is parsed but not acted on — no
         // game integration yet. The serializer round-trip is covered by the
-        // selftest; application lands in M1/M2/M3.
+        // selftest; application lands in M2/M3.
         NetLog.debug("net: ignoring {} for now (M0)", static_cast<u16>(msg.type));
         break;
     }
@@ -400,6 +412,39 @@ void Session::OnWorldInit(const Message& msg) {
     ApplyRoster(init.roster);  // roster refresh; may include players who joined later
     NetLog.info("net: world init: stage '{}' room {} (players {})", init.stage.stage,
         static_cast<s32>(init.stage.room), init.roster.size());
+}
+
+// ---------------------------------------------------------------------------
+// Game-message routing (star topology)
+// ---------------------------------------------------------------------------
+
+bool Session::SendGameMessage(MsgType type, const PayloadUnion& payload) {
+    if (state_ != SessionState::Listening && state_ != SessionState::Joined) {
+        return false;
+    }
+    if (role_ == SessionRole::Host) {
+        // Broadcast to every joined peer. SendToAll skips non-present roster
+        // slots, so this never echoes back to a peer that is still joining.
+        SendToAll(type, payload);
+    } else {
+        // Client: everything flows to the host, which relays to the others.
+        SendToPeer(0, type, payload);
+    }
+    return true;
+}
+
+void Session::ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion& payload) {
+    for (u8 peer = 0; peer < Transport::kMaxPeers; ++peer) {
+        if (peer == originPeer) {
+            continue;
+        }
+        // Only relay to peers that completed the join handshake (have a
+        // PlayerId); a connected-but-joining peer gets the roster via
+        // WorldInit and then the snapshot burst.
+        if (peerToPlayer_[peer] != kInvalidPlayerId) {
+            SendToPeer(peer, type, payload);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

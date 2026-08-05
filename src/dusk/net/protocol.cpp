@@ -93,16 +93,17 @@ bool DeserializeWorldInit(WorldInitMsg& m, ByteReader& r) {
 }
 
 bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
-    if (!w.WriteU8(m.playerId) || !w.WriteU8(m.scene) || !w.WriteU8(m.form) ||
-        !w.WriteU8(m.movementFlags) || !w.WriteU8(m.jointCount) ||
-        !w.WriteBytes(m.cosmetics, 3) || !w.WriteS8(m.itemAction) ||
-        !w.WriteU8(m.invincibility) || !w.WriteU8(m.reserved) || !w.WriteU32(m.stateFlags) ||
-        !w.WriteVec3f(m.pos) || !w.WriteVec3s16(m.rot) || !w.WriteVec3s16(m.upperLimbRot))
+    if (!w.WriteU8(m.playerId) || !w.WriteS8(m.roomNo) || !w.WriteU8(m.form) ||
+        !w.WriteU8(m.stateFlags) || !w.WriteU8(m.jointCount) ||
+        !w.WriteBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !w.WriteS16(m.yaw) ||
+        !w.WriteS16(m.pitch) || !w.WriteU16(m.faceBckIdx) || !w.WriteU16(m.faceBtpIdx) ||
+        !w.WriteS16(m.faceFrame) || !w.WriteU8(m.reserved) || !w.WriteVec3f(m.pos) ||
+        !w.WriteBytes(m.baseTR, sizeof(Mtx)))
     {
         return false;
     }
     for (const auto& j : m.joints) {
-        if (!w.WriteVec3s16(j)) {
+        if (!w.WriteBytes(j, sizeof(Mtx))) {
             return false;
         }
     }
@@ -110,16 +111,17 @@ bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
 }
 
 bool DeserializePlayerState(PlayerStateMsg& m, ByteReader& r) {
-    if (!r.ReadU8(m.playerId) || !r.ReadU8(m.scene) || !r.ReadU8(m.form) ||
-        !r.ReadU8(m.movementFlags) || !r.ReadU8(m.jointCount) || !r.ReadBytes(m.cosmetics, 3) ||
-        !r.ReadS8(m.itemAction) || !r.ReadU8(m.invincibility) || !r.ReadU8(m.reserved) ||
-        !r.ReadU32(m.stateFlags) || !r.ReadVec3f(m.pos) || !r.ReadVec3s16(m.rot) ||
-        !r.ReadVec3s16(m.upperLimbRot))
+    if (!r.ReadU8(m.playerId) || !r.ReadS8(m.roomNo) || !r.ReadU8(m.form) ||
+        !r.ReadU8(m.stateFlags) || !r.ReadU8(m.jointCount) ||
+        !r.ReadBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !r.ReadS16(m.yaw) ||
+        !r.ReadS16(m.pitch) || !r.ReadU16(m.faceBckIdx) || !r.ReadU16(m.faceBtpIdx) ||
+        !r.ReadS16(m.faceFrame) || !r.ReadU8(m.reserved) || !r.ReadVec3f(m.pos) ||
+        !r.ReadBytes(m.baseTR, sizeof(Mtx)))
     {
         return false;
     }
     for (auto& j : m.joints) {
-        if (!r.ReadVec3s16(j)) {
+        if (!r.ReadBytes(j, sizeof(Mtx))) {
             return false;
         }
     }
@@ -151,9 +153,9 @@ u16 WireSize(MsgType type) {
     case MsgType::WorldInit:
         return 20 + kMaxLocalPlayers * 36;  // 308 — stage + roster, no state sections
     case MsgType::PlayerState:
-        return 11 + 4 + 12 + 6 + 6 + kMaxJoints * 6;  // 279
+        return PlayerStateWireSize();  // 2657 — raw-matrix pose (Rev 3 D4)
     case MsgType::PlayerEvent:
-        return 8;
+        return 4 + 4 + 4;  // 12
     case MsgType::EnemySnapshot:
         return 2 + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 12;  // 28
     case MsgType::EnemyEvent:
@@ -197,9 +199,11 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
     case MsgType::PlayerState:
         return SerializePlayerState(msg.payload.playerState, w);
     case MsgType::PlayerEvent:
-        return w.WriteU8(msg.payload.playerEvent.playerId) && w.WriteU8(msg.payload.playerEvent.eventId) &&
-               w.WriteU8(msg.payload.playerEvent.scene) && w.WriteU8(msg.payload.playerEvent.reserved) &&
-               w.WriteU32(msg.payload.playerEvent.data);
+        return w.WriteU8(msg.payload.playerEvent.playerId) &&
+               w.WriteU8(msg.payload.playerEvent.eventId) &&
+               w.WriteU8(msg.payload.playerEvent.scene) &&
+               w.WriteU8(msg.payload.playerEvent.reserved) &&
+               w.WriteU32(msg.payload.playerEvent.data) && w.WriteU32(msg.payload.playerEvent.data2);
     case MsgType::EnemySnapshot:
         return w.WriteU16(msg.payload.enemySnapshot.enemyId) &&
                w.WriteU16(msg.payload.enemySnapshot.type) && w.WriteU16(msg.payload.enemySnapshot.hp) &&
@@ -274,8 +278,11 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
         return DeserializePlayerState(out.payload.playerState, r);
     case MsgType::PlayerEvent:
         return r.ReadU8(out.payload.playerEvent.playerId) &&
-               r.ReadU8(out.payload.playerEvent.eventId) && r.ReadU8(out.payload.playerEvent.scene) &&
-               r.ReadU8(out.payload.playerEvent.reserved) && r.ReadU32(out.payload.playerEvent.data);
+               r.ReadU8(out.payload.playerEvent.eventId) &&
+               r.ReadU8(out.payload.playerEvent.scene) &&
+               r.ReadU8(out.payload.playerEvent.reserved) &&
+               r.ReadU32(out.payload.playerEvent.data) &&
+               r.ReadU32(out.payload.playerEvent.data2);
     case MsgType::EnemySnapshot:
         return r.ReadU16(out.payload.enemySnapshot.enemyId) &&
                r.ReadU16(out.payload.enemySnapshot.type) &&

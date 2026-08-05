@@ -22,6 +22,7 @@
  * serializer body and this struct change, never the envelope.
  */
 
+#include <dolphin/mtx.h>
 #include <dolphin/types.h>
 
 #include <array>
@@ -39,7 +40,12 @@ namespace dusk::net {
 /// v2 (M0.5): WorldInit dropped its (always-zero) count-prefixed state
 /// sections — it is now fixed stage+roster only. The zero-init and semantic
 /// validation changes do not alter the wire layout and did not bump.
-constexpr u16 kProtocolVersion = 2;
+///
+/// v3 (M1): PlayerState moved from the provisional joint-list layout to Rev 3
+/// D4's raw-matrix pose (per-joint Mtx table + scale flags + baseTR + face +
+/// roomNo + stateFlags byte, ~2 KB with 3x4 Mtx); PlayerEvent gained an
+/// extended data2 field for item-joint payloads.
+constexpr u16 kProtocolVersion = 3;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -110,11 +116,15 @@ enum class PlayerStateId : u8 {
 };
 
 enum class PlayerEventId : u8 {
-    FormChange = 0,
-    Mount = 1,
-    Dismount = 2,
-    Respawn = 3,
-    SceneChange = 4,
+    FormChange = 0,      // data: form (0 human / 1 wolf)
+    Mount = 1,           // (reserved; horse entity channel is M5)
+    Dismount = 2,        // (reserved)
+    Respawn = 3,         // (reserved)
+    SceneChange = 4,     // data: roomNo
+    Equip = 5,           // data: equipItem u16 | selectItemId u8 | clothes u8;
+                         //       data2: leftItemJnt u16 | rightItemJnt u16
+    AttentionChange = 6, // data: session entity id of the lock target
+                         //       (kInvalidPlayerId/0xFFFF = none or local-only)
 };
 
 enum class EnemyEventId : u8 {
@@ -234,23 +244,36 @@ struct WorldInitMsg {
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
-/// Per-frame pose sync (00-network.md §5 PlayerState). Only the first
-/// jointCount joints are meaningful; the rest are wire-zeroed.
+/// PlayerState semantic bits (02-player-state.md §2.1). Bit 5 (player-no-draw)
+/// is never transmitted — a hidden Link keeps sending its pose.
+constexpr u8 kPlayerStateFlagRiding = 1 << 0;        // mRideStatus != 0
+constexpr u8 kPlayerStateFlagInvuln = 1 << 1;        // mDamageTimer > 0
+constexpr u8 kPlayerStateFlagSubjectivity = 1 << 2;  // mProcID == PROC_SUBJECTIVITY
+constexpr u8 kPlayerStateFlagDowned = 1 << 3;        // downed/dead local life state
+constexpr u8 kPlayerStateFlagDemo = 1 << 4;          // mDemo.getDemoType() != 0
+
+/// Per-frame pose sync (00-network.md §5 PlayerState; Rev 3 D4 raw-matrix
+/// pose, M1). The sender's J3DMtxBuffer per-joint anmMtx table is copied
+/// verbatim so a puppet renders the exact blended/callback-baked pose with
+/// zero animation-state coupling (02-player-state.md §1.3). Only the first
+/// jointCount joints are meaningful; the rest are wire-zeroed so the wire
+/// size stays fixed.
 struct PlayerStateMsg {
     u8 playerId = kInvalidPlayerId;
-    u8 scene = 0;
-    u8 form = 0;         // human / wolf
-    u8 movementFlags = 0;
-    u8 jointCount = 0;
-    u8 cosmetics[3] = {};  // tunic / shield / boots
-    s8 itemAction = -1;
-    u8 invincibility = 0;
+    s8 roomNo = 0;             // current.roomNo — same-scene/room scoping
+    u8 form = 0;               // 0 human / 1 wolf (checkWolf())
+    u8 stateFlags = 0;         // kPlayerStateFlag_* bits
+    u8 jointCount = 0;         // 0..kMaxJoints (semantic-validated at parse)
+    u8 scaleFlags[(kMaxJoints + 7) / 8] = {};  // one bit per joint (setScaleFlag)
+    s16 yaw = 0;               // shape_angle.y
+    s16 pitch = 0;             // mBodyAngle.x
+    u16 faceBckIdx = 0;        // mFaceBckHeap.getIdx()
+    u16 faceBtpIdx = 0;        // mFaceBtpHeap.getIdx()
+    s16 faceFrame = 0;         // face frame ctrl frame
     u8 reserved = 0;
-    u32 stateFlags = 0;
-    Vec3f pos;
-    Vec3s16 rot;         // shape rotation
-    Vec3s16 upperLimbRot;
-    std::array<Vec3s16, kMaxJoints> joints;
+    Vec3f pos;                 // current.pos
+    Mtx baseTR;                // mpLinkModel->getBaseTRMtx() — exact world placement
+    Mtx joints[kMaxJoints];    // per-joint getAnmMtx(j), root-relative
 };
 
 struct PlayerEventMsg {
@@ -258,7 +281,8 @@ struct PlayerEventMsg {
     u8 eventId = 0;  // PlayerEventId
     u8 scene = 0;
     u8 reserved = 0;
-    u32 data = 0;  // event-specific payload (form id, mount actor id, ...)
+    u32 data = 0;   // event-specific payload (see PlayerEventId)
+    u32 data2 = 0;  // extended event payload (M1: item joints)
 };
 
 struct EnemySnapshotMsg {
@@ -518,6 +542,12 @@ constexpr u8 ChannelFor(MsgType type) {
 /// Serializes `msg` (header + payload) into `w`. Returns false on any
 /// bounds/type failure; the writer is left in an unspecified but safe state.
 bool SerializeMessage(const Message& msg, ByteWriter& w);
+
+/// Number of wire bytes for a PlayerState payload (header + scale + face +
+/// pos + baseTR + full kMaxJoints table).
+constexpr u16 PlayerStateWireSize() {
+    return 5 + (kMaxJoints + 7) / 8 + 10 + 1 + 12 + sizeof(Mtx) + kMaxJoints * sizeof(Mtx);
+}
 
 /// Parses a header + payload from `r`, validating the type and exact payload
 /// size. Returns false if the buffer is malformed or truncated.

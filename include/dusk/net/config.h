@@ -27,6 +27,9 @@ extern ConfigVar<u16> hostPort;
 extern ConfigVar<std::string> joinHost;
 /// Host: session name. Client: player name sent in JoinRequest.
 extern ConfigVar<std::string> sessionName;
+/// Session role: "host" (default; listens on hostPort and accepts joins) or
+/// "client" (connects to joinHost). Drives the M1 session lifecycle.
+extern ConfigVar<std::string> role;
 
 /// Registers every net CVar with the dusk config registry. Called from
 /// dusk::registerSettings() at startup.

@@ -18,7 +18,9 @@
 #include "dusk/net/transport.h"
 
 #include <array>
+#include <functional>
 #include <string>
+#include <utility>
 
 namespace dusk::net {
 
@@ -59,6 +61,14 @@ struct SessionConfig {
     StageInfo stage;
 };
 
+/// Game-side consumer of messages the session does not own (PlayerState,
+/// PlayerEvent, and later EnemySnapshot/combat/time). Invoked on the game
+/// thread inside Update()/HandleData with the already-parsed payload. On the
+/// host the handler runs for every inbound game message and the message is
+/// then relayed to every other joined peer (star topology, 00-network.md §2);
+/// on a client the handler runs for messages received from the host.
+using GameMessageHandler = std::function<void(MsgType type, const PayloadUnion& payload)>;
+
 class Session {
 public:
     Session() = default;
@@ -78,6 +88,18 @@ public:
     /// Drain the transport inbox and advance the state machine. Call once per
     /// game frame while the session is active.
     void Update();
+
+    /// Registers the game-side message consumer (M1: puppet apply on the
+    /// receiver; the sender path uses SendGameMessage). Only one handler is
+    /// held; pass {} to clear.
+    void SetGameMessageHandler(GameMessageHandler handler) { gameHandler_ = std::move(handler); }
+
+    /// Sends a game-side message (PlayerState/PlayerEvent/...) into the
+    /// session: on a client to the host (peer 0), on the host to every joined
+    /// peer (the host never receives its own sends back). Returns false when
+    /// the session is not in a playable state. The host relays inbound game
+    /// messages to the other peers automatically (HandleData).
+    bool SendGameMessage(MsgType type, const PayloadUnion& payload);
 
     [[nodiscard]] SessionRole role() const { return role_; }
     [[nodiscard]] SessionState state() const { return state_; }
@@ -106,6 +128,9 @@ private:
     void OnSessionEnd(const Message& msg);
     void OnWorldInit(const Message& msg);
 
+    // -- game-message routing (host relay, star topology) --
+    void ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion& payload);
+
     // -- send helpers --
     void SendToPeer(u8 peerIndex, MsgType type, const PayloadUnion& payload);
     void SendToAll(MsgType type, const PayloadUnion& payload, u8 exceptPlayer = kInvalidPlayerId);
@@ -126,6 +151,7 @@ private:
     const char* rejectReasonName_ = "";
     std::array<PlayerSlot, kMaxLocalPlayers> roster_{};
     std::array<PlayerId, Transport::kMaxPeers> peerToPlayer_{};
+    GameMessageHandler gameHandler_;
     StageInfo worldStage_;
     TimeInfo worldTime_;
     WeatherInfo worldWeather_;

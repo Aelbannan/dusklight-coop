@@ -192,21 +192,27 @@ Message MakeMessage(MsgType type) {
     case MsgType::PlayerState: {
         auto& p = m.payload.playerState;
         p.playerId = 2;
-        p.scene = 9;
+        p.roomNo = 9;
         p.form = 1;
-        p.movementFlags = 0x55;
+        p.stateFlags = kPlayerStateFlagRiding | kPlayerStateFlagDemo;
         p.jointCount = 40;
-        p.cosmetics[0] = 1;
-        p.cosmetics[1] = 2;
-        p.cosmetics[2] = 3;
-        p.itemAction = 4;
-        p.invincibility = 17;
-        p.stateFlags = 0xDEADBEEF;
+        for (u8 i = 0; i < sizeof(p.scaleFlags); ++i) {
+            p.scaleFlags[i] = static_cast<u8>(0xA0 + i);
+        }
+        p.yaw = 12345;
+        p.pitch = -678;
+        p.faceBckIdx = 0x1234;
+        p.faceBtpIdx = 0x5678;
+        p.faceFrame = 42;
+        p.reserved = 0xEE;
         p.pos = Vec3f{1.5f, -2.25f, 300.125f};
-        p.rot = Vec3s16{100, 200, 300};
-        p.upperLimbRot = Vec3s16{-1, -2, -3};
-        for (u8 i = 0; i < kMaxJoints; ++i) {
-            p.joints[i] = Vec3s16{static_cast<s16>(i), static_cast<s16>(i * 2), static_cast<s16>(-i)};
+        for (u8 r = 0; r < 3; ++r) {
+            for (u8 c = 0; c < 4; ++c) {
+                p.baseTR[r][c] = static_cast<f32>(r * 10 + c) + 0.5f;
+                for (u8 j = 0; j < kMaxJoints; ++j) {
+                    p.joints[j][r][c] = static_cast<f32>(j * 100 + r * 10 + c) + 0.25f;
+                }
+            }
         }
         break;
     }
@@ -216,6 +222,7 @@ Message MakeMessage(MsgType type) {
         p.eventId = static_cast<u8>(PlayerEventId::FormChange);
         p.scene = 4;
         p.data = 0xF0F0F0F0;
+        p.data2 = 0x0F0F0F0F;
         break;
     }
     case MsgType::EnemySnapshot: {
@@ -324,7 +331,7 @@ void RunProtocolChecks() {
     }
     Check(WireSize(MsgType::JoinAccept) == 1 + 3 + 20 + 8 + 4 + kMaxLocalPlayers * 36,
         "JoinAccept wire size");
-    Check(WireSize(MsgType::PlayerState) == 11 + 4 + 12 + 6 + 6 + kMaxJoints * 6,
+    Check(WireSize(MsgType::PlayerState) == PlayerStateWireSize(),
         "PlayerState wire size");
     Check(ChannelFor(MsgType::PlayerState) == kChannelUnreliable &&
               ChannelFor(MsgType::JoinRequest) == kChannelReliable,
@@ -692,6 +699,112 @@ void RunHandshakeDemo() {
     Check(host.sessionFrames() > 0, "host session pumped frames");
 }
 
+/// Game-message routing (M1 integration seam): clients send PlayerState/
+/// PlayerEvent into the session; the host applies them locally and relays
+/// them to every other joined peer (star topology, 00-network.md §2).
+void RunGameMessageDemo() {
+    std::printf("handshake: game-message routing (host relay)\n");
+    Demo demo;
+
+    Session host;
+    SessionConfig hostCfg;
+    hostCfg.port = 0;
+    hostCfg.name = "Relay Host";
+    hostCfg.maxPlayers = 3;
+    Check(host.StartHost(hostCfg), "relay host starts (Listening)");
+    demo.live.push_back(&host);
+    const u16 port = host.boundPort();
+
+    Session a;
+    SessionConfig aCfg;
+    aCfg.joinHost = "127.0.0.1";
+    aCfg.port = port;
+    aCfg.name = "Player A";
+    aCfg.version = kProtocolVersion;
+    Check(a.StartClient(aCfg), "relay client A starts");
+    demo.live.push_back(&a);
+    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000), "A joined");
+
+    Session b;
+    SessionConfig bCfg;
+    bCfg.joinHost = "127.0.0.1";
+    bCfg.port = port;
+    bCfg.name = "Player B";
+    bCfg.version = kProtocolVersion;
+    Check(b.StartClient(bCfg), "relay client B starts");
+    demo.live.push_back(&b);
+    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000), "B joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+        "host roster has 3 players");
+
+    int hostStates = 0;
+    int aStates = 0;
+    int bStates = 0;
+    int hostEvents = 0;
+    int aEvents = 0;
+    u8 hostStatePid = kInvalidPlayerId;
+    u8 bStatePid = kInvalidPlayerId;
+    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        if (type == MsgType::PlayerState) {
+            ++hostStates;
+            hostStatePid = p.playerState.playerId;
+        } else if (type == MsgType::PlayerEvent) {
+            ++hostEvents;
+        }
+    });
+    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        if (type == MsgType::PlayerState) {
+            ++aStates;
+        } else if (type == MsgType::PlayerEvent) {
+            ++aEvents;
+        }
+    });
+    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        if (type == MsgType::PlayerState) {
+            ++bStates;
+            bStatePid = p.playerState.playerId;
+        }
+    });
+
+    // A sends a PlayerState: the host consumes it locally and relays it to B.
+    PayloadUnion ps = {};
+    ps.playerState.playerId = a.selfId();
+    ps.playerState.pos = Vec3f{1.0f, 2.0f, 3.0f};
+    Check(a.SendGameMessage(MsgType::PlayerState, ps), "A sends PlayerState");
+    Check(demo.WaitFor([&] { return hostStates >= 1 && bStates >= 1; }, 10000),
+        "host consumed A's PlayerState and relayed it to B");
+    Check(hostStatePid == a.selfId() && bStatePid == a.selfId(),
+        "relayed PlayerState keeps the source playerId");
+    Check(aStates == 0, "A never receives its own PlayerState back");
+
+    // Host's own PlayerState reaches both clients.
+    PayloadUnion hostPs = {};
+    hostPs.playerState.playerId = 0;
+    Check(host.SendGameMessage(MsgType::PlayerState, hostPs), "host sends PlayerState");
+    Check(demo.WaitFor([&] { return aStates >= 1 && bStates >= 2; }, 10000),
+        "clients received the host's PlayerState");
+
+    // B's PlayerEvent is relayed to A (and consumed by the host).
+    PayloadUnion ev = {};
+    ev.playerEvent.playerId = b.selfId();
+    ev.playerEvent.eventId = static_cast<u8>(PlayerEventId::FormChange);
+    ev.playerEvent.data = 1;
+    Check(b.SendGameMessage(MsgType::PlayerEvent, ev), "B sends PlayerEvent");
+    Check(demo.WaitFor([&] { return hostEvents >= 1 && aEvents >= 1; }, 10000),
+        "host relayed B's PlayerEvent to A");
+
+    // SendGameMessage is refused outside a playable session state.
+    Session idle;
+    Check(!idle.SendGameMessage(MsgType::PlayerState, ps),
+        "SendGameMessage refused while idle");
+
+    for (Session* s : demo.live) {
+        s->Stop();
+    }
+    demo.live.clear();
+    host.Stop();
+}
+
 // ---------------------------------------------------------------------------
 // Peer-slot generation guard (deepseek M4)
 // ---------------------------------------------------------------------------
@@ -1014,6 +1127,7 @@ int main() {
     RunJoinAcceptValidationCheck();
     RunOversizedMetricCheck();
     RunHandshakeDemo();
+    RunGameMessageDemo();
 
     dusk::net::shutdown();
 
