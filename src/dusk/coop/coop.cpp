@@ -69,10 +69,27 @@ struct PuppetEntry {
     daAlink_c* actor = nullptr;
     bool hidden = false;
     u32 retryFrame = 0;
+    u32 createStartFrame = 0;  // g_frameCount when the create was issued (M3 deadline)
 };
 
 std::array<PuppetEntry, kMaxLocalPlayers> g_puppets{};
 bool g_createInFlight = false;
+
+// MAJOR M3: daAlink_c::create() phase 2 can spin on cPhs_INIT_e forever
+// (ground check over a cliff at the +120-unit spawn offset, a residual
+// ride/portal wait) without the process dying, so onLinkCreated never fires
+// and g_createInFlight would block every later spawn for ANY player. The
+// pump aborts a create that exceeds kCreateDeadlineFrames; after
+// kCreateDeadlineStrikes consecutive aborts it drops the spawn until the
+// player leaves or a create succeeds.
+constexpr u32 kCreateDeadlineFrames = 600;  // 10 s @ 60 Hz
+constexpr u8 kCreateDeadlineStrikes = 3;
+
+struct CreateLimiter {
+    u8 deadlineHits = 0;
+    bool dropped = false;  // 0xFFFFFFFF suppression window (persists across entry resets)
+};
+std::array<CreateLimiter, kMaxLocalPlayers> g_createLimiter{};
 
 // ---------------------------------------------------------------------------
 // Receive slots — latest PlayerState / PlayerEvent per remote player.
@@ -83,7 +100,11 @@ struct ReceiveSlot {
     bool hasEvent = false;
     net::PlayerStateMsg state{};
     net::PlayerEventMsg event{};
-    u32 lastFrame = 0;
+    // This machine's room when the remote last sent us PlayerState. Used by
+    // the sender gate (MAJOR M2): a remote's stale room can gate us silent
+    // forever; if OUR room changed since their last send, the gate opens so
+    // they learn our new room.
+    s8 myRoomAtLastRecv = -1;
 };
 
 std::array<ReceiveSlot, kMaxLocalPlayers> g_receive{};
@@ -192,7 +213,7 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         ReceiveSlot& slot = g_receive[st.playerId];
         slot.state = st;
         slot.hasState = true;
-        slot.lastFrame = g_frameCount;
+        slot.myRoomAtLastRecv = LocalRoomNo();
     } else if (type == net::MsgType::PlayerEvent) {
         const auto& ev = payload.playerEvent;
         if (ev.playerId >= kMaxLocalPlayers || ev.playerId == SelfIdChecked()) {
@@ -268,17 +289,20 @@ void SendEventsOnChange(const daAlink_c* link) {
         g_lastSentAttention = attention;
         SendPlayerEvent(net::PlayerEventId::AttentionChange, attention, 0);
     }
-
-    const s8 room = fopAcM_GetRoomNo(link);
-    if (room != g_lastSentRoom) {
-        g_lastSentRoom = room;
-        SendPlayerEvent(net::PlayerEventId::SceneChange, static_cast<u32>(static_cast<s32>(room)), 0);
-    }
+    // The room-change event is NOT sent here: sendPlayerState() sends it
+    // before the sender gate so a room change always propagates (MAJOR M2).
 }
 
 /// Sender gate (Anchor model): only send when at least one remote player is
 /// in (or unknown to be outside) our room — a client only renders peers in
 /// its own scene/room, so same-room peers are the only ones that can see us.
+///
+/// MAJOR M2 (mutual room-change deadlock): two players entering the same new
+/// room together hold each other's stale room, so `state.roomNo == myRoom`
+/// is false on both sides and both gates would stay shut forever (both
+/// puppets hidden). The gate therefore also opens when OUR room changed
+/// since the remote last sent us state — they cannot know where we are, so
+/// we send; one PlayerState with the new roomNo re-opens their gate.
 bool RemoteInOurRoom(const daAlink_c* link) {
     const s8 myRoom = fopAcM_GetRoomNo(link);
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
@@ -291,6 +315,9 @@ bool RemoteInOurRoom(const daAlink_c* link) {
         const ReceiveSlot& slot = g_receive[i];
         if (!slot.hasState || slot.state.roomNo == myRoom) {
             return true;
+        }
+        if (slot.myRoomAtLastRecv != myRoom) {
+            return true;  // our room changed since their last send
         }
     }
     return false;
@@ -333,8 +360,12 @@ void ApplyPendingEvent(daAlink_c* link, PlayerId pid) {
         break;
     }
     default:
-        // FormChange / SceneChange / AttentionChange are either carried per
-        // frame in PlayerState (form, room) or not used for rendering (M1).
+        // FormChange / AttentionChange are either carried per frame in
+        // PlayerState (form) or not used for rendering (M1). SceneChange is
+        // the M2 deadlock-breaker: it is sent on room change before the
+        // sender gate, but the receiving side's room actually rides in
+        // PlayerState.roomNo (updated when the matching PlayerState lands) —
+        // the event itself is not consumed for rendering.
         break;
     }
     slot.hasEvent = false;
@@ -548,8 +579,27 @@ void PumpSpawns() {
                 e.state = SpawnState::Requested;
                 e.pid = fpcM_ERROR_PROCESS_ID_e;
                 e.actor = nullptr;
+                e.createStartFrame = 0;
                 g_createInFlight = false;
                 e.retryFrame = g_frameCount + 30;
+            } else if (g_frameCount - e.createStartFrame >= kCreateDeadlineFrames) {
+                // MAJOR M3: the create is alive but stuck in phase 2 on
+                // cPhs_INIT_e — onLinkCreated will never fire and the
+                // in-flight lock would block every later spawn (for any
+                // player). Delete the stuck process; its destructor
+                // (onLinkDestroyed) clears this entry and releases the lock.
+                // Count the strike and drop the spawn after too many.
+                CoopLog.warn(
+                    "coop: puppet {} create stuck {} frames at cPhs_INIT (pid {}); aborting create",
+                    i, g_frameCount - e.createStartFrame, e.pid);
+                fopAcM_delete(e.pid);
+                CreateLimiter& lim = g_createLimiter[i];
+                if (++lim.deadlineHits >= kCreateDeadlineStrikes) {
+                    lim.dropped = true;
+                    CoopLog.warn(
+                        "coop: puppet {} create hit its deadline {} times; dropping spawn",
+                        i, lim.deadlineHits);
+                }
             }
             // else: still multi-phase; onLinkCreated flips it to Active.
         } else if (e.state == SpawnState::Active) {
@@ -580,6 +630,9 @@ void PumpSpawns() {
         }
         if (e.retryFrame > g_frameCount) {
             continue;
+        }
+        if (g_createLimiter[i].dropped) {
+            continue;  // M3: spawn was dropped after repeated deadline aborts
         }
         // Wait for the real Link's create to complete (its create and a
         // puppet create must never overlap on the shared bgWaitFlg).
@@ -616,6 +669,7 @@ void PumpSpawns() {
         }
         e.pid = pid;
         e.state = SpawnState::Creating;
+        e.createStartFrame = g_frameCount;
         g_createInFlight = true;
         CoopLog.info("coop: puppet spawn requested for player {} (pid {})", i, pid);
         break;  // serialized: one create in flight
@@ -647,6 +701,7 @@ void PumpSessionAndSpawns() {
             }
         } else if (e.state == SpawnState::Creating || e.state == SpawnState::Active) {
             CoopLog.info("coop: player {} left; despawning puppet", i);
+            g_createLimiter[i] = CreateLimiter{};  // a rejoin restarts the M3 deadline budget
             if (e.actor != nullptr) {
                 fopAcM_delete(e.actor);
             } else if (e.pid != fpcM_ERROR_PROCESS_ID_e) {
@@ -707,6 +762,12 @@ void EnsureSession() {
 // Public API
 // ---------------------------------------------------------------------------
 
+// sessionActive()/hostRole() are exported (coop.h) but currently have no
+// callers outside this TU (review m1 MINOR m5). They are retained for the M4
+// host-leave UX / LAN-discovery UI; keeping them behind the same
+// TARGET_PC-guarded vanilla attachment points costs nothing and avoids
+// churn. selfId()/remoteCount() ARE used (sender + modelCalc gate).
+
 bool sessionActive() {
     return SessionLive();
 }
@@ -761,6 +822,7 @@ void onLinkCreated(daAlink_c* link) {
             e.state = SpawnState::Active;
             e.hidden = true;  // until the first received state marks the room
             g_createInFlight = false;
+            g_createLimiter[pid] = CreateLimiter{};  // success clears M3 strike count
             CoopLog.info("coop: puppet for player {} active (pid {})", pid, e.pid);
         }
         return;
@@ -799,6 +861,19 @@ int puppetExecute(daAlink_c* link) {
 void sendPlayerState(daAlink_c* link) {
     if (link == nullptr || !SessionLive() || SelfIdChecked() >= kMaxLocalPlayers) {
         return;
+    }
+    // MAJOR M2: the room-change event is sent regardless of the sender gate.
+    // Two players entering the same new room together both hold the other's
+    // stale room; the gate (which now also opens on "my room changed since
+    // their last state") un-sticks this frame, and the reliable SceneChange
+    // below is the prompt that makes the receiving side's gate open as soon
+    // as the matching PlayerState lands. Reliable + tiny, so the cost of
+    // sending it while alone is nil.
+    const s8 roomNow = fopAcM_GetRoomNo(link);
+    if (roomNow != g_lastSentRoom) {
+        g_lastSentRoom = roomNow;
+        SendPlayerEvent(net::PlayerEventId::SceneChange,
+            static_cast<u32>(static_cast<s32>(roomNow)), 0);
     }
     if (!RemoteInOurRoom(link)) {
         return;
