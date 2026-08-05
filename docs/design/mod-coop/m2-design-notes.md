@@ -60,6 +60,48 @@ damage + strongest reaction (model on `local-coop-poc` `coop_combat.cpp`
 - Whitelist v1 (revised): `E_AI`, `E_HM`, `E_FB`, `E_DF`, `E_YC`, `E_MD`
   (drop `E_GS`), plus one boss.
 
+### 2.1 M2.5 correction — targeting-read coverage (D3) was overstated
+
+The original v1 claim that the whitelist was "per-type verified" covered only
+**combat/collider** surface (`mCcSph`/`mSph`/`m_ccCyl`/`defaultPowerType`), not
+the **targeting-read** coverage implementation-plan Rev3 §5 M2 / risk 5 requires.
+Two types read the player through `dComIfGp_getPlayer(0)` DIRECTLY (bypassing the
+context-routed inlines `fopAcM_searchPlayer*` / `daPy_getPlayer*ActorClass`), so
+host enemies aggroed slot 0 (the host's own Link), not the nearest remote player.
+M2.5 routes every such read through the targeting context
+(`fopAcM_getContextPlayer()` / `daPy_getPlayerActorClass()`, both →
+`currentTargetPlayer()`, which falls back to slot-0 outside a scope):
+
+- **E_YC** (Twilight Kargorok), 6 sites routed: `damage_check`,
+  `e_yc_f_fly`, `e_yc_hovering`, `e_yc_attack`, `e_yc_wolfbite`,
+  `daE_YC_Execute`. All under `#if TARGET_PC` with the original read in `#else`.
+  Pointer types preserved (`daPy_py_c*` via `daPy_getPlayerActorClass()`;
+  `fopAc_ac_c*` via `fopAcM_getContextPlayer()`) — no new cast noise.
+- **E_AI** (Armos), 3 sites routed: `player_way_check`, `pl_check` (the attack
+  LOS gate `other_bg_check(player)`), `damage_check`. `action()` already routed
+  `m_angleToPlayer`/`m_playerDist` via `fopAcM_searchPlayer*` in M2.
+- **E_HM / E_DF / E_MD / B_TN**: route cleanly already (their player reads go
+  through the context-routed inlines); no direct slot-0 reads remain.
+
+Post-M2.5 coverage: on TARGET_PC every direct read is routed — E_YC 6/6,
+E_AI 3/3 sites; E_HM/E_DF/E_MD/B_TN had none. The only remaining
+`dComIfGp_getPlayer(0)` occurrences in these TUs are the vanilla `#else`
+branches (never compiled on PC; grep finds them, the preprocessor does not).
+With a `ScopedEnemyTarget` pushed around the host enemy's execute, these reads
+resolve the nearest real player; outside any scope the fallback is slot 0, so
+the vanilla single-player path is untouched. D3 "enemies chase both players"
+is now met for the full v1 whitelist.
+
+### 2.2 M2.5 note — MAJOR-2 cullMtx shared-buffer fix
+
+`puppetExecute` originally wrote one `static thread_local Mtx` and passed it to
+`fopAcM_SetMtx`, which stores a POINTER — so with 2+ frozen puppets in a room all
+culled against the LAST puppet's matrix (E_AI/E_HM/E_DF/E_YC/E_MD set
+`fopAcStts_CULL_e`; culling is not disabled on PC). M2.5 gives each `EnemyEntry`
+its own `Mtx cullMtx` member (stable per-entry address) and points
+`actor->cullMtx = &entry->cullMtx` on every snapshot apply. Each puppet now culls
+on its own position.
+
 ## 3. Boss candidate: `B_TN` (Twilit Igniter, Lakebed Temple)
 
 - `cc_set` is public and self-contained (re-registers everything from model
