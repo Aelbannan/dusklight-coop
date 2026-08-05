@@ -1,6 +1,7 @@
 #include "dusk/settings.h"
 #include "dusk/config.hpp"
 #include "dusk/net/config.h"
+#include "dusk/net/module.h"
 #include <aurora/aurora.h>
 
 namespace dusk {
@@ -381,6 +382,11 @@ void registerSettings() {
 
     // Network co-op config (src/dusk/net/config.cpp).
     dusk::net::config::registerConfig();
+
+    // One-time ENet init in the game path (src/dusk/net/module.cpp): required
+    // on Windows (WSAStartup) before any transport host can be created. The
+    // matched teardown lives in dusk::config::shutdown().
+    dusk::net::initialize();
 }
 
 // Transient settings

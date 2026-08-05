@@ -1415,6 +1415,7 @@ set(DUSK_FILES
         include/helpers/endian_gx.hpp
         include/dusk/net/clock.h
         include/dusk/net/config.h
+        include/dusk/net/module.h
         include/dusk/net/protocol.h
         include/dusk/net/session.h
         include/dusk/net/transport.h
@@ -1508,6 +1509,7 @@ set(DUSK_FILES
         src/dusk/mouse.cpp
         src/dusk/net/clock.cpp
         src/dusk/net/config.cpp
+        src/dusk/net/module.cpp
         src/dusk/net/protocol.cpp
         src/dusk/net/session.cpp
         src/dusk/net/transport.cpp

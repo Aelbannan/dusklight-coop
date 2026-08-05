@@ -5,6 +5,7 @@
 
 #include "aurora/lib/logging.hpp"
 #include "dusk/io.hpp"
+#include "dusk/net/module.h"
 #include "dusk/settings.h"
 
 #include <algorithm>
@@ -637,6 +638,10 @@ void shutdown() {
     s_changeSubscriptions.clear();
     s_changeTokenNames.clear();
     s_activeChangeNotifications.clear();
+
+    // Matched teardown for dusk::net::initialize() (src/dusk/net/module.cpp).
+    // Runs after any session transports are stopped, before aurora_shutdown().
+    dusk::net::shutdown();
 }
 
 }  // namespace dusk::config

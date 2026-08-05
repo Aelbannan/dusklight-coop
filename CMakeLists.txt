@@ -735,6 +735,7 @@ endif ()
 if (NOT ANDROID AND NOT IOS AND NOT TVOS)
     add_executable(dusk_net_selftest
             src/dusk/net/selftest_main.cpp
+            src/dusk/net/module.cpp
             src/dusk/net/protocol.cpp
             src/dusk/net/transport.cpp
             src/dusk/net/session.cpp
