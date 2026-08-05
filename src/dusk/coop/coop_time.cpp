@@ -55,7 +55,10 @@ bool g_clientSeeded = false;
 // Last world state seeded FROM (session worldTime/weather). Kept separate
 // from g_time/g_weather so a stale JoinAccept/WorldInit copy can never
 // regress fresher TimeSync/WeatherChange receipts: re-seeding triggers only
-// when the session's world state itself changes (a join or roster-refresh).
+// when the session's world state itself changes (a join or roster-refresh),
+// and SeedTargets only adopts TIME when no TimeSync has been received yet
+// (glm MINOR 1 — an older reliable WorldInit can arrive after a fresher
+// unreliable TimeSync).
 TimeStateInfo g_worldSeenTime{};
 WeatherStateInfo g_worldSeenWeather{};
 
@@ -512,22 +515,36 @@ void SeedTargets() {
     const WeatherStateInfo& w = dusk::coop::worldWeather();
     g_worldSeenTime = t;
     g_worldSeenWeather = w;
-    g_time.time = t.time;
-    g_time.day = t.day;
-    g_time.rate = t.rate;
-    g_time.flags = t.flags;
-    g_time.valid = true;
+    // glm MINOR 1 (re-seed race): only adopt the session TIME when no
+    // TimeSync has been received yet — the first join, where
+    // JoinAccept/WorldInit are the only time source and (reliable, ordered)
+    // nothing can have raced ahead. Once a TimeSync has landed, a reliable
+    // roster-refresh WorldInit that was in flight when the TimeSync was sent
+    // (TimeSync is unreliable and can race ahead of the reliable WorldInit it
+    // precedes) may still arrive later; re-adopting its OLDER time would
+    // regress the clock by up to ~1 s on every 3rd+ join. Weather has no
+    // fresher per-frame stream (WeatherChange is reliable like WorldInit,
+    // same channel, ordered), so the g_weather re-seed below is always safe.
+    if (!g_time.valid) {
+        g_time.time = t.time;
+        g_time.day = t.day;
+        g_time.rate = t.rate;
+        g_time.flags = t.flags;
+        g_time.valid = true;
+        // Adopt into the save immediately so a mid-game joiner starts with
+        // the host's clock (task 6); a stage-load envcolor_init overwrite
+        // later in the same frame is re-clobbered by onStageCreate.
+        dComIfGs_setTime(t.time);
+        dComIfGs_setDate(t.day);
+    }
     g_weather.mode = w.mode;
     g_weather.thunder = w.thunder;
     g_weather.intensity = w.intensity;
     g_weather.colpat = w.colpat;
     g_weather.valid = true;
-    // Adopt into the save / sky immediately so a mid-game joiner starts with
-    // the host's clock and sky (task 6); a stage-load envcolor_init /
-    // dKyw_wether_init overwrite later in the same frame is re-clobbered by
-    // onStageCreate / the per-frame force.
-    dComIfGs_setTime(t.time);
-    dComIfGs_setDate(t.day);
+    // Adopt into the sky immediately so a mid-game joiner starts with the
+    // host's sky (task 6); a dKyw_wether_init overwrite later in the same
+    // frame is re-clobbered by onStageCreate / the per-frame force.
     PinWeather();
 }
 
@@ -690,7 +707,12 @@ void onGameFrame() {
     // (including the roster-refresh re-broadcast on later joins) re-seed the
     // replica targets. Comparison is against g_worldSeen*, never g_time/
     // g_weather — a re-broadcast of the SAME world state must not clobber
-    // fresher TimeSync/WeatherChange receipts.
+    // fresher TimeSync/WeatherChange receipts. The TIME part of a re-seed is
+    // gated inside SeedTargets on "no TimeSync received yet" (glm MINOR 1):
+    // at 1 Hz, a reliable WorldInit can race behind a fresher unreliable
+    // TimeSync and would otherwise hold the clock back by up to ~1 s on
+    // every 3rd+ join. Weather re-seeds unconditionally (reliable like
+    // WorldInit, no fresher stream).
     if (!g_clientSeeded) {
         g_clientSeeded = true;
         SeedTargets();
