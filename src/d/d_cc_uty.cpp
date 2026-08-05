@@ -370,6 +370,12 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
 }
 
 fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
+    // M2 v1: the equipment-multiplier block below reads slot-0 (the OWNER's
+    // Link here on the host), so a remote attacker's own equipment multipliers
+    // are NOT applied vs cc_at_check enemies. The owner reproduces the remote
+    // damage deterministically via at_power_check (pure on atp/mPowerType), so
+    // the hit is correct without the remote's multipliers. See
+    // docs/design/mod-coop/m2-design-notes.md §5.
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
     i_AtInfo->mpActor = at_power_check(i_AtInfo);
 
