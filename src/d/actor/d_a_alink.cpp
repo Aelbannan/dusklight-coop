@@ -4923,6 +4923,18 @@ int daAlink_c::create() {
     // start demos.
 #if TARGET_PC
     const BOOL isPuppetCreate = dusk::coop::isPuppet(this);
+    // Co-op (M1, BLOCKER B1): puppets read the host save's stage-entry mode
+    // (getLastSceneMode / getStartMode / dComIfGp_getStartStagePoint) through
+    // checkHorseStart/checkCanoeStart/checkBoarStart and startPoint. On a
+    // horse/canoe/boar/portal stage those conditions can stall the create on
+    // a ride actor or portal that already despawned for the host, or bind the
+    // puppet to the HOST's horse/canoe/boar. setStartProcInit's horse branch
+    // is skipped for puppets below, but the phase-2 wait must not hang on
+    // those host actors either — force the entry-dependent wait terms off for
+    // puppets so the create never spins on cPhs_INIT_e (M3).
+    const BOOL puppetSkipEntryWait = isPuppetCreate;
+#else
+    const BOOL puppetSkipEntryWait = FALSE;
 #endif
 
     if (!bgWaitFlg) {
@@ -5066,13 +5078,13 @@ int daAlink_c::create() {
 
     if (mLinkAcch.GetGroundH() == -G_CM3D_F_INF
         || (startMode == 14 && !dComIfG_Bgsp().ChkMoveBG(mLinkAcch.m_gnd))
-        || (startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))
+        || (!puppetSkipEntryWait && startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))
         || (mRideActorID != fpcM_ERROR_PROCESS_ID_e && !fopAcM_SearchByID(mRideActorID))
-        || (checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
-        || (checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
+        || (!puppetSkipEntryWait && checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
+        || (!puppetSkipEntryWait && checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
         || (startMode == 13 && (!mLinkAcch.ChkWaterHit() || mLinkAcch.m_wtr.GetHeight() < current.pos.y))
         || ((checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
-        || (isHorseStart && dComIfGp_getHorseActor() == NULL)
+        || (!puppetSkipEntryWait && isHorseStart && dComIfGp_getHorseActor() == NULL)
         )
     {
         return cPhs_INIT_e;
@@ -5125,17 +5137,24 @@ int daAlink_c::create() {
         mNowAnmPackUpper[0].setAnmTransform(underBck);
     }
 
-    int midna_prm = setStartProcInit();
+    int midna_prm;
 #if TARGET_PC
     if (isPuppetCreate) {
-        // No story init for puppets: setStartProcInit reads the host save
-        // (equip, damage, horse) and starts story procs/demos. The puppet
-        // spawns into a neutral wait and is driven purely by the received
-        // pose from the first PlayerState.
+        // No story init for puppets (BLOCKER B1): setStartProcInit reads the
+        // host save (equip, damage, horse) and starts story procs/demos — and
+        // on horse-start stages it repositions the HOST's horse
+        // (setHorsePosAndAngle) and force-rides the puppet onto it
+        // (initForceRideHorse, mRideAcKeep -> host horse). The puppet spawns
+        // into a neutral wait INSTEAD (procWaitInit, not in addition — the
+        // old code called both and never undid the horse side effects) and is
+        // driven purely by the received pose from the first PlayerState.
         midna_prm = 0;
         procWaitInit();
-    }
+    } else
 #endif
+    {
+        midna_prm = setStartProcInit();
+    }
     setSelectEquipItem(FALSE);
     setMatrix();
     allAnimePlay();
@@ -19495,7 +19514,19 @@ void daAlink_c::modelCalc(J3DModel* i_model) {
         // data, and changeModelDataDirect/changeWolf overwrite the per-joint
         // mtxCalc pointers — without this, the last Link to initialize would
         // drive every other Link's animation (risk 2).
-        if (i_model == mpLinkModel) {
+        //
+        // Gated on a live session with remotes (or this instance being a
+        // puppet) so single-player with net.enabled=false stays byte-for-byte
+        // vanilla (review m1 MINOR m2).
+        //
+        // The face/hat models (mpLinkFaceModel/mpLinkHatModel) are also
+        // loaded from the shared arc, but their calc is driven by direct
+        // setAnmMtx writes + the body's anmMtx(4) base, not the anm-blend
+        // calc — no drift has been observed in playtesting. Re-asserting
+        // their joint nodes was deferred; verify at 2+ players (MINOR m3).
+        if (i_model == mpLinkModel &&
+            (dusk::coop::remoteCount() > 0 || dusk::coop::isPuppet(this)))
+        {
             J3DModelData* md = i_model->getModelData();
             if (checkWolf()) {
                 md->getJointNodePointer(0)->setMtxCalc(field_0x1f20);
