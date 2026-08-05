@@ -1,6 +1,6 @@
 /**
  * \file selftest_main.cpp
- * M0 LAN handshake demo + protocol/cadence self-test.
+ * M0.5 LAN handshake demo + protocol/cadence/robustness self-test.
  *
  * Run (build dir):  ./dusk_net_selftest
  * Exits 0 on success, 1 on any failure.
@@ -8,6 +8,18 @@
  * Covers, in one process over loopback (127.0.0.1):
  *   - wire round-trip (serialize -> deserialize -> re-serialize) for all 15
  *     message types in 00-network.md §5, plus malformed-input rejection;
+ *   - wire determinism: identical logical messages serialize to identical
+ *     bytes (zero-init payload unions — deepseek M3);
+ *   - semantic validation: jointCount > kMaxJoints rejected at parse
+ *     (deepseek M5), forged JoinAccept (bad assignedPlayerId / roster)
+ *     rejected by the client session;
+ *   - ring policies: reliable ring overflow is an explicit failure (Send
+ *     returns false <=> counter bumps, no silent drops), snapshot rings
+ *     replace-newest under pressure (glm MAJOR-1/2);
+ *   - peer-slot generation guard: connect -> disconnect -> reconnect never
+ *     delivers a stale packet from the old connection (deepseek M4);
+ *   - duplicate JoinRequest guard: no second slot assigned (deepseek m2);
+ *   - oversized inbound packets are dropped and counted (GLM MINOR-5);
  *   - NetClock 60 Hz cadence (exact interval spacing, catch-up);
  *   - host/client session lifecycle: JoinRequest -> JoinAccept + WorldInit,
  *     JoinReject (version mismatch, session full), PlayerLeave relay, and
@@ -17,15 +29,18 @@
  *
  * The net module logs through aurora::Module; this standalone binary provides
  * the aurora logging globals (mirroring extern/aurora/lib/logging.cpp) so it
- * links without pulling the whole aurora runtime.
+ * links without pulling the whole aurora runtime. ENet init/deinit go through
+ * the same dusk::net::initialize()/shutdown() the game uses.
  */
 
 #include "dusk/net/clock.h"
+#include "dusk/net/module.h"
 #include "dusk/net/protocol.h"
 #include "dusk/net/session.h"
 
 #include <aurora/aurora.h>
 #include <aurora/lib/logging.hpp>
+#include <enet/enet.h>
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +89,42 @@ u64 NowMs() {
 }
 
 // ---------------------------------------------------------------------------
+// Pumping helpers (raw transports and sessions)
+// ---------------------------------------------------------------------------
+
+/// Polls a raw transport until a packet satisfying `pred` is observed or the
+/// deadline expires. Drains everything in between; returns true and fills
+/// `matched` on success.
+bool WaitPoll(Transport& t, const std::function<bool(const InboundPacket&)>& pred, u64 timeoutMs,
+              InboundPacket& matched) {
+    const u64 deadline = NowMs() + timeoutMs;
+    while (NowMs() < deadline) {
+        InboundPacket p;
+        while (t.Poll(p)) {
+            if (pred(p)) {
+                matched = p;
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+/// Pumps a session until it reaches `want` or the deadline expires.
+bool WaitSessionState(Session& s, SessionState want, u64 timeoutMs) {
+    const u64 deadline = NowMs() + timeoutMs;
+    while (NowMs() < deadline) {
+        s.Update();
+        if (s.state() == want) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Protocol round-trip
 // ---------------------------------------------------------------------------
 
@@ -82,7 +133,7 @@ const char* StageName() {
 }
 
 Message MakeMessage(MsgType type) {
-    Message m;
+    Message m = {};  // zero-init: deterministic wire bytes (deepseek M3)
     m.type = type;
     switch (type) {
     case MsgType::JoinRequest: {
@@ -130,8 +181,6 @@ Message MakeMessage(MsgType type) {
         p.stage.room = 3;
         p.stage.layer = 0;
         p.stage.point = 11;
-        p.playerStateCount = 2;
-        p.enemyStateCount = 4;
         for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
             auto& e = p.roster[i];
             e.playerId = i;
@@ -300,6 +349,168 @@ void RunProtocolChecks() {
         Message out;
         Check(!DeserializeMessage(r, out), "unknown message type rejected");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Wire determinism (zero-init payload unions)
+// ---------------------------------------------------------------------------
+
+/// Two independently-constructed logical messages must produce byte-identical
+/// wire output. Before M0.5 the payload union's default ctor did not zero its
+/// members, so unset reserved fields serialized stale stack garbage and two
+/// runs produced different bytes (deepseek M3).
+void RunDeterminismChecks() {
+    std::printf("wire: deterministic serialization (zero-init payload unions)\n");
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
+         ++t)
+    {
+        const auto type = static_cast<MsgType>(t);
+        const Message a = MakeMessage(type);
+        const Message b = MakeMessage(type);
+        u8 bufA[kMaxMessageSize];
+        u8 bufB[kMaxMessageSize];
+        ByteWriter wa(bufA, sizeof(bufA));
+        ByteWriter wb(bufB, sizeof(bufB));
+        const bool okA = SerializeMessage(a, wa);
+        const bool okB = SerializeMessage(b, wb);
+        Check(okA && okB && wa.size() == wb.size() && std::memcmp(bufA, bufB, wa.size()) == 0,
+            "identical logical message -> identical wire bytes");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Semantic validation on receive (deepseek M5)
+// ---------------------------------------------------------------------------
+
+void RunValidationChecks() {
+    std::printf("validation: semantic checks on receive\n");
+    {
+        // jointCount == kMaxJoints parses fine.
+        const Message ok = MakeMessage(MsgType::PlayerState);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(ok, w), "valid PlayerState serializes");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(DeserializeMessage(r, out), "PlayerState with jointCount == kMaxJoints parses");
+    }
+    {
+        // jointCount beyond the fixed table is rejected at parse, so M1's
+        // apply code can never index joints[jointCount] out of bounds.
+        Message bad = MakeMessage(MsgType::PlayerState);
+        bad.payload.playerState.jointCount = static_cast<u8>(kMaxJoints + 1);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(bad, w), "over-range jointCount still serializes (fixed layout)");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(!DeserializeMessage(r, out), "jointCount > kMaxJoints rejected at parse");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ring policies (glm MAJOR-1/MAJOR-2, deepseek M2/m4)
+// ---------------------------------------------------------------------------
+
+void RunRingPolicyChecks() {
+    std::printf("rings: channel-split overflow policies\n");
+    // Reliable ring: drop-newest on full is an EXPLICIT failure (Push false).
+    {
+        SPSCRing<int, 4> ring;  // capacity 4 -> holds 3 items
+        Check(ring.Push(1) && ring.Push(2) && ring.Push(3), "reliable ring accepts up to capacity-1");
+        Check(!ring.Push(4), "reliable ring Push fails explicitly when full");
+        Check(!ring.Push(5), "reliable ring stays full (still explicit)");
+        int v = 0;
+        Check(ring.Pop(v) && v == 1, "reliable ring FIFO intact after rejected pushes");
+        Check(ring.Pop(v) && v == 2 && ring.Pop(v) && v == 3, "reliable ring drains in order");
+        Check(!ring.Pop(v), "reliable ring empty at end");
+    }
+    // Snapshot ring: replace-newest on full keeps the freshest item.
+    {
+        SPSCRing<int, 4> ring;
+        Check(ring.Push(1) && ring.Push(2), "snapshot ring accepts while not full");
+        Check(ring.PushOrReplace(3) == false, "snapshot ring appends while not full");
+        Check(ring.PushOrReplace(4) == true, "snapshot ring replaces newest when full");
+        Check(ring.PushOrReplace(5) == true, "snapshot ring keeps replacing under sustained pressure");
+        int v = 0;
+        Check(ring.Pop(v) && v == 1, "replace-newest keeps the oldest item");
+        Check(ring.Pop(v) && v == 2 && ring.Pop(v) && v == 5,
+            "freshest item (5) wins over the replaced one (4)");
+        Check(!ring.Pop(v), "snapshot ring empty at end");
+    }
+}
+
+/// Floods the reliable and snapshot outbox rings over a real connection: the
+/// accounting must be exact (every rejected Send is counted — no silent
+/// drops) and snapshot Sends must never fail.
+void RunRingOverflowChecks() {
+    std::printf("rings: overflow accounting over real sockets\n");
+    Transport hostT;
+    Check(hostT.StartHost(0), "host transport up");
+    const u16 port = hostT.BoundPort();
+    Transport cliT;
+    Check(cliT.StartClient("127.0.0.1", port), "client transport up");
+    InboundPacket pkt;
+    Check(WaitPoll(hostT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+               10000, pkt),
+        "host sees the client connect");
+    Check(WaitPoll(cliT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+               10000, pkt),
+        "client sees the host connect");
+
+    u8 msg[16];
+    std::memset(msg, 0x5A, sizeof(msg));
+
+    // Reliable flood: Send()==false must imply the counter bumped, and vice
+    // versa — a reliable event is never silently dropped.
+    const u64 dropped0 = cliT.ReliableOutboundDropped();
+    u64 ok = 0;
+    u64 fail = 0;
+    for (int i = 0; i < 20000; ++i) {
+        if (cliT.Send(0, kChannelReliable, msg, sizeof(msg))) {
+            ++ok;
+        } else {
+            ++fail;
+        }
+    }
+    const u64 dropped1 = cliT.ReliableOutboundDropped();
+    Check(ok + fail == 20000, "every Send returned");
+    Check(fail == dropped1 - dropped0,
+        "every rejected reliable Send is counted (explicit failure, no silent drop)");
+    // Every accepted entry eventually reaches enet_peer_send on the socket
+    // thread (the counter is delivery-independent, so no host drain needed).
+    {
+        const u64 deadline = NowMs() + 15000;
+        while (NowMs() < deadline && cliT.PacketsSent() < ok) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(cliT.PacketsSent() == ok, "every accepted reliable Send was sent on the socket thread");
+    }
+
+    // Snapshot flood: replace-newest means Send never fails, and the ring
+    // replacement is visible on the producing side (the test thread outruns
+    // the socket thread's drain, so the 128-slot ring fills and replaces).
+    u64 snapOk = 0;
+    for (int i = 0; i < 20000; ++i) {
+        if (cliT.Send(0, kChannelUnreliable, msg, sizeof(msg))) {
+            ++snapOk;
+        }
+    }
+    Check(snapOk == 20000, "snapshot Send never fails (replace-newest)");
+    // (The HOST-side replace counter is not asserted: ENet drops unreliable
+    // packets at the sender once its queue exceeds the packet threshold, so
+    // only the freshest reach the host and the 128-slot inbox may never fill.)
+    {
+        const u64 deadline = NowMs() + 3000;
+        while (NowMs() < deadline && cliT.SnapshotOutboundReplaced() == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(cliT.SnapshotOutboundReplaced() > 0,
+            "snapshot outbox replaced stale entries under flood");
+    }
+
+    cliT.Stop();
+    hostT.Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -481,22 +692,330 @@ void RunHandshakeDemo() {
     Check(host.sessionFrames() > 0, "host session pumped frames");
 }
 
+// ---------------------------------------------------------------------------
+// Peer-slot generation guard (deepseek M4)
+// ---------------------------------------------------------------------------
+
+/// connect -> disconnect -> connect again must never deliver a stale packet
+/// from the old connection to the one that reuses the slot. Deterministic:
+/// A sends a snapshot while owning slot 0, then disconnects GRACEFULLY (a
+/// hard enet_host_destroy never notifies the peer — ENet destroys the socket
+/// before flushing the disconnect command, so the host would only free the
+/// slot after its ~5 s peer timeout). The generation bumps on release and
+/// reassign; A's stale snapshot is dropped at Poll time and D's fresh
+/// traffic flows normally.
+void RunGenerationGuardCheck() {
+    std::printf("generation: no stale delivery across peer-slot reuse\n");
+    Transport hostT;
+    Check(hostT.StartHost(0), "host transport up");
+    const u16 port = hostT.BoundPort();
+
+    // A: a raw ENet peer driven by the test thread, so the disconnect is a
+    // controlled, acknowledged handshake rather than a silent socket close.
+    ENetHost* aRaw = enet_host_create(nullptr, 1, 2, 0, 0);
+    Check(aRaw != nullptr, "raw A host up");
+    ENetAddress addr;
+    Check(enet_address_set_host(&addr, "127.0.0.1") == 0, "A resolves 127.0.0.1");
+    addr.port = port;
+    ENetPeer* aPeer = enet_host_connect(aRaw, &addr, 2, 0);
+    Check(aPeer != nullptr, "raw A connects");
+    {
+        // A must be serviced from the test thread AND the host transport
+        // polled in the same loop, or the ENet connect handshake stalls.
+        const u64 deadline = NowMs() + 10000;
+        bool hostSeen = false;
+        bool aSeen = false;
+        while (NowMs() < deadline && (!hostSeen || !aSeen)) {
+            ENetEvent ev;
+            while (enet_host_service(aRaw, &ev, 0) > 0) {
+                if (ev.type == ENET_EVENT_TYPE_CONNECT) {
+                    aSeen = true;
+                }
+            }
+            InboundPacket p;
+            while (hostT.Poll(p)) {
+                if (p.type == NetEventType::Connected && p.peerIndex == 0) {
+                    hostSeen = true;
+                }
+            }
+            if (!hostSeen || !aSeen) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        Check(hostSeen && aSeen, "A connected on both sides (host peer slot 0)");
+
+        // A sends a distinctive snapshot, then disconnects gracefully.
+        // Loopback ordering guarantees the host processes the snapshot before
+        // the disconnect.
+        const u8 stale[] = {'S', 'T', 'A', 'L', 'E'};
+        ENetPacket* sp = enet_packet_create(stale, sizeof(stale), 0);
+        Check(enet_peer_send(aPeer, kChannelUnreliable, sp) == 0, "A sends its snapshot");
+        enet_host_flush(aRaw);
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+        enet_peer_disconnect(aPeer, 0);
+        const u64 deadline2 = NowMs() + 10000;
+        bool aGone = false;
+        while (NowMs() < deadline2 && !aGone) {
+            ENetEvent ev;
+            while (enet_host_service(aRaw, &ev, 0) > 0) {
+                if (ev.type == ENET_EVENT_TYPE_DISCONNECT) {
+                    aGone = true;
+                    break;
+                }
+            }
+            if (!aGone) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        Check(aGone, "A's disconnect acknowledged (host released the slot)");
+    }
+    enet_host_destroy(aRaw);
+
+    // D reconnects onto the freed slot.
+    {
+        Transport dT;
+        Check(dT.StartClient("127.0.0.1", port), "client D transport connects (slot reuse)");
+        InboundPacket pkt;
+        Check(WaitPoll(hostT,
+                   [](const InboundPacket& p) {
+                       return p.type == NetEventType::Connected && p.peerIndex == 0;
+                   },
+                   10000, pkt),
+            "host sees D connected on the reused slot 0");
+        // Drain whatever remains: A's stale snapshot must have been dropped by
+        // the generation guard, never delivered as if from D.
+        bool sawStale = false;
+        InboundPacket p;
+        while (hostT.Poll(p)) {
+            if (p.type == NetEventType::Data) {
+                sawStale = sawStale || (p.size == 5 && std::memcmp(p.data, "STALE", 5) == 0);
+            }
+        }
+        Check(!sawStale, "host never delivered A's stale snapshot to D");
+        Check(hostT.InboundGenerationDropped() == 1,
+            "stale inbound packet dropped by the generation guard");
+
+        // D's fresh snapshot crosses the same slot fine.
+        const u8 fresh[] = {'F', 'R', 'E', 'S', 'H'};
+        Check(dT.Send(0, kChannelUnreliable, fresh, sizeof(fresh)), "D enqueues a fresh snapshot");
+        Check(WaitPoll(hostT,
+                   [](const InboundPacket& p) {
+                       return p.type == NetEventType::Data && p.size == 5 &&
+                              std::memcmp(p.data, "FRESH", 5) == 0;
+                   },
+                   10000, pkt),
+            "host receives D's fresh snapshot on the reused slot");
+        Check(pkt.peerIndex == 0 && pkt.channel == kChannelUnreliable,
+            "fresh snapshot attributed to peer slot 0 on the snapshot channel");
+        dT.Stop();
+    }
+    hostT.Stop();
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate JoinRequest guard (deepseek m2)
+// ---------------------------------------------------------------------------
+
+/// A raw protocol client sends JoinRequest twice from the same ENet peer; the
+/// host must not assign a second PlayerId.
+void RunDuplicateJoinCheck() {
+    std::printf("join: duplicate JoinRequest is ignored\n");
+    Session host;
+    SessionConfig hc;
+    hc.port = 0;
+    hc.name = "DupHost";
+    hc.maxPlayers = 4;
+    Check(host.StartHost(hc), "host session up (maxPlayers 4)");
+    const u16 port = host.boundPort();
+
+    // Raw transport "client" that speaks the wire protocol but not the
+    // session machine — it can send JoinRequest as many times as it likes.
+    Transport rogue;
+    Check(rogue.StartClient("127.0.0.1", port), "rogue client transport connects");
+    InboundPacket pkt;
+    Check(WaitPoll(rogue, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+               10000, pkt),
+        "rogue sees Connected");
+
+    Message jr = {};
+    jr.type = MsgType::JoinRequest;
+    jr.payload.joinRequest.version = kProtocolVersion;
+    jr.payload.joinRequest.requestedSlot = kAnySlot;
+    std::strncpy(jr.payload.joinRequest.name, "Rogue", sizeof(jr.payload.joinRequest.name) - 1);
+    u8 buf[kMaxMessageSize];
+    ByteWriter w(buf, sizeof(buf));
+    Check(SerializeMessage(jr, w), "rogue JoinRequest serializes");
+
+    Check(rogue.Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #1");
+    {
+        const u64 deadline = NowMs() + 10000;
+        bool joined = false;
+        while (NowMs() < deadline) {
+            host.Update();
+            if (PresentCountOf(host) == 2) {
+                joined = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(joined, "host assigned player 1 to the rogue (roster == 2)");
+    }
+    Check(host.roster()[1].present, "rogue holds PlayerId 1");
+
+    // Same peer sends JoinRequest again; the roster must not grow.
+    Check(rogue.Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #2");
+    {
+        const u64 before = PresentCountOf(host);
+        const u64 deadline = NowMs() + 1000;
+        while (NowMs() < deadline) {
+            host.Update();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        Check(PresentCountOf(host) == before, "duplicate JoinRequest ignored — no second slot");
+        Check(!host.roster()[2].present && !host.roster()[3].present, "slots 2/3 stay free");
+    }
+
+    rogue.Stop();
+    host.Stop();
+}
+
+// ---------------------------------------------------------------------------
+// JoinAccept semantic validation (deepseek M5)
+// ---------------------------------------------------------------------------
+
+/// A fake host (raw transport) forges JoinAccepts that the client session
+/// must reject: an out-of-range assignedPlayerId, and a valid id whose roster
+/// slot is not marked present.
+void RunJoinAcceptValidationCheck() {
+    std::printf("validation: forged JoinAccept rejected by the client session\n");
+    Transport fakeHost;
+    Check(fakeHost.StartHost(0), "fake host transport up");
+    const u16 port = fakeHost.BoundPort();
+    InboundPacket pkt;
+
+    for (int caseNo = 0; caseNo < 2; ++caseNo) {
+        Session c;
+        SessionConfig cfg;
+        cfg.joinHost = "127.0.0.1";
+        cfg.port = port;
+        cfg.name = "Victim";
+        Check(c.StartClient(cfg), "client session starts");
+        // Note: each case's client stops with a HARD transport teardown, so
+        // the fake host does not free the peer slot until ENet's ~5 s peer
+        // timeout — later cases land on higher slots. Always send to the
+        // slot captured from the connect event.
+        Check(WaitPoll(fakeHost, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+                   10000, pkt),
+            "fake host sees the client connect");
+        c.Update();  // let the client process its own Connected (sends JoinRequest, ignored)
+
+        Message accept = MakeMessage(MsgType::JoinAccept);
+        if (caseNo == 0) {
+            accept.payload.joinAccept.assignedPlayerId = 99;  // out of range
+        } else {
+            accept.payload.joinAccept.assignedPlayerId = 2;   // in range but...
+            for (auto& e : accept.payload.joinAccept.roster) {
+                e.present = 0;  // ...the roster does not back the assignment
+            }
+        }
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(accept, w), "forged JoinAccept serializes");
+        Check(fakeHost.Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
+            "fake host sends the forged JoinAccept");
+        Check(WaitSessionState(c, SessionState::Rejected, 10000),
+            caseNo == 0 ? "client rejected out-of-range assignedPlayerId"
+                        : "client rejected roster-not-present assignment");
+        Check(std::strstr(c.rejectReasonName(), "invalid") != nullptr,
+            "rejection reason is 'invalid join accept'");
+        c.Stop();
+    }
+    fakeHost.Stop();
+}
+
+// ---------------------------------------------------------------------------
+// Oversized inbound metric (GLM MINOR-5)
+// ---------------------------------------------------------------------------
+
+/// A raw ENet client (not the Transport — its Send() rejects oversized sizes
+/// at the API) pushes a packet larger than kMaxMessageSize; the host
+/// transport must drop it and count it as InboundOversized.
+void RunOversizedMetricCheck() {
+    std::printf("metric: oversized inbound packets counted\n");
+    Transport hostT;
+    Check(hostT.StartHost(0), "host transport up");
+    const u16 port = hostT.BoundPort();
+
+    ENetHost* raw = enet_host_create(nullptr, 1, 2, 0, 0);
+    Check(raw != nullptr, "raw ENet client host up");
+    ENetAddress addr;
+    Check(enet_address_set_host(&addr, "127.0.0.1") == 0, "raw client resolves 127.0.0.1");
+    addr.port = port;
+    ENetPeer* rawPeer = enet_host_connect(raw, &addr, 2, 0);
+    Check(rawPeer != nullptr, "raw client connects");
+    {
+        const u64 deadline = NowMs() + 10000;
+        bool connected = false;
+        while (NowMs() < deadline && !connected) {
+            ENetEvent ev;
+            while (enet_host_service(raw, &ev, 0) > 0) {
+                if (ev.type == ENET_EVENT_TYPE_CONNECT) {
+                    connected = true;
+                    break;
+                }
+            }
+            if (!connected) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        Check(connected, "raw client connected");
+    }
+
+    std::vector<u8> big(kMaxMessageSize + 1, 0xCD);
+    ENetPacket* bigPkt = enet_packet_create(big.data(), big.size(), ENET_PACKET_FLAG_RELIABLE);
+    enet_peer_send(rawPeer, 0, bigPkt);
+    enet_host_flush(raw);
+
+    InboundPacket p;
+    const u64 deadline = NowMs() + 10000;
+    while (NowMs() < deadline && hostT.InboundOversized() == 0) {
+        while (hostT.Poll(p)) {  // drain the connect event etc.
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Check(hostT.InboundOversized() >= 1, "oversized inbound packet dropped and counted");
+
+    enet_peer_reset(rawPeer);
+    enet_host_destroy(raw);
+    hostT.Stop();
+}
+
 }  // namespace
 
 int main() {
-    std::printf("dusk_net_selftest: M0 network layer (ENet %d.%d.%d)\n", ENET_VERSION_MAJOR,
+    std::printf("dusk_net_selftest: M0.5 network layer (ENet %d.%d.%d)\n", ENET_VERSION_MAJOR,
         ENET_VERSION_MINOR, ENET_VERSION_PATCH);
 
-    if (enet_initialize() != 0) {
+    // Same ENet init path the game uses (src/dusk/net/module.cpp).
+    if (!dusk::net::initialize()) {
         std::fprintf(stderr, "enet_initialize failed\n");
         return 1;
     }
 
     RunProtocolChecks();
+    RunDeterminismChecks();
+    RunValidationChecks();
+    RunRingPolicyChecks();
+    RunRingOverflowChecks();
     RunClockChecks();
+    RunGenerationGuardCheck();
+    RunDuplicateJoinCheck();
+    RunJoinAcceptValidationCheck();
+    RunOversizedMetricCheck();
     RunHandshakeDemo();
 
-    enet_deinitialize();
+    dusk::net::shutdown();
 
     if (g_failures == 0) {
         std::printf("PASS: all checks succeeded\n");
