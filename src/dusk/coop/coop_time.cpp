@@ -1,6 +1,7 @@
 #include "dusk/coop/coop_time.h"
 
 #include "dusk/coop/coop.h"
+#include "dusk/coop/coop_time_logic.h"
 
 #include "SSystem/SComponent/c_counter.h"
 #include "d/d_com_inf_game.h"
@@ -62,7 +63,12 @@ WeatherStateInfo g_worldSeenWeather{};
 // Host publisher state
 // ---------------------------------------------------------------------------
 
-net::NetClock g_syncClock;  // 1 Hz TimeSync cadence (wall clock)
+// 1 Hz TimeSync cadence (deepseek MAJOR 1): NetClock defaults to 60 Hz —
+// the old default made `oneSecondDue` fire every 16.7 ms, so TimeSync went
+// out 60×/s, 60× the documented cadence (00-network.md §6). AtRate(1) is a
+// true one-second gate; the immediate sends on stage/rate change are
+// unchanged (see TimeSyncDue in coop_time_logic.h).
+net::NetClock g_syncClock = net::NetClock::AtRate(1);
 char g_lastStage[kMaxStageNameLength] = {};
 bool g_stageSeeded = false;
 f32 g_lastPhase = 0.0f;  // observed phase (end of last sim tick)
@@ -263,9 +269,13 @@ void PublishHostState() {
     const f32 now = dComIfGs_getTime();
     const u16 day = dComIfGs_getDate();
     const u8 rate = HostRate();
+    // kTimeFlagDarkworld is informational today (deepseek M5): the client
+    // replica keys on its OWN dKy_darkworld_check() per 04 §5.5, not on this
+    // bit — it is carried for diagnostics and the future per-player forms
+    // subsystem (M4+).
     const u8 flags = dKy_darkworld_check() ? kTimeFlagDarkworld : 0;
 
-    const bool oneSecondDue = g_syncClock.Tick(NowUs());
+    const bool cadenceDue = g_syncClock.Tick(NowUs());
 
     const char* stage = dComIfGp_getStartStageName();
     const char* stageName = (stage != nullptr && stage[0] != '\0') ? stage : "";
@@ -307,8 +317,10 @@ void PublishHostState() {
 
     // 1 Hz absolute TimeSync; immediate on stage change and on rate
     // transitions (04 §4.1 — clients stop fast-forwarding / resume promptly
-    // instead of up to 1 s late).
-    if (oneSecondDue || stageChanged || rate != g_lastRate) {
+    // instead of up to 1 s late). The 1 Hz gate is real (deepseek MAJOR 1:
+    // NetClock::AtRate(1)); the immediate paths keep stage/rate changes
+    // landing within one frame.
+    if (TimeSyncDue(SyncDueInput{cadenceDue, stageChanged, rate, g_lastRate})) {
         SendTimeSync(now, day, rate, flags);
     }
     g_lastRate = rate;

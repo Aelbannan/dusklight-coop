@@ -35,6 +35,15 @@
  *     WeatherChange; a buggy client's time/weather messages are consumed but
  *     never relayed; JoinAccept/WorldInit carry the host's clock+sky so a
  *     mid-game joiner starts with the host's time of day and weather;
+ *   - M3.5 time/weather fix pass: the TimeSync cadence gate is a REAL 1 Hz
+ *     clock (deepseek MAJOR 1 — a 250 ms window emits <= 2 TimeSyncs, not the
+ *     ~15 the old 60 Hz NetClock produced, and the immediate stage/rate-
+ *     change sends still fire); the table-driven DeriveWeather decision
+ *     (04 §4.3, incl. the thunder-with-no-rain case, deepseek M1); the
+ *     defer-to-wire thunder policy (NextThunderMode); and the pond advance
+ *     table with the vanilla 1x fallback (deepseek M3). These test the
+ *     game-free core of coop_time.cpp (coop_time_logic.h) that the selftest
+ *     can link without the game;
  *   - clean shutdown: every transport thread joined, every ENet host
  *     destroyed (leak-free exit).
  *
@@ -44,6 +53,7 @@
  * the same dusk::net::initialize()/shutdown() the game uses.
  */
 
+#include "dusk/coop/coop_time_logic.h"
 #include "dusk/net/clock.h"
 #include "dusk/net/module.h"
 #include "dusk/net/protocol.h"
@@ -1246,6 +1256,233 @@ void RunM3TimeWeatherCheck() {
     host.Stop();
 }
 
+// ---------------------------------------------------------------------------
+// M3.5 fix pass — TimeSync 1 Hz cadence + the pure time/weather decisions
+// (deepseek MAJOR 1 / MINORs 1, 3; glm MINOR 1)
+// ---------------------------------------------------------------------------
+
+/// MAJOR 1 (deepseek): TimeSync was published at ~60 Hz because NetClock
+/// defaults to 60 Hz and PublishHostState used it as a "one second" gate.
+/// The fix is NetClock::AtRate(1) + the TimeSyncDue predicate; the checks
+/// below drive the REAL gate (NetClock::AtRate(1)) and the REAL decision
+/// functions (coop_time_logic.h — the game-free core of coop_time.cpp that
+/// this selftest can link without the game) over simulated 60 Hz sim frames.
+void RunM35TimeWeatherFixCheck() {
+    std::printf("m3.5: time/weather fix pass\n");
+    using namespace dusk::coop::timeweather;
+
+    // -- 1) The 1 Hz cadence gate (deepseek MAJOR 1) ----------------------
+    {
+        // A 250 ms window of 60 Hz sim frames: the 1 Hz gate fires zero
+        // ticks. The old 60 Hz clock fired ~15 — asserted below as the
+        // regression bound this check exists to catch.
+        NetClock sync = NetClock::AtRate(1);
+        int ticks250ms = 0;
+        for (u64 f = 0; f < 15; ++f) {  // 15 frames @ 60 Hz = 250 ms
+            if (sync.Tick(f * NetClock::kIntervalUs)) {
+                ++ticks250ms;
+            }
+        }
+        Check(ticks250ms <= 2, "TimeSync cadence: <= 2 ticks in a 250 ms window");
+
+        // The same 250 ms window on the DEFAULT 60 Hz clock — the old bug:
+        // proves the check would have caught MAJOR 1.
+        NetClock fast = NetClock();
+        int fastTicks250ms = 0;
+        for (u64 f = 0; f < 15; ++f) {
+            if (fast.Tick(f * NetClock::kIntervalUs)) {
+                ++fastTicks250ms;
+            }
+        }
+        Check(fastTicks250ms > 10, "regression guard: the old 60 Hz clock fires ~15x in 250 ms");
+
+        // Full seconds fire exactly once each (2 s at 60 Hz sim -> frames 60
+        // and 120; 120 is past the window, so 1 tick in 0..119 plus the 250 ms
+        // prefix already consumed). Continue the same clock: it must tick once
+        // per second and never burst.
+        int ticks1s = 0, ticks2s = 0;
+        for (u64 f = 15; f < 60; ++f) {
+            ticks1s += sync.Tick(f * NetClock::kIntervalUs) ? 1 : 0;
+        }
+        for (u64 f = 60; f < 120; ++f) {
+            ticks2s += sync.Tick(f * NetClock::kIntervalUs) ? 1 : 0;
+        }
+        Check(ticks1s == 0 && ticks2s == 1,
+            "TimeSync cadence: one tick at the 1 s boundary, none between");
+        Check(!sync.Tick(119 * NetClock::kIntervalUs + 1),
+            "TimeSync cadence: quiet just after the second boundary");
+
+        // Catch-up: a multi-second stall ticks ONCE (no burst).
+        NetClock gap = NetClock::AtRate(1);
+        Check(gap.Tick(0) == false && gap.Tick(4 * 1000000) == true && gap.Frame() == 1,
+            "TimeSync cadence: a 4 s stall catches up in a single tick");
+    }
+
+    // -- 2) The publish decision: 1 Hz cadence + immediate sends -----------
+    {
+        // Simulate 2 s of host publishing at 60 Hz with one stage change and
+        // one rate change injected. Cadence contributes the 1 s / 2 s sends;
+        // the stage/rate changes must still fire immediately (04 §4.1).
+        NetClock sync = NetClock::AtRate(1);
+        int sends = 0;
+        u8 rate = kTimeRateNormal, lastRate = kTimeRateNormal;
+        bool stageChanged = false;
+        for (u64 f = 0; f < 121; ++f) {  // 2 s + one frame: both boundaries
+            if (f == 30) {
+                stageChanged = true;  // stage load re-assert (04 §5.1)
+            }
+            if (f == 45) {
+                rate = kTimeRateFast;  // wolf-howl skip (04 §5.4)
+            }
+            if (TimeSyncDue(SyncDueInput{sync.Tick(f * NetClock::kIntervalUs),
+                                          stageChanged, rate, lastRate}))
+            {
+                ++sends;
+                lastRate = rate;
+            }
+            stageChanged = false;
+        }
+        // 2 cadence sends (f=60, f=120) + 1 stage + 1 rate.
+        Check(sends == 4, "TimeSync sends: 2 cadence + immediate stage + immediate rate");
+
+        // The immediate paths alone (no cadence ticks in a 250 ms window).
+        NetClock quiet = NetClock::AtRate(1);
+        int immediate = 0;
+        u8 r2 = kTimeRateNormal;
+        for (u64 f = 0; f < 15; ++f) {
+            const bool stage = (f == 5);
+            const u8 r = (f == 10) ? kTimeRateFrozen : r2;
+            if (TimeSyncDue(SyncDueInput{quiet.Tick(f * NetClock::kIntervalUs),
+                                          stage, r, r2}))
+            {
+                ++immediate;
+                r2 = r;
+            }
+        }
+        Check(immediate == 2, "immediate stage/rate sends still fire inside the 250 ms window");
+    }
+
+    // -- 3) DeriveWeather decision table (04 §4.3; deepseek M1) -----------
+    {
+        // (raincnt, snow, thunder, colpat, diceStage, diceMode) -> mode. The
+        // thunder-with-no-rain cases document that the MODE collapses to
+        // Cloudy/Clear while the wire still carries thunder=1 (NextThunderMode
+        // defers to that carried bit).
+        struct DeriveCase {
+            int raincnt, snow;
+            u8 thunder, colpat;
+            bool dice;
+            u8 diceMode;
+            u8 expectMode;
+            u16 expectIntensity;
+        };
+        const DeriveCase kCases[] = {
+            // clear / cloudy skies
+            {0, 0, 0, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 0},
+            {0, 0, 0, 1, false, 0, static_cast<u8>(WeatherMode::Cloudy), 0},
+            // thunder with no rain (deepseek M1): mode collapses, wire keeps
+            // thunder=1 + the palette colpat
+            {0, 0, 1, 1, false, 0, static_cast<u8>(WeatherMode::Cloudy), 0},
+            {0, 0, 1, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 0},
+            // rain branches (04 §4.3 table)
+            {40, 0, 0, 1, false, 0, static_cast<u8>(WeatherMode::RainLight), 40},
+            {250, 0, 0, 2, false, 0, static_cast<u8>(WeatherMode::RainHeavy), 250},
+            {10, 0, 1, 1, false, 0, static_cast<u8>(WeatherMode::ThunderLight), 10},
+            {250, 0, 1, 2, false, 0, static_cast<u8>(WeatherMode::ThunderHeavy), 250},
+            // colpat 0 + rain in the air = teardown drain
+            {5, 0, 0, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 5},
+            // snow stages
+            {0, 300, 0, 1, false, 0, static_cast<u8>(WeatherMode::Snow), 300},
+            // dice stages map the machine directly (F_SP108/121/127)
+            {0, 0, 0, 0, true, 0, static_cast<u8>(WeatherMode::Clear), 0},
+            {0, 0, 0, 0, true, 1, static_cast<u8>(WeatherMode::Cloudy), 0},
+            {40, 0, 0, 0, true, 2, static_cast<u8>(WeatherMode::RainLight), 40},
+            {0, 0, 0, 0, true, 4, static_cast<u8>(WeatherMode::ThunderLight), 0},
+            {250, 0, 0, 0, true, 5, static_cast<u8>(WeatherMode::ThunderHeavy), 250},
+            {0, 0, 1, 0, true, 6, static_cast<u8>(WeatherMode::Clear), 0},  // UNK6 -> Clear
+        };
+        bool ok = true;
+        bool thunderCarried = true;
+        for (const auto& c : kCases) {
+            SkyDeriveInput in;
+            in.raincnt = c.raincnt;
+            in.snowCount = c.snow;
+            in.thunder = c.thunder;
+            in.colpat = c.colpat;
+            in.diceStage = c.dice;
+            in.diceMode = c.diceMode;
+            const DeriveResult r = DeriveWeatherFrom(in);
+            ok = ok && r.mode == c.expectMode && r.intensity == c.expectIntensity;
+            thunderCarried = thunderCarried && (r.thunder == (c.thunder != 0 ? 1 : 0));
+        }
+        Check(ok, "DeriveWeather mode/intensity table (incl. thunder-with-no-rain)");
+        Check(thunderCarried,
+            "DeriveWeather always carries the live thunder bit on the wire");
+    }
+
+    // -- 4) Defer-to-wire thunder policy (deepseek M1) ---------------------
+    {
+        // (wireMode, wireThunder, current) -> next mMode.
+        struct ThunderCase {
+            u8 mode, wireThunder, current, expect;
+        };
+        const ThunderCase kCases[] = {
+            // Cloudy: only clear when the wire says 0 (the fix — a held
+            // synced thunder with a Cloudy derivation must keep flashing)
+            {static_cast<u8>(WeatherMode::Cloudy), 1, 1, 1},
+            {static_cast<u8>(WeatherMode::Cloudy), 1, 0, 1},
+            {static_cast<u8>(WeatherMode::Cloudy), 0, 1, 0},
+            {static_cast<u8>(WeatherMode::Cloudy), 0, 2, 0},
+            // Clear: clears a 1 only when the wire says 0; kytag00's 2
+            // survives
+            {static_cast<u8>(WeatherMode::Clear), 1, 1, 1},
+            {static_cast<u8>(WeatherMode::Clear), 0, 1, 0},
+            {static_cast<u8>(WeatherMode::Clear), 0, 2, 2},
+            // thunder modes force 1
+            {static_cast<u8>(WeatherMode::ThunderLight), 1, 0, 1},
+            {static_cast<u8>(WeatherMode::ThunderHeavy), 1, 2, 1},
+            // rain/snow never touch it (kytag00 area state survives)
+            {static_cast<u8>(WeatherMode::RainLight), 0, 2, 2},
+            {static_cast<u8>(WeatherMode::Snow), 1, 2, 2},
+        };
+        bool ok = true;
+        for (const auto& c : kCases) {
+            ok = ok && NextThunderMode(c.mode, c.wireThunder, c.current) == c.expect;
+        }
+        Check(ok, "ThunderPerMode defers to the wire (clears only when thunder==0)");
+    }
+
+    // -- 5) Pond advance table (deepseek M3) -------------------------------
+    {
+        struct RateCase {
+            u8 rate;
+            f32 daytime;
+            bool pond;
+            f32 expect;
+        };
+        const RateCase kCases[] = {
+            {kTimeRateNormal, 123.0f, false, 0.012f},
+            {kTimeRateFast, 100.0f, false, 1.0f},
+            {kTimeRateFrozen, 100.0f, false, 0.0f},
+            // pond windows stay exact (vanilla triple/double)
+            {kTimeRatePond2x, 300.0f, true, 0.036f},
+            {kTimeRatePond2x, 45.0f, true, 0.036f},
+            {kTimeRatePond2x, 150.0f, true, 0.024f},
+            {kTimeRatePond2x, 180.0f, true, 0.024f},
+            // fallback outside the windows is vanilla 1x (the fix; was 2x)
+            {kTimeRatePond2x, 100.0f, true, 0.012f},
+            {kTimeRatePond2x, 240.0f, true, 0.012f},
+            // rate 3 on a non-pond stage (shouldn't happen; same 1x fallback)
+            {kTimeRatePond2x, 100.0f, false, 0.012f},
+        };
+        bool ok = true;
+        for (const auto& c : kCases) {
+            ok = ok && RatePerTick(c.rate, c.daytime, c.pond) == c.expect;
+        }
+        Check(ok, "AdvanceStep pond table (exact windows, vanilla 1x fallback)");
+    }
+}
+
 /// slot after its ~5 s peer timeout). The generation bumps on release and
 /// reassign; A's stale snapshot is dropped at Poll time and D's fresh
 /// traffic flows normally.
@@ -1562,6 +1799,7 @@ int main() {
     RunGameMessageDemo();
     RunM2RelayPolicyCheck();
     RunM3TimeWeatherCheck();
+    RunM35TimeWeatherFixCheck();
 
     dusk::net::shutdown();
 
