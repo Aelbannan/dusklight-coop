@@ -55,7 +55,13 @@ static int daE_YC_Draw(e_yc_class* i_this) {
 }
 
 static void damage_check(e_yc_class* i_this) {
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context
+    // (slot-0 fallback outside the scope).
+    daPy_py_c* player = daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#endif
     i_this->mCcStts.Move();
     if (i_this->mCcDisableTimer == 0 && i_this->mCcSph.ChkTgHit()) {
         i_this->mAtInfo.mpCollider = i_this->mCcSph.GetTgHitObj();
@@ -189,7 +195,12 @@ static void e_yc_fly(e_yc_class* i_this) {
 }
 
 static void e_yc_f_fly(e_yc_class* i_this) {
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
+    fopAc_ac_c* player = fopAcM_getContextPlayer();
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     int frame = i_this->mpMorf->getFrame();
     f32 delta_x, delta_y, delta_z;
 
@@ -270,7 +281,12 @@ static void e_yc_f_fly(e_yc_class* i_this) {
 }
 
 static void e_yc_hovering(e_yc_class* i_this) {
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
+    fopAc_ac_c* player = fopAcM_getContextPlayer();
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     f32 target_speed = 0.0f;
 
     switch (i_this->mMode) {
@@ -308,7 +324,12 @@ static void e_yc_hovering(e_yc_class* i_this) {
 }
 
 static void e_yc_attack(e_yc_class* i_this) {
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
+    fopAc_ac_c* player = fopAcM_getContextPlayer();
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz delta;
     fopAc_ac_c* base_rdy = fopAcM_SearchByID(i_this->mRiderID);
     e_rdy_class* rider = (e_rdy_class*) base_rdy;
@@ -428,7 +449,12 @@ static void e_yc_attack(e_yc_class* i_this) {
 
 static void e_yc_wolfbite(e_yc_class* i_this) {
     fopAc_ac_c* _this = static_cast<fopAc_ac_c*>(i_this);
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
+    daPy_py_c* player = daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#endif
     e_rdy_class* rider = (e_rdy_class*) fopAcM_SearchByID(i_this->mRiderID);
 
     int frame = i_this->mpMorf->getFrame();
@@ -613,7 +639,12 @@ static void action(e_yc_class* i_this) {
 }
 
 static int daE_YC_Execute(e_yc_class* i_this) {
+#if TARGET_PC
+    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
+    fopAc_ac_c* player = fopAcM_getContextPlayer();
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz vec1, vec2;
 
     f32 dist_x = -103171.0f;
