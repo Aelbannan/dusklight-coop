@@ -330,13 +330,36 @@ set(DUSK_COPYRIGHT "Copyright (C) Twilit Realm contributors")
 source_group("dolzel" FILES ${DOLZEL_FILES} ${Z2AUDIOLIB_FILES} ${REL_FILES})
 source_group("dusklight" FILES ${DUSK_FILES} ${DUSK_HTTP_BACKEND_FILES})
 
+# Vendored ENet (third_party/enet, ENet 1.3.x, zlib license) — static library
+# for the network co-op transport (docs/design/mod-coop/00-network.md §1).
+# Vendored source rather than FetchContent so the build works offline.
+set(ENET_SOURCES
+        third_party/enet/callbacks.c
+        third_party/enet/compress.c
+        third_party/enet/host.c
+        third_party/enet/list.c
+        third_party/enet/packet.c
+        third_party/enet/peer.c
+        third_party/enet/protocol.c)
+if (WIN32)
+    list(APPEND ENET_SOURCES third_party/enet/win32.c)
+else ()
+    list(APPEND ENET_SOURCES third_party/enet/unix.c)
+endif ()
+add_library(enet STATIC ${ENET_SOURCES})
+target_include_directories(enet PUBLIC third_party/enet/include)
+set_target_properties(enet PROPERTIES FOLDER "dusklight")
+if (WIN32)
+    target_link_libraries(enet PUBLIC Ws2_32)
+endif ()
+
 include(cmake/GameABIConfig.cmake)
 
 find_package(Threads REQUIRED)
 set(GAME_COMPILE_DEFS DUSK_BUILDING_GAME=1)
 set(GAME_LIBS aurora::core aurora::gx aurora::gd aurora::si aurora::vi aurora::pad aurora::mtx aurora::os aurora::dvd
     aurora::card freeverb cxxopts::cxxopts absl::flat_hash_map nlohmann_json::nlohmann_json TracyClient fmt::fmt
-    Threads::Threads zstd::libzstd dusklight_game_headers)
+    Threads::Threads zstd::libzstd dusklight_game_headers enet)
 if (DUSK_HAS_FUNCHOOK)
     list(APPEND GAME_LIBS funchook-static)
 endif ()

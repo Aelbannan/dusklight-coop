@@ -1,5 +1,6 @@
 #include "dusk/settings.h"
 #include "dusk/config.hpp"
+#include "dusk/net/config.h"
 #include <aurora/aurora.h>
 
 namespace dusk {
@@ -377,6 +378,9 @@ void registerSettings() {
     Register(g_userSettings.actionBindings.turboSpeedButton[1]);
     Register(g_userSettings.actionBindings.turboSpeedButton[2]);
     Register(g_userSettings.actionBindings.turboSpeedButton[3]);
+
+    // Network co-op config (src/dusk/net/config.cpp).
+    dusk::net::config::registerConfig();
 }
 
 // Transient settings

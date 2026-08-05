@@ -1413,6 +1413,11 @@ set(DOLPHIN_FILES
 set(DUSK_FILES
         include/helpers/batch.hpp
         include/helpers/endian_gx.hpp
+        include/dusk/net/clock.h
+        include/dusk/net/config.h
+        include/dusk/net/protocol.h
+        include/dusk/net/session.h
+        include/dusk/net/transport.h
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/OSContext.cpp
         src/dusk/OSMutex.cpp
@@ -1501,6 +1506,11 @@ set(DUSK_FILES
         src/dusk/mods/svc/ui.cpp
         src/dusk/mods/svc/ui.hpp
         src/dusk/mouse.cpp
+        src/dusk/net/clock.cpp
+        src/dusk/net/config.cpp
+        src/dusk/net/protocol.cpp
+        src/dusk/net/session.cpp
+        src/dusk/net/transport.cpp
         src/dusk/scope_guard.hpp
         src/dusk/settings.cpp
         src/dusk/speedrun.cpp
