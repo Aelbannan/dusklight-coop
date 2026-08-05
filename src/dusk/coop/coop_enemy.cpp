@@ -283,6 +283,11 @@ struct EnemyEntry {
     // enemy's hit data).
     dCcD_Sph synthAt;
     dCcD_Stts synthStts;
+    // Per-entry cullMtx (M2.5, MAJOR-2 fix): fopAcM_SetMtx stores a POINTER,
+    // so a shared static/thread_local buffer would make every frozen puppet
+    // cull against the LAST puppet's matrix. A stable per-entry address keeps
+    // each puppet's frustum check on its own position.
+    Mtx cullMtx{};
     EnemyEntry() = default;
     EnemyEntry(const EnemyEntry&) = delete;
     EnemyEntry& operator=(const EnemyEntry&) = delete;
@@ -929,12 +934,13 @@ bool puppetExecute(fopAc_ac_c* actor) {
     // old = current after apply (physics/interp consumers see a coherent
     // delta); cullMtx from current.pos (plan risk 10: stale cullMtx when
     // fopAcStts_CULL_e is set on the profile status word — E_AI/E_HM/E_DF/
-    // E_YC/E_MD all set it, and a frozen puppet never refreshes it).
+    // E_YC/E_MD all set it, and a frozen puppet never refreshes it). Stored
+    // in the per-entry member so multi-puppet rooms each cull on their own
+    // matrix (M2.5, MAJOR-2).
     actor->old = actor->current;
-    static thread_local Mtx s_puppetCullMtx;
     mDoMtx_stack_c::transS(actor->current.pos);
-    std::memcpy(s_puppetCullMtx, mDoMtx_stack_c::get(), sizeof(Mtx));
-    fopAcM_SetMtx(actor, s_puppetCullMtx);
+    std::memcpy(e->cullMtx, mDoMtx_stack_c::get(), sizeof(Mtx));
+    fopAcM_SetMtx(actor, e->cullMtx);
     return true;
 }
 
