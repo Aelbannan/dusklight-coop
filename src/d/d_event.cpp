@@ -16,6 +16,7 @@
 #if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_event.h"
 #include "dusk/coop/coop_render.h"
@@ -173,17 +174,33 @@ void dEvt_control_c::setParam(dEvt_order_c* order) {
     // dialogue attribution.  Falls back to P1 if the owner actor is
     // unavailable.  Normal TALK events and unrelated OTHER events are
     // not affected.
+    bool targetIsJoinedLink = false;
+    if (order->mpTargetActor != nullptr &&
+        fopAcM_GetName(order->mpTargetActor) == fpcNm_ALINK_e) {
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (dusk::coop::isJoined(pid) &&
+                dusk::coop::getPlayerActor(pid) == order->mpTargetActor) {
+                targetIsJoinedLink = true;
+                break;
+            }
+        }
+    }
     if (order->mEventType == dEvt_type_OTHER_e &&
-        dusk::coop::render::isConversationPresentationActive() &&
-        dusk::coop::event::isTalkStyleEvent(order->mEventId)) {
-        const dusk::coop::ViewId owner =
-            dusk::coop::render::getConversationPresentationOwner();
-        fopAc_ac_c* ownerActor = dusk::coop::getPlayerActor(owner);
+        (targetIsJoinedLink ||
+         (dusk::coop::render::isConversationPresentationActive() &&
+          dusk::coop::event::isTalkStyleEvent(order->mEventId)))) {
+        fopAc_ac_c* ownerActor = targetIsJoinedLink ? order->mpTargetActor : nullptr;
+        if (ownerActor == nullptr &&
+            dusk::coop::render::isConversationPresentationActive()) {
+            const dusk::coop::ViewId owner =
+                dusk::coop::render::getConversationPresentationOwner();
+            ownerActor = dusk::coop::getPlayerActor(owner);
+        }
         if (ownerActor != nullptr) {
             setPt1(ownerActor);
             dusk::coop::debug::logInfo(
-                "setParam: talk-style OTHER event Pt1 -> P%u Link (was tag)",
-                static_cast<unsigned>(owner));
+                "setParam: talk-style OTHER event Pt1 -> selected Link");
         } else {
             setPt1(dComIfGp_getPlayer(0));
             dusk::coop::debug::logInfo(
@@ -278,6 +295,26 @@ int dEvt_control_c::commonCheck(dEvt_order_c* order, u16 condition, u16 command)
         setParam(order);
         return 1;
     }
+
+#if TARGET_PC
+    // A secondary Link can place a direct TALK order before its generic actor
+    // execute has refreshed the transient CANTALK condition. The Link already
+    // passed its interaction checks, so accept the order when the NPC target
+    // is talkable and the request actor is a joined Link.
+    if (order->mEventType == dEvt_type_TALK_e &&
+        actor1 != nullptr && actor2 != nullptr &&
+        fopAcM_GetName(actor1) == fpcNm_ALINK_e &&
+        dusk::coop::alink::ownerOf(static_cast<daAlink_c*>(actor1)) <
+            dusk::coop::MAX_LOCAL_PLAYERS &&
+        dusk::coop::isJoined(
+            dusk::coop::alink::ownerOf(static_cast<daAlink_c*>(actor1))) &&
+        actor2->eventInfo.chkCondition(condition)) {
+        actor1->eventInfo.setCommand(command);
+        actor2->eventInfo.setCommand(command);
+        setParam(order);
+        return 1;
+    }
+#endif
 
     return 0;
 }
@@ -493,8 +530,20 @@ int dEvt_control_c::demoCheck(dEvt_order_c* order) {
         // Resolve initiator from requesting actor (if it's a Link),
         // otherwise fall back to the closest joined player to the
         // target actor.  Preserve P1 flow authority by default.
-        dusk::coop::PlayerId initiator = 0;
-        if (actor1 != nullptr) {
+        dusk::coop::PlayerId initiator = dusk::coop::alink::DIALOGUE_PLAYER_NONE;
+        // Location tags place the triggering Link in Pt2/actor2. Prefer that
+        // exact actor before any distance fallback; actor1 is commonly the
+        // tag itself and therefore cannot identify the player who triggered
+        // the event.
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (dusk::coop::isJoined(pid) &&
+                dusk::coop::getPlayerActor(pid) == actor2) {
+                initiator = pid;
+                break;
+            }
+        }
+        if (initiator == dusk::coop::alink::DIALOGUE_PLAYER_NONE && actor1 != nullptr) {
             for (dusk::coop::PlayerId pid = 0;
                  pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
                 if (dusk::coop::isJoined(pid) &&
@@ -504,7 +553,7 @@ int dEvt_control_c::demoCheck(dEvt_order_c* order) {
                 }
             }
         }
-        if (initiator == 0 && actor2 != nullptr) {
+        if (initiator == dusk::coop::alink::DIALOGUE_PLAYER_NONE && actor2 != nullptr) {
             f32 closestDist = 1e9f;
             for (dusk::coop::PlayerId pid = 0;
                  pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {

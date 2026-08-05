@@ -1305,7 +1305,11 @@ void daPy_aramBufferCheck(void* i_buffer, u32 i_size);
 int daPy_addCalcShort(s16* i_value, s16 i_target, s16 i_scale, s16 i_maxStep, s16 i_minStep);
 
 inline daPy_py_c* daPy_getPlayerActorClass() {
+#if TARGET_PC
+    return dComIfGp_getLinkPlayer();
+#else
     return (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 }
 
 inline daPy_py_c* daPy_getLinkPlayerActorClass() {

@@ -133,6 +133,10 @@ int daTag_EvtMsg_c::Execute() {
                     }
                 }
                 if (best != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+                    // Preserve the player selected by this tag for the
+                    // following vanilla event order.  The event manager has
+                    // no ambient per-Link context when tags execute.
+                    dusk::coop::alink::rememberDialogueTriggerPlayer(this, best);
                     if (getProcType() == 0) {
                         mEventID = dComIfGp_getEventManager().getEventIdx(this, "DEFAULT_EVT_TALK", 0xFF);
                         fopAcM_orderOtherEventId(this, mEventID, 0xFF, 0xFFFF, 0, 1);

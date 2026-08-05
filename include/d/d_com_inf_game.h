@@ -32,6 +32,7 @@
 #include "dusk/coop/coop_resource_bridge.h"
 #include "dusk/coop/coop_forms_bridge.h"
 #include "dusk/coop/coop_horse_bridge.h"
+#include "dusk/coop/coop_context.h"
 #include "dusk/coop/coop_player_bridge.h"
 #endif
 
@@ -4559,28 +4560,47 @@ inline void dComIfGp_setMesgCameraInfoActor(fopAc_ac_c* param_1, fopAc_ac_c* par
                                                 param_6, param_7, param_8, param_9, param_10);
 }
 
+inline int dComIfGp_contextPlayerIndex(int requested) {
+#if TARGET_PC
+    // Vanilla callers use slot 0 as "the current Link". Preserve explicit
+    // indexed accesses used by co-op systems and remap only that legacy form
+    // while a player context is active.
+    return (requested == 0 && dusk::coop::hasScopedContext())
+        ? dusk::coop::playerContextIndexBridge()
+        : requested;
+#else
+    return requested;
+#endif
+}
+
 inline u32 dComIfGp_checkPlayerStatus0(int param_0, u32 flag) {
-    return g_dComIfG_gameInfo.play.checkPlayerStatus(param_0, 0, flag);
+    return g_dComIfG_gameInfo.play.checkPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 0, flag);
 }
 
 inline u32 dComIfGp_checkPlayerStatus1(int param_0, u32 flag) {
-    return g_dComIfG_gameInfo.play.checkPlayerStatus(param_0, 1, flag);
+    return g_dComIfG_gameInfo.play.checkPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 1, flag);
 }
 
 inline void dComIfGp_setPlayerStatus0(int param_0, u32 flag) {
-    g_dComIfG_gameInfo.play.setPlayerStatus(param_0, 0, flag);
+    g_dComIfG_gameInfo.play.setPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 0, flag);
 }
 
 inline void dComIfGp_setPlayerStatus1(int param_0, u32 flag) {
-    g_dComIfG_gameInfo.play.setPlayerStatus(param_0, 1, flag);
+    g_dComIfG_gameInfo.play.setPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 1, flag);
 }
 
 inline void dComIfGp_clearPlayerStatus0(int param_0, u32 flag) {
-    g_dComIfG_gameInfo.play.clearPlayerStatus(param_0, 0, flag);
+    g_dComIfG_gameInfo.play.clearPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 0, flag);
 }
 
 inline void dComIfGp_clearPlayerStatus1(int param_0, u32 flag) {
-    g_dComIfG_gameInfo.play.clearPlayerStatus(param_0, 1, flag);
+    g_dComIfG_gameInfo.play.clearPlayerStatus(
+        dComIfGp_contextPlayerIndex(param_0), 1, flag);
 }
 
 inline void dComIfGp_setCurrentWindow(dDlst_window_c* i_window) {

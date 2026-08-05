@@ -83,8 +83,7 @@ int daTagMmsg_c::execute() {
     // first valid player found.
     {
         constexpr size_t MAX_PLAYERS = dusk::coop::MAX_LOCAL_PLAYERS;
-        bool set = false;
-        for (dusk::coop::PlayerId i = 0; i < MAX_PLAYERS && !set; ++i) {
+        for (dusk::coop::PlayerId i = 0; i < MAX_PLAYERS; ++i) {
             if (!dusk::coop::isJoined(i)) {
                 continue;
             }
@@ -94,13 +93,12 @@ int daTagMmsg_c::execute() {
             }
             if ((current.pos.y <= player->current.pos.y) &&
                 (field_0x578 >= player->current.pos.y) &&
-                (fopAcM_searchPlayerDistanceXZ2(this) < field_0x574) &&
+                (fopAcM_searchActorDistanceXZ2(this, player) < field_0x574) &&
                 (field_0x570 == 0x3FF ||
                  dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[field_0x570])) &&
                 (field_0x568 == 0xFF || fopAcM_isSwitch(this, field_0x568)))
             {
-                daPy_getLinkPlayerActorClass()->setMidnaMsgNum(this, shape_angle.z);
-                set = true;
+                static_cast<daPy_py_c*>(player)->setMidnaMsgNum(this, shape_angle.z);
             }
         }
     }

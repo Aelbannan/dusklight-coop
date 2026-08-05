@@ -14,6 +14,10 @@
 #include "SSystem/SComponent/c_phase.h"
 #include "helpers/endian_ssystem.h"
 
+#if TARGET_PC
+#include "dusk/coop/coop_player_bridge.h"
+#endif
+
 #if !__MWERKS__
 // mwerks compiler makes value initialization act like default initialization so we need
 // to be explicit about default initialization in modern compilers
@@ -718,32 +722,42 @@ inline void make_prm_warp_hole(u32* o_params, u8 prm1, u8 prm2, u8 prm3) {
 
 fopAc_ac_c* dComIfGp_getPlayer(int);
 
+#if TARGET_PC
+inline fopAc_ac_c* fopAcM_getContextPlayer() {
+    return dusk::coop::playerForContextBridge();
+}
+#else
+inline fopAc_ac_c* fopAcM_getContextPlayer() {
+    return dComIfGp_getPlayer(0);
+}
+#endif
+
 inline s16 fopAcM_searchPlayerAngleY(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorAngleY(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorAngleY(actor, fopAcM_getContextPlayer());
 }
 
 inline s16 fopAcM_searchPlayerAngleX(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorAngleX(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorAngleX(actor, fopAcM_getContextPlayer());
 }
 
 inline f32 fopAcM_searchPlayerDistanceY(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorDistanceY(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorDistanceY(actor, fopAcM_getContextPlayer());
 }
 
 inline f32 fopAcM_searchPlayerDistanceXZ2(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorDistanceXZ2(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorDistanceXZ2(actor, fopAcM_getContextPlayer());
 }
 
 inline f32 fopAcM_searchPlayerDistanceXZ(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorDistanceXZ(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorDistanceXZ(actor, fopAcM_getContextPlayer());
 }
 
 inline f32 fopAcM_searchPlayerDistance(const fopAc_ac_c* actor) {
-    return fopAcM_searchActorDistance(actor, dComIfGp_getPlayer(0));
+    return fopAcM_searchActorDistance(actor, fopAcM_getContextPlayer());
 }
 
 inline s32 fopAcM_seenPlayerAngleY(const fopAc_ac_c* i_actor) {
-    return fopAcM_seenActorAngleY(i_actor, dComIfGp_getPlayer(0));
+    return fopAcM_seenActorAngleY(i_actor, fopAcM_getContextPlayer());
 }
 
 inline s16 fopAcM_toActorShapeAngleY(const fopAc_ac_c* i_actorA, const fopAc_ac_c* i_actorB) {

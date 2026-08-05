@@ -216,6 +216,8 @@ struct CapturedExitParams {
     int param5;
     bool groundPath;     // true = use dStage_changeSceneExitId path
     cBgS_PolyInfo groundPoly{}; // captured when groundPath is true
+    f32 radius{450.0f};         // party gathering radius around anchor
+    fpc_ProcID sourceProcId{fpcM_ERROR_PROCESS_ID_e}; // scene-exit actor
     PlayerId initiator{0};
     cXyz initiatorPosition{}; // position when the exit was first triggered
     cXyz anchor{};

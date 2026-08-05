@@ -19,6 +19,13 @@
 #include "c/c_dylink.h"
 #include "m_Do/m_Do_printf.h"
 
+#if TARGET_PC
+#include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_alink.h"
+#include "dusk/coop/coop_context.h"
+#include <optional>
+#endif
+
 #if DEBUG
 class print_error_check_c {
 public:
@@ -286,6 +293,24 @@ static int fopAc_Execute(void* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     int ret = 1;
 
+#if TARGET_PC
+    // Legacy NPC code reads daPy_getPlayerActorClass()/attention for player
+    // detection.  Give each NPC update the nearest joined Link as its scoped
+    // player so P2/P3 can satisfy those checks; the base-class
+    // srchPlayerActor() additionally scans all players so any nearby player
+    // is detected, not just the nearest one.
+    std::optional<dusk::coop::ContextFrame> npcContextFrame;
+    if (fopAcM_GetGroup(actor) == fopAc_NPC_e) {
+        const dusk::coop::PlayerId player =
+            dusk::coop::alink::resolveNearestPlayer(actor->current.pos);
+        if (player < dusk::coop::MAX_LOCAL_PLAYERS &&
+            dusk::coop::getPlayerActor(player) != nullptr) {
+            npcContextFrame = dusk::coop::ContextFrame{
+                player, static_cast<dusk::coop::ViewId>(player), nullptr};
+        }
+    }
+#endif
+
     #if DEBUG
     fapGm_HIO_c::startCpuTimer();
 
@@ -335,7 +360,16 @@ static int fopAc_Execute(void* i_this) {
             print_error_check_c error_check(actor, print_error_check_c::sEXECUTE);
             #endif
 
-            ret = fpcMtd_Execute((process_method_class DUSK_CONST*)actor->sub_method, actor);
+            ret = [&]() {
+#if TARGET_PC
+                std::optional<dusk::coop::ScopedContext> npcContext;
+                if (npcContextFrame.has_value()) {
+                    npcContext.emplace(*npcContextFrame);
+                }
+#endif
+                return fpcMtd_Execute(
+                    (process_method_class DUSK_CONST*)actor->sub_method, actor);
+            }();
 
             #if DEBUG
             }

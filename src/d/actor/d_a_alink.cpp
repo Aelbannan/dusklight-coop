@@ -14033,13 +14033,16 @@ s16 daAlink_c::getSceneExitMoveAngle() {
 
 int daAlink_c::checkSceneChange(int i_exitID) {
 #if TARGET_PC
-    // A deferred party exit must not enter any vanilla exit/demo procedure:
-    // even setting mExitID is enough for later Link logic to stop accepting
-    // movement.  Clear stale exit state and let the arbiter own the request
-    // until P1 commits it.
+    // A deferred party exit must not enter a vanilla exit/demo procedure.
+    // Do not clear mExitID here: scene-exit actors use it as the normal
+    // transition latch, and clearing it made some rectangular exits vanish
+    // before the arbiter could commit them.  The request is already captured;
+    // only suppress the procedure while it is pending.
     if (dusk::coop::event::isStageExitPending() ||
-        dusk::coop::event::isStageExitReadyToCommit() ||
-        dusk::coop::event::wasStageExitCommittedThisFrame()) {
+        dusk::coop::event::isStageExitReadyToCommit()) {
+        return 0;
+    }
+    if (dusk::coop::event::wasStageExitCommittedThisFrame()) {
         mExitID = 0x3F;
         mExitDirection = 0xFF;
         mpScnChg = nullptr;
@@ -14055,29 +14058,6 @@ int daAlink_c::checkSceneChange(int i_exitID) {
 
 #if TARGET_PC
     const bool coopPartyExit = dusk::coop::runtime().joinedPlayerCount > 1;
-    // Ground exits can reach this function before a scene-exit actor has a
-    // chance to submit a request.  Capture them before vanilla's compulsory
-    // event call, which otherwise freezes every Link while gathering.
-    if (coopPartyExit && mLinkAcch.ChkGroundHit() && i_exitID != 0x3F &&
-        mExitID == 0x3F &&
-        !dusk::coop::event::isStageExitPending() &&
-        !dusk::coop::event::isStageExitReadyToCommit() &&
-        !dComIfGp_isEnableNextStage()) {
-        dusk::coop::event::CapturedExitParams exitParams{};
-        exitParams.exitId = i_exitID;
-        exitParams.speed = 0.0f;
-        exitParams.mode = 0;
-        exitParams.roomNo = fopAcM_GetRoomNo(this);
-        exitParams.angle = shape_angle.y;
-        exitParams.param5 = -1;
-        exitParams.groundPath = true;
-        exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
-        exitParams.initiator = dusk::coop::alink::resolveOwner(this);
-        exitParams.initiatorPosition = current.pos;
-        exitParams.anchor = current.pos;
-        dusk::coop::event::deferStageExit(exitParams);
-        return 0;
-    }
 #endif
 
     if (var_r3 ||
@@ -14174,6 +14154,11 @@ int daAlink_c::checkSceneChange(int i_exitID) {
             || field_0x3106 != 0
 #if TARGET_PC
             || (!coopPartyExit && dComIfGp_event_compulsory(this, NULL, -1))
+            // Let the normal exit-speed/mode calculation reach the ground
+            // path below. The previous early capture used speed=0/mode=0
+            // and caused some polygon exits to lose their transition.
+            || (coopPartyExit && mLinkAcch.ChkGroundHit() &&
+                i_exitID != 0x3F && !dComIfGp_isEnableNextStage())
 #else
             || dComIfGp_event_compulsory(this, NULL, -1)
 #endif
@@ -14247,8 +14232,9 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                         const bool exitCommittedThisFrame =
                             dusk::coop::event::wasStageExitCommittedThisFrame();
 
+                        const bool nextStageAlreadyEnabled = dComIfGp_isEnableNextStage();
                         if (!exitPending && !exitReady && !exitCommittedThisFrame &&
-                            !dComIfGp_isEnableNextStage()) {
+                            !nextStageAlreadyEnabled) {
                             dusk::coop::event::CapturedExitParams exitParams{};
                             exitParams.exitId = i_exitID;
                             exitParams.speed = exit_speed;
@@ -14256,6 +14242,7 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                             exitParams.roomNo = fopAcM_GetRoomNo(this);
                             exitParams.angle = shape_angle.y;
                             exitParams.param5 = -1;
+                            exitParams.radius = 450.0f;
                             exitParams.groundPath = true;
                             exitParams.groundPoly.SetPolyInfo(mLinkAcch.m_gnd);
                             exitParams.initiator = dusk::coop::alink::resolveOwner(this);
@@ -14264,6 +14251,17 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                             dusk::coop::event::deferStageExit(exitParams);
                             exitPending = dusk::coop::event::isStageExitPending();
                             exitReady = dusk::coop::event::isStageExitReadyToCommit();
+                        }
+
+                        // A required barrier that cannot allocate a request
+                        // must fail closed; never fall through to a vanilla
+                        // single-player transition.
+                        if (!nextStageAlreadyEnabled &&
+                            !exitPending && !exitReady && !exitCommittedThisFrame) {
+                            dusk::coop::debug::logWarn(
+                                "checkSceneChange: unable to create ground-exit barrier; "
+                                "holding transition");
+                            return 0;
                         }
 
                         if (exitPending || exitReady || exitCommittedThisFrame) {
@@ -19396,11 +19394,6 @@ int daAlink_c::execute() {
 
     field_0x3540 = old.pos;
     field_0x3108 = shape_angle.y;
-
-#if TARGET_PC
-    dusk::coop::event::enforceStageExitBoundary(
-        this, dusk::coop::alink::resolveOwner(this));
-#endif
 
     if (checkHorseRide() && checkBoarSingleBattle()) {
         if (abs(shape_angle.y) < 0x4000) {

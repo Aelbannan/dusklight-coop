@@ -62,3 +62,22 @@ every reinterpret_cast should be looked at
 pi harness light pipeline (1 pass on every file
 - pointer arith -> types and field access
 - remove void * and convert to class members
+- pass to make everything make sense and add comments
+
+
+ak_2ea2SS9u23GC0dy52O1Gb0Xq9nm4V
+
+
+Can you finish matching all CriWare TUs? Use paseo skill and use the following agents: pi/openrouter/deepseek-v4-flash-0731 with max thinking
+- for easy targets, batch them (10 per agent)
+- for hard targets, small batches of similar targets (2 or 3)
+
+Use as much agents as you need. Babysit the agents, and have 10 or so agents running at a time. When an agent finishes, start a new batch. Start with the leaf targets first.
+
+The agents should follow these rules:
+- Do not use pi harness! 
+- Don't git reset all changes, there are other agents working on this branch! 
+- Do not use subagents, do the work yourself!
+- Don't ask questions, keep working until you are done
+- cycle and commit targets once they're accepted
+- Don't investigate other compilers, this is the correct compiler! It is possible to recreate this in C/C++

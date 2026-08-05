@@ -53,6 +53,8 @@ const ContextFrame& currentContext() {
     return g_stack.back();
 }
 
+bool hasScopedContext() { return !g_stack.empty(); }
+
 PlayerId currentPlayer() { return currentContext().player; }
 ViewId currentView() { return currentContext().view; }
 fopAc_ac_c* currentEnemyTarget() { return currentContext().enemyTarget; }

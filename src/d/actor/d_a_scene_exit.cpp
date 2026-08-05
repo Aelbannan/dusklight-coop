@@ -10,6 +10,8 @@
 #include "d/actor/d_a_player.h"
 #include "m_Do/m_Do_mtx.h"
 
+#include <cmath>
+
 #if TARGET_PC
 #include "d/actor/d_a_alink.h"
 #include "dusk/coop/coop.h"
@@ -152,25 +154,57 @@ int daScex_c::execute() {
 
             // Submit the StageExit request once if any player is in the zone.
             if (anyPlayerInZone) {
-                dusk::coop::event::CapturedExitParams exitParams;
+                dusk::coop::event::CapturedExitParams exitParams{};
                 exitParams.exitId = getArg0();
                 exitParams.speed = 0.0f;
                 exitParams.mode = 0;
                 exitParams.roomNo = fopAcM_GetRoomNo(this);
                 exitParams.angle = 0;
+                if (fopAc_ac_c* initiatorActor =
+                        dusk::coop::getPlayerActor(exitInitiator)) {
+                    exitParams.angle = initiatorActor->shape_angle.y;
+                }
                 exitParams.param5 = -1;
                 exitParams.groundPath = false;
+                exitParams.sourceProcId = fopAcM_GetID(this);
                 exitParams.initiator = exitInitiator;
                 exitParams.initiatorPosition = exitInitiatorPosition;
                 exitParams.anchor = current.pos;
+                // Gathering radius: the zone's circumcircle plus a generous
+                // margin.  The old exact-circumradius value (sqrt(scale.x^2 +
+                // scale.z^2)) left players standing at the far edge/corners of
+                // large exit zones (e.g. the F_SP102 room exit, 2295x1710
+                // units) outside the ready circle, so the exit never gathered
+                // and boundary walking flapped readiness every frame.
+                const f32 zoneRadius =
+                    std::sqrt(scale.x * scale.x + scale.z * scale.z);
+                exitParams.radius = zoneRadius * 1.25f + 100.0f;
 
-                dusk::coop::event::EventToken exitToken =
-                    dusk::coop::event::deferStageExit(exitParams);
-                if (exitToken != dusk::coop::event::INVALID_EVENT_TOKEN) {
+                dusk::coop::debug::logInfo(
+                    "Scex: P%u in exit zone exitId=%d radius=%.1f",
+                    static_cast<unsigned>(exitInitiator), (int)getArg0(),
+                    static_cast<double>(exitParams.radius));
+
+                // Do not re-submit while a scene transition is already in
+                // flight: the actor keeps executing during the wipe, and
+                // commitStageExitNow() cleared the deferred state, so an
+                // unconditional re-submit would create a fresh (stuck)
+                // request and re-fire the gather toast.
+                const bool transitionInFlight = dComIfGp_isEnableNextStage();
+                if (transitionInFlight) {
                     dusk::coop::debug::logInfo(
-                        "Scex: submitted StageExit request token=%u exitId=%d",
-                        static_cast<unsigned>(exitToken),
+                        "Scex: skipping re-submit exitId=%d (transition in flight)",
                         (int)getArg0());
+                } else {
+                    dusk::coop::event::EventToken exitToken =
+                        dusk::coop::event::deferStageExit(exitParams);
+                    if (exitToken !=
+                        dusk::coop::event::INVALID_EVENT_TOKEN) {
+                        dusk::coop::debug::logInfo(
+                            "Scex: submitted StageExit request token=%u exitId=%d",
+                            static_cast<unsigned>(exitToken),
+                            (int)getArg0());
+                    }
                 }
             }
         }

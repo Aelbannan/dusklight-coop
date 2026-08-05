@@ -12,6 +12,8 @@
 
 #if TARGET_PC
 #include "d/d_com_inf_game.h"
+#include "d/actor/d_a_player.h"
+#include "d/actor/d_a_scene_exit.h"
 #include "d/d_event_data.h"
 #include "d/d_event_manager.h"
 #include "d/d_item.h"
@@ -162,6 +164,7 @@ bool anchorsEqual(const cXyz& a, const cXyz& b, f32 eps = 10.0f) {
 bool isEquivalent(const EventRequest& a, const EventRequest& b) {
     if (a.kind != b.kind) return false;
     if (a.kind == EventKind::None) return false;
+    if (a.kind == EventKind::StageExit && a.extraFlags != b.extraFlags) return false;
     if (a.target != b.target) return false;
     if (a.eventId != b.eventId) return false;
     if (a.kind == EventKind::StageExit ||
@@ -183,9 +186,21 @@ void recomputeReadiness(EventSlot& slot) {
         slot.readinessMask = 0;
         return;
     }
+
+    // The party is a live set, not a request-time snapshot.  This removes a
+    // player who leaves and includes a player who joins while the barrier is
+    // waiting, so readiness is continuously reevaluated as required.
+    uint8_t participants = 0;
+    for (uint8_t i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
+        if (isJoined(i)) {
+            participants |= (1u << i);
+        }
+    }
+    slot.participantsMask = participants;
+
     uint8_t mask = 0;
     for (uint8_t i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
-        if (!(slot.participantsMask & (1u << i))) continue;
+        if (!(participants & (1u << i))) continue;
         if (!isLinkActorValid(i)) continue;
         fopAc_ac_c* actor = getPlayerActor(i);
         const f32 dist = slot.request.anchor.absXZ(actor->current.pos);
@@ -194,6 +209,38 @@ void recomputeReadiness(EventSlot& slot) {
         }
     }
     slot.readinessMask = mask;
+
+#if TARGET_PC
+    // Diagnostic: when a party barrier is waiting and someone is not ready,
+    // log per-player geometry so gather failures can be debugged from the
+    // log file (dist vs radius vs anchor).  Throttled to ~1/s to avoid
+    // flooding the log while a barrier is held.
+    if (slot.request.kind != EventKind::None && mask != participants &&
+        (slot.tickCounter & 63) == 0) {
+        debug::logInfo(
+            "event: gather diag kind=%s anchor=(%.0f,%.0f,%.0f) r=%.0f",
+            kindName(slot.request.kind),
+            static_cast<double>(slot.request.anchor.x),
+            static_cast<double>(slot.request.anchor.y),
+            static_cast<double>(slot.request.anchor.z),
+            static_cast<double>(slot.request.radius));
+        for (uint8_t i = 0; i < MAX_LOCAL_PLAYERS; ++i) {
+            if (!(participants & (1u << i))) continue;
+            fopAc_ac_c* a = getPlayerActor(i);
+            debug::logInfo(
+                "event: gather diag P%u valid=%d pos=(%.0f,%.0f,%.0f) "
+                "dist=%.0f ready=%d",
+                static_cast<unsigned>(i), a != nullptr ? 1 : 0,
+                a ? static_cast<double>(a->current.pos.x) : 0.0,
+                a ? static_cast<double>(a->current.pos.y) : 0.0,
+                a ? static_cast<double>(a->current.pos.z) : 0.0,
+                a ? static_cast<double>(
+                        slot.request.anchor.absXZ(a->current.pos))
+                  : -1.0,
+                (mask & (1u << i)) ? 1 : 0);
+        }
+    }
+#endif
 }
 
 void logTransition(EventToken token, const EventSlot& slot,
@@ -225,6 +272,11 @@ bool allReady(const EventSlot& slot) {
 }
 
 }  // namespace
+
+// Internal helpers defined below tick() (readinessSummary is declared in
+// coop_event.h; these two are file-local).
+bool toastDue(EventSlot& slot);
+void notifyGather(EventToken token, EventSlot& slot);
 
 // ---------------------------------------------------------------------------
 // Talk-style event classifier
@@ -323,45 +375,51 @@ void tick() {
             slot.active = false;
             break;
 
-        case EventState::WaitingForParty:
+        case EventState::WaitingForParty: {
+            const uint8_t prevParticipants = slot.participantsMask;
             recomputeReadiness(slot);
             if (allReady(slot)) {
                 slot.state = EventState::ReadyToCommit;
                 logTransition(token, slot, prevState, slot.state);
             } else {
-                if (slot.readinessMask != prevReadiness) {
+                if (slot.readinessMask != prevReadiness ||
+                    slot.participantsMask != prevParticipants) {
                     slot.lastToastTick = slot.tickCounter;
                     slot.lastReadinessForToast = slot.readinessMask;
                     debug::logInfo(
-                        "event token=%u kind=%s readiness changed 0x%02x->0x%02x "
+                        "event token=%u kind=%s party/readiness changed "
+                        "participants=0x%02x readiness=0x%02x "
                         "(%u ready/%u participants)",
                         static_cast<unsigned>(token),
                         kindName(slot.request.kind),
-                        static_cast<unsigned>(prevReadiness),
+                        static_cast<unsigned>(slot.participantsMask),
                         static_cast<unsigned>(slot.readinessMask),
                         static_cast<unsigned>(__builtin_popcount(slot.readinessMask)),
                         static_cast<unsigned>(__builtin_popcount(slot.participantsMask)));
                 }
-                // Notify when the readiness set changes.  Do not replay the
-                // toast indefinitely while the same player remains away.
-                if (slot.readinessMask != prevReadiness) {
-                    dusk::ui::push_toast_to_all_views({
-                        .type = "warning",
-                        .title = "Gather Up",
-                        .content = readinessSummary(token),
-                        .duration = std::chrono::seconds(4),
-                    });
-                    slot.lastToastTick = slot.tickCounter;
-                    slot.lastReadinessForToast = slot.readinessMask;
+                const bool readinessChanged =
+                    slot.readinessMask != prevReadiness ||
+                    slot.participantsMask != prevParticipants;
+                // Notify only when the actual readiness set changes and enough
+                // time has passed since the last toast for this event.
+                // Periodic toasts are not sent — the initial toast and
+                // change-driven toasts are sufficient to keep players
+                // informed.
+                if (readinessChanged && toastDue(slot)) {
+                    notifyGather(token, slot);
                 }
             }
             break;
+        }
 
         case EventState::ReadyToCommit:
             recomputeReadiness(slot);
             if (!allReady(slot)) {
                 slot.state = EventState::WaitingForParty;
                 logTransition(token, slot, prevState, slot.state, "regressed");
+                if (toastDue(slot)) {
+                    notifyGather(token, slot);
+                }
             } else {
                 // Auto-commit stage entry when all joined players are ready.
                 if (slot.request.kind == EventKind::StageEntry) {
@@ -485,13 +543,7 @@ EventToken request(const EventRequest& req) {
     recomputeReadiness(slot);
 
     if (!allReady(slot)) {
-        dusk::ui::push_toast_to_all_views({
-            .type = "warning",
-            .title = "Gather Up",
-            .content = readinessSummary(token),
-            .duration = std::chrono::seconds(4),
-        });
-        slot.lastReadinessForToast = slot.readinessMask;
+        notifyGather(token, slot);
     }
 
     debug::logInfo(
@@ -658,6 +710,26 @@ uint8_t readyCount(EventToken token) {
     return static_cast<uint8_t>(__builtin_popcount(slot->readinessMask));
 }
 
+// Minimum frame gap between gather toasts for the same event slot.  Without
+// this, players walking along a readiness boundary (or an event that flaps
+// between states) would re-fire the toast every frame.
+constexpr u32 kToastMinIntervalTicks = 120;  // 2s @ 60fps
+
+bool toastDue(EventSlot& slot) {
+    return slot.tickCounter - slot.lastToastTick >= kToastMinIntervalTicks;
+}
+
+void notifyGather(EventToken token, EventSlot& slot) {
+    slot.lastToastTick = slot.tickCounter;
+    slot.lastReadinessForToast = slot.readinessMask;
+    dusk::ui::push_toast_to_all_views({
+        .type = "warning",
+        .title = "Gather Up",
+        .content = readinessSummary(token),
+        .duration = std::chrono::seconds(4),
+    });
+}
+
 uint8_t totalParticipants(EventToken token) {
     const EventSlot* slot = slotFor(token);
     if (slot == nullptr) return 0;
@@ -704,6 +776,11 @@ EventToken deferStageEntry(int computedEventId, const cXyz& entryAnchor) {
     req.eventId = static_cast<u16>(computedEventId >= 0 ? computedEventId : 0);
 
     const EventToken token = request(req);
+    if (token == INVALID_EVENT_TOKEN) {
+        g_deferredEntry = {};
+        debug::logWarn("event: deferStageEntry rejected eventId=%d", computedEventId);
+        return INVALID_EVENT_TOKEN;
+    }
     g_deferredEntry.token = token;
 
     debug::logInfo(
@@ -791,6 +868,14 @@ EventToken deferPartyStory(const CapturedPartyStoryParams& params) {
     req.extraFlags = static_cast<u32>(params.mapToolId);
 
     const EventToken token = request(req);
+    if (token == INVALID_EVENT_TOKEN) {
+        g_deferredPartyStory = {};
+        debug::logWarn(
+            "event: deferPartyStory rejected profName=0x%04x eventId=%u",
+            static_cast<unsigned>(params.profName),
+            static_cast<unsigned>(params.eventId));
+        return INVALID_EVENT_TOKEN;
+    }
     g_deferredPartyStory.token = token;
 
     debug::logInfo(
@@ -855,7 +940,9 @@ EventToken deferStageExit(const CapturedExitParams& params) {
     if (g_deferredExit.hasPending) {
         if (g_deferredExit.captured.exitId == params.exitId &&
             g_deferredExit.captured.roomNo == params.roomNo &&
-            g_deferredExit.captured.groundPath == params.groundPath) {
+            g_deferredExit.captured.groundPath == params.groundPath &&
+            (params.groundPath ||
+             anchorsEqual(g_deferredExit.captured.anchor, params.anchor))) {
             debug::logInfo("event: deferStageExit dedup exitId=%d token=%u",
                            params.exitId,
                            static_cast<unsigned>(g_deferredExit.token));
@@ -875,12 +962,18 @@ EventToken deferStageExit(const CapturedExitParams& params) {
     EventRequest req{};
     req.kind = EventKind::StageExit;
     req.scope = EventScope::PartySynchronized;
-    req.initiator = 0;
+    req.initiator = params.initiator;
     req.presentationOwner = 0;
     req.anchor = params.anchor;
-    req.radius = 450.0f;
+    req.radius = params.radius > 0.0f ? params.radius : 450.0f;
+    req.extraFlags = static_cast<u32>(params.exitId & 0xFF);
 
     const EventToken token = request(req);
+    if (token == INVALID_EVENT_TOKEN) {
+        g_deferredExit = {};
+        debug::logWarn("event: deferStageExit rejected exitId=%d", params.exitId);
+        return INVALID_EVENT_TOKEN;
+    }
     g_deferredExit.token = token;
 
     debug::logInfo(
@@ -905,18 +998,64 @@ void commitStageExitNow() {
     const CapturedExitParams& p = g_deferredExit.captured;
 
 #if TARGET_PC
+    // Compute the exit mode/angle from the initiator's live state at commit
+    // time (all players have gathered).  Vanilla's checkSceneChange derives
+    // these from Link's movement state, so a hardcoded mode=0 breaks horse/
+    // board/wolf exits.  speed=0 is retained (entering the next scene idle).
+    f32 exitSpeed = p.speed;
+    u32 exitMode = p.mode;
+    s16 exitAngle = p.angle;
+    if (!p.groundPath) {
+        if (fopAc_ac_c* actor = dusk::coop::getPlayerActor(p.initiator)) {
+            daPy_py_c* link = static_cast<daPy_py_c*>(actor);
+            if (link->checkHorseRide()) {
+                exitMode = 1;
+            } else if (link->checkWolf()) {
+                exitMode = 0;
+            } else if (link->checkBoardRide()) {
+                exitMode = 2;
+            }
+            exitAngle = link->shape_angle.y;
+        }
+    }
+
+    int changed = 0;
     if (p.groundPath) {
         cBgS_PolyInfo groundPoly;
         groundPoly.SetPolyInfo(p.groundPoly);
-        dStage_changeSceneExitId(groundPoly, p.speed, p.mode,
-                                 p.roomNo, p.angle);
+        changed = dStage_changeSceneExitId(groundPoly, exitSpeed, exitMode,
+                                           p.roomNo, exitAngle);
     } else {
-        dStage_changeScene(p.exitId, p.speed, p.mode, p.roomNo, p.angle, p.param5);
+        changed = dStage_changeScene(p.exitId, exitSpeed, exitMode, p.roomNo,
+                                     exitAngle, p.param5);
+    }
+    if (!changed) {
+        debug::logWarn(
+            "event: commitStageExitNow failed exitId=%d roomNo=%d — retrying",
+            p.exitId, static_cast<int>(p.roomNo));
+        return;
+    }
+    if (!p.groundPath && p.sourceProcId != fpcM_ERROR_PROCESS_ID_e) {
+        if (fopAc_ac_c* source = fopAcM_SearchByID(p.sourceProcId)) {
+            if (fopAcM_GetName(source) == fpcNm_SCENE_EXIT_e) {
+                static_cast<daScex_c*>(source)->setSceneChangeOK();
+            }
+        }
+    }
+    // The normal Link path sets this flag after dStage_changeScene(); the
+    // arbiter bypasses that path, so reproduce it for the story authority so
+    // scene-exit switch bookkeeping still runs in daScex_c::execute().
+    if (!p.groundPath) {
+        if (fopAc_ac_c* authorityActor = dusk::coop::getPlayerActor(0)) {
+            static_cast<daPy_py_c*>(authorityActor)->onNoResetFlg2(
+                daPy_py_c::FLG2_SCENE_CHANGE_START);
+        }
     }
     s_stageExitCommittedThisFrame = true;
     debug::logInfo(
-        "event: commitStageExitNow exitId=%d roomNo=%d groundPath=%d",
-        p.exitId, static_cast<int>(p.roomNo), p.groundPath ? 1 : 0);
+        "event: commitStageExitNow exitId=%d roomNo=%d groundPath=%d mode=%u",
+        p.exitId, static_cast<int>(p.roomNo), p.groundPath ? 1 : 0,
+        static_cast<unsigned>(exitMode));
 #else
     (void)p;
 #endif

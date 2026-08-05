@@ -81,6 +81,7 @@ void tick() {
         if (actor == nullptr) {
             continue;  // Link not spawned yet for this player
         }
+        ScopedContext context({i, static_cast<ViewId>(i), nullptr});
         attn->Init(actor, static_cast<u32>(i));
         attn->Run();
     }

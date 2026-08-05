@@ -18,6 +18,7 @@ private:
 };
 
 const ContextFrame& currentContext();
+bool hasScopedContext();
 PlayerId currentPlayer();
 ViewId currentView();
 fopAc_ac_c* currentEnemyTarget();

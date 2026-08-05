@@ -111,7 +111,7 @@ int daTag_Evt_c::execute() {
             // Set field_0x570 = 1 when the closest eligible player is found.
             {
                 dusk::coop::alink::DialogueTriggerParams dtp{};
-                dtp.tagActor = nullptr;
+                dtp.tagActor = this;
                 dtp.center = current.pos;
                 dtp.radiusXZ = scale.x;
                 dtp.halfHeightY = scale.y;
@@ -120,6 +120,7 @@ int daTag_Evt_c::execute() {
                 const dusk::coop::PlayerId trigger =
                     dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
                 if (trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+                    dusk::coop::alink::rememberDialogueTriggerPlayer(this, trigger);
                     field_0x570 = 1;
                 }
             }

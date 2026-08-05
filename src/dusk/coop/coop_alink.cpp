@@ -7,6 +7,7 @@
 #include "dusk/coop/coop_forms.h"
 #include "dusk/coop/coop_input.h"
 #include "dusk/coop/coop_player.h"
+#include "dusk/coop/coop_render.h"
 
 #if TARGET_PC
 #include "SSystem/SComponent/c_math.h"
@@ -39,6 +40,16 @@ std::array<SpawnState, MAX_LOCAL_PLAYERS> g_spawns{};
 std::array<const daAlink_c*, MAX_LOCAL_PLAYERS> g_ownedLinks{};
 std::deque<PlayerId> g_pendingOrder{};
 constexpr PlayerId kUnowned = 0xFF;
+
+// Location tags evaluate eligibility in their own actor update, then call a
+// vanilla order helper with the tag as request actor. Keep one selection per
+// tag; a single global slot was overwritten when multiple tags executed in
+// the same frame before the Link placed its event order.
+struct DialogueTriggerSelection {
+    fopAc_ac_c* tag = nullptr;
+    PlayerId player = DIALOGUE_PLAYER_NONE;
+};
+std::array<DialogueTriggerSelection, 32> g_dialogueSelections{};
 
 f32 stickMagnitude(f32 x, f32 y) {
     const f32 mag = std::sqrt(x * x + y * y);
@@ -320,6 +331,15 @@ bool applyInputSnapshot(daAlink_c* link) {
 #if TARGET_PC
 
 PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams& params) {
+    if (params.tagActor != nullptr) {
+        for (auto& selection : g_dialogueSelections) {
+            if (selection.tag == params.tagActor) {
+                selection = {};
+                break;
+            }
+        }
+    }
+
     PlayerId best = DIALOGUE_PLAYER_NONE;
     f32 bestDist = 1e30f;
 
@@ -368,11 +388,91 @@ PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams& params) {
     return best;
 }
 
+void rememberDialogueTriggerPlayer(fopAc_ac_c* tagActor, PlayerId player) {
+    if (tagActor == nullptr) {
+        return;
+    }
+    for (auto& selection : g_dialogueSelections) {
+        if (selection.tag == tagActor) {
+            selection.player = player;
+            return;
+        }
+    }
+    for (auto& selection : g_dialogueSelections) {
+        if (selection.tag == nullptr) {
+            selection.tag = tagActor;
+            selection.player = player;
+            return;
+        }
+    }
+    // Bounded fallback for an unusually busy frame: reuse a slot rather than
+    // allowing an unbounded allocation in the event path.
+    static size_t next = 0;
+    g_dialogueSelections[next] = {tagActor, player};
+    next = (next + 1) % g_dialogueSelections.size();
+}
+
+void clearDialogueTriggerPlayer() {
+    for (auto& selection : g_dialogueSelections) {
+        selection = {};
+    }
+}
+
+PlayerId resolveNearestPlayer(const cXyz& center) {
+#if TARGET_PC
+    if (render::isConversationPresentationActive()) {
+        const PlayerId owner = render::getConversationPresentationOwner();
+        if (owner < MAX_LOCAL_PLAYERS && isJoined(owner) &&
+            getPlayerActor(owner) != nullptr) {
+            return owner;
+        }
+    }
+    // During an unrelated running event, retain P1's story authority instead
+    // of letting nearest-player NPC context change autonomous event behavior.
+    if (dComIfGp_event_runCheck()) {
+        return 0;
+    }
+
+    PlayerId best = DIALOGUE_PLAYER_NONE;
+    f32 bestDist = 1e30f;
+    for (PlayerId id = 0; id < MAX_LOCAL_PLAYERS; ++id) {
+        if (!isJoined(id)) continue;
+        fopAc_ac_c* actor = getPlayerActor(id);
+        if (actor == nullptr) continue;
+        const f32 distance = (actor->current.pos - center).absXZ();
+        if (distance < bestDist) {
+            bestDist = distance;
+            best = id;
+        }
+    }
+    return best;
+#else
+    (void)center;
+    return 0;
+#endif
+}
+
+PlayerId consumeDialogueTriggerPlayer(fopAc_ac_c* tagActor) {
+    for (auto& selection : g_dialogueSelections) {
+        if (selection.tag == tagActor) {
+            const PlayerId result = selection.player;
+            selection = {};
+            return result;
+        }
+    }
+    return DIALOGUE_PLAYER_NONE;
+}
+
 #else
 
 PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams&) {
     return 0;  // P1 only on non-PC builds
 }
+
+PlayerId resolveNearestPlayer(const cXyz&) { return 0; }
+void rememberDialogueTriggerPlayer(fopAc_ac_c*, PlayerId) {}
+void clearDialogueTriggerPlayer() {}
+PlayerId consumeDialogueTriggerPlayer(fopAc_ac_c*) { return DIALOGUE_PLAYER_NONE; }
 
 #endif  // TARGET_PC
 

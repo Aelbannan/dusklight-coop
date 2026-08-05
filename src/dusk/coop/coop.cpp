@@ -1,6 +1,7 @@
 #include "dusk/coop/coop.h"
 
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_attention.h"
 #include "dusk/coop/coop_bottles.h"
 #include "dusk/coop/coop_camera.h"
@@ -69,6 +70,7 @@ void init() {
     difficulty::init();
     drops::init();
     event::init();
+    alink::clearDialogueTriggerPlayer();
     forms::init();
     horses::init();
     attention::init();
@@ -95,6 +97,7 @@ void reset() {
     difficulty::reset();
     drops::reset();
     event::reset();
+    alink::clearDialogueTriggerPlayer();
     forms::reset();
     horses::reset();
     debug::reset();

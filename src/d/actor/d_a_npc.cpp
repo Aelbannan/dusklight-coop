@@ -5,6 +5,7 @@
 #include "d/actor/d_a_npc_tk.h"
 
 #if TARGET_PC
+#include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
 #include "dusk/coop/coop_body_turn_bridge.h"
 #include "dusk/coop/coop_render.h"
@@ -2422,10 +2423,9 @@ BOOL daNpcT_c::chkFindWolf(s16 i_angleY, int i_distIndex, int param_2, f32 i_bou
 
 BOOL daNpcT_c::srchPlayerActor() {
 #if TARGET_PC
-    // During co-op dialogue, keep the NPC's body-turn target aligned with
-    // the player who owns the active presentation.  The vanilla search path
-    // below always falls back to player 0, which can leave the head looking at
-    // P2/P3 while the body continues facing P1.
+    // During co-op dialogue, use the presentation owner as the body-turn
+    // target.  Outside dialogue, scan all joined players so P2/P3 can also
+    // satisfy the NPC's search criteria (not just P1).
     if (dusk::coop::render::isConversationPresentationActive()) {
         const dusk::coop::ViewId owner =
             dusk::coop::render::getConversationPresentationOwner();
@@ -2436,7 +2436,40 @@ BOOL daNpcT_c::srchPlayerActor() {
             return TRUE;
         }
     }
-#endif
+
+    // If a player is already registered, verify it is still reachable using
+    // that specific actor (chkFindActor takes the actor explicitly, so it
+    // works for any player without touching the ambient context).
+    fopAc_ac_c* registered = mPlayerActorMngr.getActorP();
+    if (registered != nullptr && !chkFindActor(registered, TRUE, mCurAngle.y)) {
+        mPlayerActorMngr.remove();
+        registered = nullptr;
+    }
+
+    // Otherwise, register the closest joined player that satisfies the
+    // search criteria.
+    if (registered == nullptr) {
+        fopAc_ac_c* best = nullptr;
+        f32 bestDist = 1e30f;
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            fopAc_ac_c* candidate = dusk::coop::getPlayerActor(pid);
+            if (candidate == nullptr) continue;
+            if (!chkFindActor(candidate, FALSE, mCurAngle.y)) continue;
+            const f32 dist = current.pos.absXZ(candidate->current.pos);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = candidate;
+            }
+        }
+        if (best != nullptr) {
+            mPlayerActorMngr.entry(best);
+        }
+    }
+
+    return NULL != mPlayerActorMngr.getActorP();
+#else
     if (mPlayerActorMngr.getActorP() != NULL) {
         if (!chkFindPlayer(TRUE, mCurAngle.y)) {
             mPlayerActorMngr.remove();
@@ -2448,6 +2481,7 @@ BOOL daNpcT_c::srchPlayerActor() {
     }
 
     return NULL != mPlayerActorMngr.getActorP();
+#endif
 }
 
 cXyz daNpcT_c::getAttnPos(fopAc_ac_c* i_actor) {

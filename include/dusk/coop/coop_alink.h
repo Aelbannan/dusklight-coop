@@ -59,6 +59,18 @@ struct DialogueTriggerParams {
 // compatibility.
 PlayerId resolveClosestDialoguePlayer(const DialogueTriggerParams& params);
 
+// Select the nearest joined Link to an actor position. Used while executing
+// NPC interaction logic so legacy NPC code that reads the vanilla player
+// accessor evaluates against the player closest to that NPC.
+PlayerId resolveNearestPlayer(const cXyz& center);
+
+// Returns and clears the player selected by the most recent trigger check for
+// |tagActor|.  This bridges a tag's eligibility check to the immediately
+// following vanilla event-order call without relying on the ambient context.
+PlayerId consumeDialogueTriggerPlayer(fopAc_ac_c* tagActor);
+void rememberDialogueTriggerPlayer(fopAc_ac_c* tagActor, PlayerId player);
+void clearDialogueTriggerPlayer();
+
 // Sentinel returned by resolveClosestDialoguePlayer when no joined player
 // satisfies the trigger conditions.
 constexpr PlayerId DIALOGUE_PLAYER_NONE = 0xFF;

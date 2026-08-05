@@ -33,6 +33,7 @@
 #if TARGET_PC
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_accessors.h"
+#include "dusk/coop/coop_alink.h"
 #include "dusk/coop/coop_context.h"
 #include "dusk/coop/coop_debug.h"
 #include "dusk/coop/coop_drops.h"
@@ -1111,21 +1112,90 @@ s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
     return mDoLib_clipper::clip(mtx_p, sphere->center, sphere->radius);
 }
 
-void* event_second_actor(u16 i_flag) {
+void* event_second_actor(u16 i_flag, fopAc_ac_c* requestActor, s16 eventId) {
     (void)i_flag;
 #if TARGET_PC
-    // Co-op fix: Use the currently active player from ScopedContext if
-    // available, otherwise fall back to P1.  This ensures that OtherEvent
-    // orders from NPCs/tags correctly identify the interacting player as
-    // the "other" participant, instead of always defaulting to P1.
-    const dusk::coop::PlayerId ctxPlayer = dusk::coop::currentPlayer();
-    fopAc_ac_c* link = dusk::coop::getPlayerActor(ctxPlayer);
-    if (ctxPlayer < dusk::coop::MAX_LOCAL_PLAYERS && link != nullptr) {
-        return link;
+    // Legacy NPC event helpers pass the NPC as request actor and normally use
+    // the vanilla P1 target.  Only confirmed talk-style event data may use
+    // the nearest-player context; autonomous NPC events remain P1-owned.
+    if (requestActor != nullptr &&
+        fopAcM_GetGroup(requestActor) == fopAc_NPC_e &&
+        eventId != -1 && dusk::coop::event::isTalkStyleEvent(eventId) &&
+        dusk::coop::hasScopedContext()) {
+        const dusk::coop::PlayerId contextPlayer = dusk::coop::currentPlayer();
+        if (contextPlayer < dusk::coop::MAX_LOCAL_PLAYERS) {
+            if (fopAc_ac_c* link = dusk::coop::getPlayerActor(contextPlayer)) {
+                return link;
+            }
+        }
+    }
+
+    // Location tags explicitly record the player that satisfied their
+    // trigger check. Consume that selection before using a P1 fallback.
+    if (requestActor != nullptr) {
+        const dusk::coop::PlayerId selected =
+            dusk::coop::alink::consumeDialogueTriggerPlayer(requestActor);
+        if (selected < dusk::coop::MAX_LOCAL_PLAYERS) {
+            if (fopAc_ac_c* link = dusk::coop::getPlayerActor(selected)) {
+                return link;
+            }
+        }
+
+        // Direct Link orders retain their exact request actor.  Do not use a
+        // proximity fallback for autonomous NPC/tag events: that would make
+        // an unrelated event appear to be initiated by whichever player is
+        // closest and would violate P1 flow authority.
+        for (dusk::coop::PlayerId pid = 0;
+             pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+            if (!dusk::coop::isJoined(pid)) continue;
+            if (dusk::coop::getPlayerActor(pid) == requestActor) {
+                return requestActor;
+            }
+        }
     }
 #endif
     return dComIfGp_getPlayer(0);
 }
+
+#if TARGET_PC
+static dusk::coop::PlayerId resolveConversationInitiator(fopAc_ac_c* target) {
+    const dusk::coop::PlayerId selected =
+        dusk::coop::alink::consumeDialogueTriggerPlayer(target);
+    if (selected < dusk::coop::MAX_LOCAL_PLAYERS &&
+        dusk::coop::isJoined(selected) &&
+        dusk::coop::getPlayerActor(selected) != nullptr) {
+        return selected;
+    }
+
+    // NPCs are executed under a nearest-player context. Prefer that player
+    // over a second proximity calculation so the actor that supplied the
+    // event condition and the actor that owns the conversation agree.
+    if (dusk::coop::hasScopedContext()) {
+        const dusk::coop::PlayerId contextPlayer = dusk::coop::currentPlayer();
+        if (contextPlayer < dusk::coop::MAX_LOCAL_PLAYERS &&
+            dusk::coop::isJoined(contextPlayer) &&
+            dusk::coop::getPlayerActor(contextPlayer) != nullptr) {
+            return contextPlayer;
+        }
+    }
+
+    dusk::coop::PlayerId nearest = 0;
+    f32 nearestDistance = 1e30f;
+    const cXyz targetPosition = target != nullptr ? target->current.pos : cXyz{};
+    for (dusk::coop::PlayerId pid = 0;
+         pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
+        if (!dusk::coop::isJoined(pid)) continue;
+        fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
+        if (link == nullptr) continue;
+        const f32 distance = link->current.pos.absXZ(targetPosition);
+        if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = pid;
+        }
+    }
+    return nearest;
+}
+#endif
 
 s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_priority, u16 i_flag) {
 #if TARGET_PC
@@ -1158,7 +1228,7 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
     // the player by matching the actor pointer against all joined
     // Links.  Fall back to the distance-based heuristic (closest to
     // the target NPC) if the pointer match fails.
-    dusk::coop::PlayerId initiator = 0;
+    dusk::coop::PlayerId initiator = dusk::coop::alink::DIALOGUE_PLAYER_NONE;
     if (i_actorA) {
         for (dusk::coop::PlayerId pid = 0;
              pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
@@ -1170,7 +1240,7 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
         }
     }
     // If pointer-match failed, use distance-based fallback.
-    if (initiator == 0 && i_actorB) {
+    if (initiator == dusk::coop::alink::DIALOGUE_PLAYER_NONE && i_actorB) {
         f32 closestDist = 1e9f;
         for (dusk::coop::PlayerId pid = 0;
              pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
@@ -1184,6 +1254,10 @@ s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_prio
                 initiator = pid;
             }
         }
+    }
+
+    if (initiator == dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+        initiator = 0;
     }
 
     dusk::coop::event::CapturedConversationParams convParams;
@@ -1306,7 +1380,7 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
     const s16 profName = i_actor ? fopAcM_GetProfName(i_actor) : 0;
     const char* actorName = i_actor ? dStage_getName(profName, -1) : "NULL";
     dusk::coop::debug::logInfo(
-        "fopAcM_orderSpeakEvent: initiator=PLAYER_0(hardcoded) "
+        "fopAcM_orderSpeakEvent: target-initiator pending-resolution "
         "target=%s profName=0x%04x prio=%d flag=0x%04x",
         actorName,
         static_cast<unsigned>(profName),
@@ -1354,19 +1428,9 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
         params.radius = 450.0f;
         params.npcProcId = i_actor ? fopAcM_GetID(i_actor) : fpcM_ERROR_PROCESS_ID_e;
 
-        // Find the closest joined Link as the initiator.
-        params.initiator = 0;
-        f32 closestDist = 1e9f;
-        for (dusk::coop::PlayerId pid = 0; pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
-            if (!dusk::coop::isJoined(pid)) continue;
-            fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
-            if (link == nullptr) continue;
-            const f32 d = link->current.pos.absXZ(i_actor ? i_actor->current.pos : cXyz{});
-            if (d < closestDist) {
-                closestDist = d;
-                params.initiator = pid;
-            }
-        }
+        // Prefer the player recorded by a location tag's trigger check, then
+        // the nearest-player NPC execution context.
+        params.initiator = resolveConversationInitiator(i_actor);
 
         // Log the candidate regardless of arbiter slot availability.
         dusk_coop_logPartyStoryCandidate(
@@ -1400,29 +1464,14 @@ s32 fopAcM_orderSpeakEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {
             profName, rawEventId, stageName, roomNo);
 
         // --- Step 5: Capture conversation metadata and route through arbiter ---
-        // Find the closest joined Link as the real initiator.
-        // This fixes the player-0 attribution while keeping the actual event
-        // order functional (P1 still starts/arbitrates the global event).
-        //
-        // IMPORTANT: The actual trackConversation() call is deferred until
-        // AFTER the vanilla order succeeds (see below), so we don't leak
-        // a tracked conversation when the vanilla order is rejected.
-        f32 closestDist = 1e9f;
-        for (dusk::coop::PlayerId pid = 0; pid < dusk::coop::MAX_LOCAL_PLAYERS; ++pid) {
-            if (!dusk::coop::isJoined(pid)) continue;
-            fopAc_ac_c* link = dusk::coop::getPlayerActor(pid);
-            if (link == nullptr) continue;
-            const f32 d = link->current.pos.absXZ(i_actor ? i_actor->current.pos : cXyz{});
-            if (d < closestDist) {
-                closestDist = d;
-                convInitiator = pid;
-            }
-        }
+        // Prefer the player recorded by a location tag's eligibility check,
+        // then the nearest-player NPC execution context.
+        // The actual trackConversation() call is deferred until AFTER the
+        // vanilla order succeeds.
+        convInitiator = resolveConversationInitiator(i_actor);
 
-        // Find the request actor: the correct triggering Link is resolved
-        // below at the event order call site; store P1 here for the
-        // conversation metadata (setParam PtT/PtI compat already handled
-        // by the TARGET_PC fix in d_event.cpp).
+        // Keep P1 as the flow authority for the conversation metadata; the
+        // actual order below uses the resolved initiator Link for Pt1.
         fopAc_ac_c* requestActor = dComIfGp_getPlayer(0);
 
         shouldTrackConversation = true;
@@ -1606,7 +1655,7 @@ s32 fopAcM_orderOtherEvent(fopAc_ac_c* i_actor, char const* i_eventName, u16 par
     }
 
     return dComIfGp_event_order(dEvt_type_OTHER_e, eventPrio, i_flag, param_2, i_actor,
-                                event_second_actor(i_flag), eventIdx, -1);
+                                event_second_actor(i_flag, i_actor, eventIdx), eventIdx, -1);
 }
 
 s32 fopAcM_orderOtherEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, char const* i_eventName,
@@ -1642,7 +1691,7 @@ s32 fopAcM_orderChangeEventId(fopAc_ac_c* i_actor, s16 i_eventID, u16 i_flag, u1
     }
 
     return dComIfGp_event_order(dEvt_type_OTHER_e, eventPrio, i_flag | 0x400, param_3, i_actor,
-                                event_second_actor(i_flag), i_eventID, -1);
+                                event_second_actor(i_flag, i_actor, i_eventID), i_eventID, -1);
 }
 
 s32 fopAcM_orderOtherEventId(fopAc_ac_c* i_actor, s16 i_eventID, u8 i_mapToolID, u16 param_3,
@@ -1677,7 +1726,7 @@ s32 fopAcM_orderOtherEventId(fopAc_ac_c* i_actor, s16 i_eventID, u8 i_mapToolID,
     }
 
     return dComIfGp_event_order(dEvt_type_OTHER_e, newPriority, i_flag, param_3, i_actor,
-                                event_second_actor(i_flag), i_eventID, i_mapToolID);
+                                event_second_actor(i_flag, i_actor, i_eventID), i_eventID, i_mapToolID);
 }
 
 s32 fopAcM_orderMapToolEvent(fopAc_ac_c* i_actor, u8 param_1, s16 i_eventID, u16 param_3,
@@ -1714,7 +1763,7 @@ s32 fopAcM_orderMapToolEvent(fopAc_ac_c* i_actor, u8 param_1, s16 i_eventID, u16
     }
 
     return dComIfGp_event_order(dEvt_type_OTHER_e, newPriority, i_flag, param_3, i_actor,
-                                event_second_actor(i_flag), i_eventID, param_1);
+                                event_second_actor(i_flag, i_actor, i_eventID), i_eventID, param_1);
 }
 
 s32 fopAcM_orderMapToolAutoNextEvent(fopAc_ac_c* i_actor, u8 param_1, s16 i_eventID, u16 param_3,
@@ -1735,7 +1784,7 @@ s32 fopAcM_orderPotentialEvent(fopAc_ac_c* i_actor, u16 i_flag, u16 param_2, u16
     }
 
     return dComIfGp_event_order(dEvt_type_POTENTIAL_e, i_priority, i_flag, param_2, i_actor,
-                                event_second_actor(i_flag), -1, -1);
+                                event_second_actor(i_flag, i_actor, -1), -1, -1);
 }
 
 s32 fopAcM_orderItemEvent(fopAc_ac_c* i_actor, u16 i_priority, u16 i_flag) {

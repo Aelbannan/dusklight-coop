@@ -140,6 +140,7 @@ int daTag_Msg_c::execute() {
 
     if (set_event && rangeCheck() && otherCheck()) {
         if (field_0x5dd) {
+            // otherCheck() recorded the closest eligible Link above.
             mOrderEvtNum = 1;
             JUT_ASSERT(0, NULL != l_evtNameTBL[mOrderEvtNum]);
 
@@ -173,7 +174,7 @@ BOOL daTag_Msg_c::rangeCheck() {
     // trigger area (XZ radius + Y half-height).  The event is ordered once
     // by the first eligible player (see execute()).
     dusk::coop::alink::DialogueTriggerParams dtp{};
-    dtp.tagActor = nullptr;
+    dtp.tagActor = this;
     dtp.center = current.pos;
     dtp.radiusXZ = scale.x;
     dtp.halfHeightY = scale.y;
@@ -210,12 +211,28 @@ BOOL daTag_Msg_c::otherCheck() {
     }
 
     if (field_0x5dd) {
+#if TARGET_PC
+        dusk::coop::alink::DialogueTriggerParams dtp{};
+        dtp.tagActor = this;
+        dtp.center = current.pos;
+        dtp.radiusXZ = scale.x;
+        dtp.halfHeightY = scale.y;
+        dtp.facingArc = 0;
+        dtp.needFacingCheck = false;
+        const dusk::coop::PlayerId trigger =
+            dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
+        if (trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+            dusk::coop::alink::rememberDialogueTriggerPlayer(this, trigger);
+        }
+        return trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE;
+#else
         return 1;
+#endif
     }
 
 #if TARGET_PC
     // Co-op: return true if ANY joined player is facing toward the tag
-    // within the required arc (0x1000).  The event is ordered once.
+    // within the required arc (0x1000). The event is ordered once.
     {
         dusk::coop::alink::DialogueTriggerParams dtp{};
         dtp.tagActor = this;
@@ -226,6 +243,9 @@ BOOL daTag_Msg_c::otherCheck() {
         dtp.needFacingCheck = true;
         const dusk::coop::PlayerId trigger =
             dusk::coop::alink::resolveClosestDialoguePlayer(dtp);
+        if (trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE) {
+            dusk::coop::alink::rememberDialogueTriggerPlayer(this, trigger);
+        }
         return trigger != dusk::coop::alink::DIALOGUE_PLAYER_NONE;
     }
 #else
