@@ -434,6 +434,16 @@ MtxP daAlink_c::getRightItemMatrix() {
 }
 
 u32 daAlink_c::checkPlayerNoDraw() {
+#if TARGET_PC
+    // Co-op: a puppet is not the local camera's player. The first-person /
+    // cutscene camera hides "the player" by setting camera attention status
+    // on the player's camera (field_0x317c = camera 0 for both Links), which
+    // a puppet would otherwise inherit and become invisible. The coop hidden
+    // gate (puppetDrawHidden) owns puppet visibility instead.
+    if (dusk::coop::isPuppet(this)) {
+        return FALSE;
+    }
+#endif
     return dComIfGp_checkCameraAttentionStatus(field_0x317c, 2) ||
            checkNoResetFlg0(FLG0_PLAYER_NO_DRAW);
 }

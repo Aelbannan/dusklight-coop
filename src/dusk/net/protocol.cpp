@@ -97,7 +97,8 @@ bool DeserializeWorldInit(WorldInitMsg& m, ByteReader& r) {
 }
 
 bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
-    if (!w.WriteU8(m.playerId) || !w.WriteS8(m.roomNo) || !w.WriteU8(m.form) ||
+    if (!w.WriteU8(m.playerId) || !w.WriteS8(m.roomNo) ||
+        !w.WriteFixedString(m.stage, kMaxStageNameLength) || !w.WriteU8(m.form) ||
         !w.WriteU8(m.stateFlags) || !w.WriteU8(m.jointCount) ||
         !w.WriteBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !w.WriteS16(m.yaw) ||
         !w.WriteS16(m.pitch) || !w.WriteU16(m.faceBckIdx) || !w.WriteU16(m.faceBtpIdx) ||
@@ -115,7 +116,8 @@ bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
 }
 
 bool DeserializePlayerState(PlayerStateMsg& m, ByteReader& r) {
-    if (!r.ReadU8(m.playerId) || !r.ReadS8(m.roomNo) || !r.ReadU8(m.form) ||
+    if (!r.ReadU8(m.playerId) || !r.ReadS8(m.roomNo) ||
+        !r.ReadFixedString(m.stage, kMaxStageNameLength) || !r.ReadU8(m.form) ||
         !r.ReadU8(m.stateFlags) || !r.ReadU8(m.jointCount) ||
         !r.ReadBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !r.ReadS16(m.yaw) ||
         !r.ReadS16(m.pitch) || !r.ReadU16(m.faceBckIdx) || !r.ReadU16(m.faceBtpIdx) ||

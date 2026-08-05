@@ -312,6 +312,11 @@ constexpr u8 kPlayerStateFlagDemo = 1 << 4;          // mDemo.getDemoType() != 0
 struct PlayerStateMsg {
     u8 playerId = kInvalidPlayerId;
     s8 roomNo = 0;             // current.roomNo — same-scene/room scoping
+    char stage[kMaxStageNameLength] = {};  // current stage (e.g. "F_SP103") — the
+                               // puppet's hidden gate needs stage+room: room
+                               // numbers are not unique across stages (spring /
+                               // house interiors), so room-only scoping leaks a
+                               // remote who left the stage into our view
     u8 form = 0;               // 0 human / 1 wolf (checkWolf())
     u8 stateFlags = 0;         // kPlayerStateFlag_* bits
     u8 jointCount = 0;         // 0..kMaxJoints (semantic-validated at parse)
@@ -631,7 +636,8 @@ bool SerializeMessage(const Message& msg, ByteWriter& w);
 /// Number of wire bytes for a PlayerState payload (header + scale + face +
 /// pos + baseTR + full kMaxJoints table).
 constexpr u16 PlayerStateWireSize() {
-    return 5 + (kMaxJoints + 7) / 8 + 10 + 1 + 12 + sizeof(Mtx) + kMaxJoints * sizeof(Mtx);
+    return 5 + kMaxStageNameLength + (kMaxJoints + 7) / 8 + 10 + 1 + 12 + sizeof(Mtx) +
+           kMaxJoints * sizeof(Mtx);
 }
 
 /// Parses a header + payload from `r`, validating the type and exact payload

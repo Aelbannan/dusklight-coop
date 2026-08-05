@@ -24,6 +24,7 @@
 #include <aurora/lib/logging.hpp>
 
 #include <array>
+#include <cstdio>
 #include <cstring>
 
 namespace dusk::coop {
@@ -106,11 +107,13 @@ struct ReceiveSlot {
     bool hasEvent = false;
     net::PlayerStateMsg state{};
     net::PlayerEventMsg event{};
-    // This machine's room when the remote last sent us PlayerState. Used by
-    // the sender gate (MAJOR M2): a remote's stale room can gate us silent
-    // forever; if OUR room changed since their last send, the gate opens so
-    // they learn our new room.
+    // This machine's room/stage when the remote last sent us PlayerState. Used
+    // by the sender gate (MAJOR M2): a remote's stale room can gate us silent
+    // forever; if OUR room/stage changed since their last send, the gate opens
+    // so they learn where we are. The stage half is the cross-stage analog: a
+    // remote on another stage (spring / house interior) must not keep us gated.
     s8 myRoomAtLastRecv = -1;
+    char myStageAtLastRecv[net::kMaxStageNameLength] = {};
 };
 
 std::array<ReceiveSlot, kMaxLocalPlayers> g_receive{};
@@ -142,6 +145,18 @@ u16 g_lastSentLeftJnt = 0xFFFF;
 u16 g_lastSentRightJnt = 0xFFFF;
 u32 g_lastSentAttention = 0xFFFFFFFF;
 s8 g_lastSentRoom = 0x7F;
+// Stage of the last PlayerState we actually sent (NUL when none yet). Used to
+// detect a stage change even when the room number coincides (F_SP103 room 1 ->
+// F_SP104 room 1), so the reliable SceneChange + send window fire on stage
+// changes too — otherwise a mover's new stage is carried by a single
+// unreliable state and a drop leaves a frozen puppet in the old room.
+char g_lastSentStage[net::kMaxStageNameLength] = {};
+// Frames left in the post-stage/room-change send window: after moving, keep
+// sending regardless of the gate so the new stage/room reaches the remote
+// even if the first few unreliable states drop (the gate's "we moved" check
+// closes after one inbound reply, which can be earlier than any of our
+// post-move states land).
+u32 g_postChangeSendWindow = 0;
 u32 g_frameCount = 0;
 
 // ---------------------------------------------------------------------------
@@ -187,6 +202,12 @@ s8 LocalRoomNo() {
     return -1;
 }
 
+/// The local player's CURRENT stage (dComIfGp_getStartStageName tracks the
+/// play's start-stage object, which is re-pointed on every stage change).
+const char* LocalStageName() {
+    return dComIfGp_getStartStageName();
+}
+
 void ClearAllPuppets() {
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         PuppetEntry& e = g_puppets[i];
@@ -220,6 +241,8 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         slot.state = st;
         slot.hasState = true;
         slot.myRoomAtLastRecv = LocalRoomNo();
+        std::snprintf(slot.myStageAtLastRecv, sizeof(slot.myStageAtLastRecv), "%s",
+                      LocalStageName());
     } else if (type == net::MsgType::PlayerEvent) {
         const auto& ev = payload.playerEvent;
         if (ev.playerId >= kMaxLocalPlayers || ev.playerId == SelfIdChecked()) {
@@ -293,6 +316,8 @@ void ResetSenderTrackers() {
     g_lastSentRightJnt = 0xFFFF;
     g_lastSentAttention = 0xFFFFFFFF;
     g_lastSentRoom = 0x7F;
+    g_lastSentStage[0] = '\0';
+    g_postChangeSendWindow = 0;
 }
 
 void SendEventsOnChange(const daAlink_c* link) {
@@ -328,17 +353,20 @@ void SendEventsOnChange(const daAlink_c* link) {
 }
 
 /// Sender gate (Anchor model): only send when at least one remote player is
-/// in (or unknown to be outside) our room — a client only renders peers in
-/// its own scene/room, so same-room peers are the only ones that can see us.
+/// in (or unknown to be outside) our scene — a client only renders peers in
+/// its own stage+room, so same-scene peers are the only ones that can see us.
 ///
 /// MAJOR M2 (mutual room-change deadlock): two players entering the same new
 /// room together hold each other's stale room, so `state.roomNo == myRoom`
 /// is false on both sides and both gates would stay shut forever (both
-/// puppets hidden). The gate therefore also opens when OUR room changed
+/// puppets hidden). The gate therefore also opens when OUR stage/room changed
 /// since the remote last sent us state — they cannot know where we are, so
-/// we send; one PlayerState with the new roomNo re-opens their gate.
+/// we send; one PlayerState with the new room re-opens their gate. The same
+/// holds for a cross-stage move (spring / house interior), where the room
+/// numbers are not unique across stages.
 bool RemoteInOurRoom(const daAlink_c* link) {
     const s8 myRoom = fopAcM_GetRoomNo(link);
+    const char* myStage = LocalStageName();
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         if (i == SelfIdChecked()) {
             continue;
@@ -347,11 +375,15 @@ bool RemoteInOurRoom(const daAlink_c* link) {
             continue;
         }
         const ReceiveSlot& slot = g_receive[i];
-        if (!slot.hasState || slot.state.roomNo == myRoom) {
+        const bool sameStage =
+            slot.hasState && std::strcmp(slot.state.stage, myStage) == 0;
+        if (!slot.hasState || (sameStage && slot.state.roomNo == myRoom)) {
             return true;
         }
-        if (slot.myRoomAtLastRecv != myRoom) {
-            return true;  // our room changed since their last send
+        if (slot.myRoomAtLastRecv != myRoom ||
+            std::strcmp(slot.myStageAtLastRecv, myStage) != 0)
+        {
+            return true;  // our stage/room changed since their last send
         }
     }
     return false;
@@ -471,14 +503,19 @@ void ApplyPuppetState(daAlink_c* link) {
     }
     const net::PlayerStateMsg& st = slot.state;
 
-    // Hidden state: the remote player is in another room (or, v1, a stage we
-    // are not on — join-warp lands in M4). Skip pose work; draw() returns
-    // early for hidden puppets (Anchor's off-scene -9999, done via draw gate
-    // so the framework never sees a far-away actor).
-    const bool stageOk = strcmp(dComIfGp_getStartStageName(), g_session.worldStage().stage) == 0 ||
-                         g_session.worldStage().stage[0] == '\0';
+    // Hidden state: the remote player is in another stage or room (v1: a
+    // stage we are not on — join-warp lands in M4). Skip pose work; draw()
+    // returns early for hidden puppets (Anchor's off-scene -9999, done via a
+    // draw gate so the framework never sees a far-away actor).
+    //
+    // Stage is compared via the wire (st.stage), not the session worldStage
+    // heuristic: room numbers are not unique across stages — a remote who
+    // walked to the spring (F_SP104) or into a house interior (R_SP01) would
+    // otherwise stay "in our room" whenever its room number coincides with
+    // ours (e.g. both room 1).
+    const bool sameStage = std::strcmp(st.stage, LocalStageName()) == 0;
     PuppetEntry& entry = g_puppets[pid];
-    entry.hidden = !stageOk || st.roomNo != LocalRoomNo();
+    entry.hidden = !sameStage || st.roomNo != LocalRoomNo();
     if (entry.hidden) {
         return;
     }
@@ -931,18 +968,31 @@ void sendPlayerState(daAlink_c* link) {
     // as the matching PlayerState lands. Reliable + tiny, so the cost of
     // sending it while alone is nil.
     const s8 roomNow = fopAcM_GetRoomNo(link);
-    if (roomNow != g_lastSentRoom) {
+    const char* myStage = LocalStageName();
+    // MAJOR M1 (stage/room change propagation): the reliable SceneChange
+    // event + a short send window fire whenever the STAGE or ROOM changed.
+    // Room-only detection misses a stage change whose room number coincides
+    // (F_SP103 room 1 -> F_SP104 room 1), and the sender gate's "we moved"
+    // check closes after one inbound reply — earlier than the first post-move
+    // PlayerState may land. Without the window a dropped state left the
+    // remote's slot on the old stage: a puppet frozen at the exit spot.
+    if (roomNow != g_lastSentRoom || std::strcmp(myStage, g_lastSentStage) != 0) {
         g_lastSentRoom = roomNow;
+        std::snprintf(g_lastSentStage, sizeof(g_lastSentStage), "%s", myStage);
+        g_postChangeSendWindow = 30;
         SendPlayerEvent(net::PlayerEventId::SceneChange,
             static_cast<u32>(static_cast<s32>(roomNow)), 0);
     }
-    if (!RemoteInOurRoom(link)) {
+    if (g_postChangeSendWindow > 0) {
+        --g_postChangeSendWindow;  // keep sending through the post-move window
+    } else if (!RemoteInOurRoom(link)) {
         return;
     }
 
     net::PlayerStateMsg st = {};
     st.playerId = SelfIdChecked();
     st.roomNo = fopAcM_GetRoomNo(link);
+    std::snprintf(st.stage, sizeof(st.stage), "%s", LocalStageName());
     st.form = link->checkWolf() ? 1 : 0;
     st.stateFlags = 0;
     if (link->mRideStatus != 0) {
