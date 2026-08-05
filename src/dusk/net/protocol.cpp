@@ -153,7 +153,12 @@ u16 WireSize(MsgType type) {
     case MsgType::WorldInit:
         return 20 + kMaxLocalPlayers * 36;  // 308 — stage + roster, no state sections
     case MsgType::PlayerState:
-        return PlayerStateWireSize();  // 2657 — raw-matrix pose (Rev 3 D4)
+        // raw-matrix pose (Rev 3 D4): 5 (id/room/form/flags/jointCount)
+        // + 5 scaleFlags + 10 (yaw/pitch face bck/btp/frame/reserved)
+        // + 12 pos + sizeof(Mtx) baseTR + 40*sizeof(Mtx) joints = 2001
+        // with TP's 3x4 Mtx (48 B). See PlayerStateWireSize(); reviewed m1
+        // MINOR m1 corrected the stale 2657 (4x4 Mtx) figure.
+        return PlayerStateWireSize();
     case MsgType::PlayerEvent:
         return 4 + 4 + 4;  // 12
     case MsgType::EnemySnapshot:

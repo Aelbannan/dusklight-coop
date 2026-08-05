@@ -23,6 +23,37 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
     dst[kMaxNameLength - 1] = '\0';
 }
 
+// -------------------------------------------------------------------------
+// Star-relay policy (MINOR d): how the host should route a game message it
+// received from a peer. Today (M1) the host relays player state/events to
+// every other joined peer. This seam exists so M2's per-type routing does
+// NOT extend the current "game message = relay to all" fallthrough:
+//   - CombatIntent (client -> sim owner): must NOT be relayed to other
+//     clients — the owner validates and emits a CombatResult.
+//   - EnemySnapshot: flows owner -> clients only (host->all); never
+//     client->host then relayed.
+//   - CombatResult / EnemyEvent: host simulcast (relay).
+// The enum + switch below keep that split explicit without implementing M2.
+// -------------------------------------------------------------------------
+enum class RelayPolicy : u8 {
+    None,  // not star-relayed (M2+ routed explicitly, not via the fallthrough)
+    Star,  // relay to every joined peer except the origin (v1: PlayerState/PlayerEvent)
+};
+
+RelayPolicy PolicyFor(MsgType type) {
+    switch (type) {
+    case MsgType::PlayerState:
+    case MsgType::PlayerEvent:
+        return RelayPolicy::Star;
+    default:
+        // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd) is handled
+        // directly by the session, never via ForwardGameMessage. M2 game
+        // traffic (EnemySnapshot/CombatIntent/CombatResult/EnemyEvent/...)
+        // gets its own explicit dispatch at its seam, not the Star default.
+        return RelayPolicy::None;
+    }
+}
+
 }  // namespace
 
 Session::~Session() {
@@ -444,6 +475,11 @@ bool Session::SendGameMessage(MsgType type, const PayloadUnion& payload) {
 }
 
 void Session::ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion& payload) {
+    // Star-relay policy seam (MINOR d): see PolicyFor. M1 relays player
+    // state/events; M2's CombatIntent/EnemySnapshot get explicit policies.
+    if (PolicyFor(type) != RelayPolicy::Star) {
+        return;
+    }
     for (u8 peer = 0; peer < Transport::kMaxPeers; ++peer) {
         if (peer == originPeer) {
             continue;
