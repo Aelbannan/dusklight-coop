@@ -736,6 +736,15 @@ void RunGameMessageDemo() {
     Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000), "B joined");
     Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
         "host roster has 3 players");
+    // Roster-refresh broadcast (MAJOR M1): A joined before B, so A must learn
+    // about B through the WorldInit the host re-broadcasts on B's join (A's
+    // roster never had B otherwise — join and leave were asymmetric).
+    Check(demo.WaitFor([&] { return a.roster()[b.selfId()].present; }, 10000),
+        "A's roster shows B after B joined (WorldInit roster-refresh)");
+    Check(b.roster()[a.selfId()].present && b.roster()[0].present,
+        "B's roster shows A and the host");
+    Check(!a.roster()[b.selfId() + 1].present,
+        "A's roster has no phantom players beyond the roster");
 
     int hostStates = 0;
     int aStates = 0;

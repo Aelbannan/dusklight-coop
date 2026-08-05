@@ -334,6 +334,16 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     init.worldInit.stage = worldStage_;
     FillWireRoster(init.worldInit.roster);
     SendToPeer(peerIndex, MsgType::WorldInit, init);
+
+    // Roster-refresh broadcast (MAJOR M1): every already-joined peer must
+    // learn about the new player, or it will never spawn a puppet for them
+    // (the game-side spawn gate is roster[pid].present) and never send them
+    // PlayerState (RemoteInOurRoom skips non-present slots) — 3+ players
+    // would be invisible to earlier joiners. WorldInit doubles as a
+    // roster-refresh: it is fixed stage+roster with no state sections, and
+    // the joining peer's pose arrives on the ordinary per-frame stream. The
+    // new player itself already got JoinAccept/WorldInit, so it is excluded.
+    SendToAll(MsgType::WorldInit, init, /*exceptPlayer=*/id);
 }
 
 void Session::OnJoinAccept(const Message& msg) {
