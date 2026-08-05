@@ -85,13 +85,11 @@ bool DeserializeJoinAccept(JoinAcceptMsg& m, ByteReader& r) {
 }
 
 bool SerializeWorldInit(const WorldInitMsg& m, ByteWriter& w) {
-    return SerializeStage(m.stage, w) && w.WriteU16(m.playerStateCount) &&
-           w.WriteU16(m.enemyStateCount) && SerializeRoster(m.roster, w);
+    return SerializeStage(m.stage, w) && SerializeRoster(m.roster, w);
 }
 
 bool DeserializeWorldInit(WorldInitMsg& m, ByteReader& r) {
-    return DeserializeStage(m.stage, r) && r.ReadU16(m.playerStateCount) &&
-           r.ReadU16(m.enemyStateCount) && DeserializeRoster(m.roster, r);
+    return DeserializeStage(m.stage, r) && DeserializeRoster(m.roster, r);
 }
 
 bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
@@ -125,6 +123,12 @@ bool DeserializePlayerState(PlayerStateMsg& m, ByteReader& r) {
             return false;
         }
     }
+    // Semantic validation (review M0 deepseek M5): a jointCount beyond the
+    // fixed table would make M1's apply code index out of bounds. Reject the
+    // whole packet at parse rather than trusting the value.
+    if (m.jointCount > kMaxJoints) {
+        return false;
+    }
     return true;
 }
 
@@ -145,7 +149,7 @@ u16 WireSize(MsgType type) {
     case MsgType::SessionEnd:
         return 4;
     case MsgType::WorldInit:
-        return 20 + 2 + 2 + kMaxLocalPlayers * 36;  // 312
+        return 20 + kMaxLocalPlayers * 36;  // 308 — stage + roster, no state sections
     case MsgType::PlayerState:
         return 11 + 4 + 12 + 6 + 6 + kMaxJoints * 6;  // 279
     case MsgType::PlayerEvent:

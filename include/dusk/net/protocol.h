@@ -10,10 +10,12 @@
  *   payload    — fixed-size little-endian struct, hand-written serializers
  *
  * All payloads are fixed-size (roster is a fixed 8-entry array, strings are
- * fixed-capacity NUL-padded arrays), so the hot path never allocates and a
- * received message can be validated against its expected size in one check.
- * Channel 0 is reliable (control/events/combat), channel 1 is unreliable
- * sequenced (snapshots), per 00-network.md §1.
+ * fixed-capacity NUL-padded arrays, WorldInit is stage+roster only — no
+ * full-state sections), so the hot path never allocates and a received
+ * message can be validated against its expected size in one check.
+ * DeserializeMessage stays exact-size by design: variable-length messages
+ * are rejected. Channel 0 is reliable (control/events/combat), channel 1 is
+ * unreliable sequenced (snapshots), per 00-network.md §1.
  *
  * The pose fields in PlayerState follow 00-network.md §5's joint-list format.
  * Rev 3 D4 (raw matrix pose) refines the same message in M1; only the
@@ -33,7 +35,11 @@ namespace dusk::net {
 
 /// Bump when the byte layout of any message changes; JoinRequest carries it
 /// and mismatches are rejected with JoinReject(VersionMismatch).
-constexpr u16 kProtocolVersion = 1;
+///
+/// v2 (M0.5): WorldInit dropped its (always-zero) count-prefixed state
+/// sections — it is now fixed stage+roster only. The zero-init and semantic
+/// validation changes do not alter the wire layout and did not bump.
+constexpr u16 kProtocolVersion = 2;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -219,13 +225,12 @@ struct SessionEndMsg {
     u8 reserved[3] = {};
 };
 
-/// Sent to a joining client right after JoinAccept (00-network.md §4). M1
-/// appends player/enemy state snapshots as count-prefixed sections after the
-/// roster; M0 always carries count 0.
+/// Sent to a joining client right after JoinAccept (00-network.md §4). Fixed
+/// size by contract: stage + roster only. M1's snapshot-on-join is a burst of
+/// ordinary per-frame PlayerState / EnemySnapshot messages sent right after
+/// WorldInit — no count-prefixed full-state sections live here.
 struct WorldInitMsg {
     StageInfo stage;
-    u16 playerStateCount = 0;
-    u16 enemyStateCount = 0;
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
@@ -464,6 +469,12 @@ private:
 // ---------------------------------------------------------------------------
 
 /// Tagged union of every payload struct. All members are trivially copyable.
+///
+/// The default ctor zeroes the whole union: a partially-populated payload
+/// (e.g. only `version` set on a JoinRequest) still serializes deterministic
+/// bytes — the reserved/padding fields can never leak stack garbage onto the
+/// wire (review M0 deepseek M3). Construction sites still write `= {}` for
+/// clarity.
 union PayloadUnion {
     JoinRequestMsg joinRequest;
     JoinAcceptMsg joinAccept;
@@ -481,8 +492,7 @@ union PayloadUnion {
     TimeEventMsg timeEvent;
     WeatherChangeMsg weatherChange;
 
-    PayloadUnion() {}
-    ~PayloadUnion() {}
+    PayloadUnion() { std::memset(this, 0, sizeof(PayloadUnion)); }
 };
 
 struct Message {
