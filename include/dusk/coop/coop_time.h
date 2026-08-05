@@ -18,9 +18,10 @@
  *                                        vanilla advance on synced clients
  *   d_kankyo.cpp        dKy_Execute()  -> clientWeatherForce() pre-exeKankyo
  *   d_kankyo.cpp        dKy_Create()   -> onStageCreate() re-asserts time
- *                                        (pre room-layer resolution, 04 §5.10)
- *                                        + weather (before the first
- *                                        dKyw_wether_move, 04 §5.6)
+ *                                        + weather post-dKy_Create (after
+ *                                        the start-room layer resolution,
+ *                                        04 §5.10 — worst case one stale
+ *                                        layer until the next room load)
  *   d_a_kytag06.cpp     daKytag06_Draw() -> suppressDiceWeather() kills the
  *                                        local dice machine (mType==4) on
  *                                        clients (04 §5.7; R16 verified: the
@@ -81,9 +82,11 @@ bool clientClockReplica();
 void clientWeatherForce();
 
 /// Post-dKy_Create (stage load): a synced client re-asserts the replicated
-/// time into the save before room-layer resolution (04 §5.10 — worst case one
-/// stale layer until the next room load, accepted) and re-asserts the synced
-/// weather before the first dKyw_wether_move of the new stage (04 §5.6).
+/// time into the save and the synced weather before the first
+/// dKyw_wether_move of the new stage (04 §5.6). Note the start-room LAYER is
+/// resolved BEFORE this hook (deepseek M4 — dStage_Create: dStage_roomInit
+/// -> getLayerNo -> dKy_daynight_check, then dKankyo_create); accepted worst
+/// case of 04 §5.10: one stale layer until the next room change.
 void onStageCreate();
 
 /// daKytag06_Draw type-4 gate: true when the local dice-weather machine must

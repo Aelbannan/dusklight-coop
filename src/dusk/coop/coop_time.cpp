@@ -168,10 +168,6 @@ u8 HostRate() {
 // drains with the same dice_rain_minus rule.
 // ---------------------------------------------------------------------------
 
-u16 ClampU16(int v) {
-    return v > 0xFFFF ? 0xFFFF : static_cast<u16>(v);
-}
-
 bool IsDiceStage(const char* stage) {
     return stage != nullptr && (std::strcmp(stage, "F_SP108") == 0 ||
                                 std::strcmp(stage, "F_SP121") == 0 ||
@@ -179,53 +175,24 @@ bool IsDiceStage(const char* stage) {
 }
 
 void DeriveWeather(u8& outMode, u8& outThunder, u16& outIntensity, u8& outColpat) {
+    // Pure derivation in coop_time_logic.h, shared with the selftest so the
+    // M3.5 table tests cover the shipped decision (incl. the
+    // thunder-with-no-rain case, deepseek M1). The env snapshot is the only
+    // game dependency.
     const dScnKy_env_light_c& env = g_env_light;
-    outThunder = env.mThunderEff.mMode != 0 ? 1 : 0;
-    outColpat = env.mColpatWeather;
-    // Snow first: mSnowCount > 0 only in snow stages, where the dice machine
-    // never runs (its mode would be a stale overworld leftover).
-    if (env.mSnowCount > 0) {
-        outMode = static_cast<u8>(WeatherMode::Snow);
-        outIntensity = ClampU16(env.mSnowCount);
-        return;
-    }
+    SkyDeriveInput in;
+    in.raincnt = env.raincnt;
+    in.snowCount = env.mSnowCount;
+    in.thunder = env.mThunderEff.mMode != 0 ? 1 : 0;
+    in.colpat = env.mColpatWeather;
     const char* stage = dComIfGp_getStartStageName();
-    if (IsDiceStage(stage) && env.dice_wether_mode <= DICE_MODE_THUNDER_HEAVY_e) {
-        // Direct dice-mode mapping (04 §4.3 table): Sunny->Clear, Cloudy->
-        // Cloudy, RainLight->RainLight, RainHeavy->RainHeavy,
-        // ThunderLight/Heavy->ThunderLight/Heavy, UNK6->Clear.
-        static const u8 kDiceModeToWeather[7] = {
-            static_cast<u8>(WeatherMode::Clear),
-            static_cast<u8>(WeatherMode::Cloudy),
-            static_cast<u8>(WeatherMode::RainLight),
-            static_cast<u8>(WeatherMode::RainHeavy),
-            static_cast<u8>(WeatherMode::ThunderLight),
-            static_cast<u8>(WeatherMode::ThunderHeavy),
-            static_cast<u8>(WeatherMode::Clear),
-        };
-        outMode = kDiceModeToWeather[env.dice_wether_mode];
-        outIntensity = ClampU16(env.raincnt);
-        return;
-    }
-    if (env.raincnt > 0) {
-        if (outThunder != 0) {
-            outMode = static_cast<u8>(outColpat >= 2 ? WeatherMode::ThunderHeavy
-                                                     : WeatherMode::ThunderLight);
-        } else if (outColpat >= 2) {
-            outMode = static_cast<u8>(WeatherMode::RainHeavy);
-        } else if (outColpat >= 1) {
-            outMode = static_cast<u8>(WeatherMode::RainLight);
-        } else {
-            outMode = static_cast<u8>(WeatherMode::Clear);  // colpat 0 + rain = drain
-        }
-        outIntensity = ClampU16(env.raincnt);
-        return;
-    }
-    // No rain, no snow: clear or cloudy from the palette (thunder only ever
-    // coexists with colpat >= 1 in the engine, so a stray thunder-without-
-    // rain collapses into Cloudy/Clear — same as the dice proc's gate).
-    outMode = static_cast<u8>(outColpat >= 1 ? WeatherMode::Cloudy : WeatherMode::Clear);
-    outIntensity = 0;
+    in.diceStage = IsDiceStage(stage);
+    in.diceMode = env.dice_wether_mode;
+    const DeriveResult r = DeriveWeatherFrom(in);
+    outMode = r.mode;
+    outThunder = r.thunder;
+    outIntensity = r.intensity;
+    outColpat = r.colpat;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,34 +334,14 @@ void PublishHostState() {
 
 /// Absolute per-tick advance implied by a rate bucket. Pond (rate 3) follows
 /// the vanilla per-segment double/triple rule exactly (04 §5.11) when the
-/// stage says so — same stage data both sides — with the uniform-2x
-/// approximation only as a fallback.
+/// stage says so — same stage data both sides; the fallback outside the two
+/// windows is vanilla 1x (deepseek M3). Pure table in coop_time_logic.h.
 f32 AdvanceStep() {
     const u8 rate = g_time.valid ? g_time.rate : kTimeRateFrozen;
-    switch (rate) {
-    case kTimeRateNormal:
-        return 0.012f;
-    case kTimeRateFast:
-        return 1.0f;  // wolf-howl skip (04 §5.4)
-    case kTimeRatePond2x: {
-        const char* stage = dComIfGp_getStartStageName();
-        if (stage != nullptr &&
-            (std::strcmp(stage, "F_SP127") == 0 || std::strcmp(stage, "R_SP127") == 0))
-        {
-            // (u32)daytime >= 360 || <= 60 -> triple, 150..195 -> double;
-            // mirrors setDaytime()'s vanilla pond block.
-            if (g_env_light.daytime >= 300.0f || g_env_light.daytime <= 60.0f) {
-                return 0.036f;
-            }
-            if (g_env_light.daytime >= 150.0f && g_env_light.daytime <= 195.0f) {
-                return 0.024f;
-            }
-        }
-        return 0.024f;  // uniform 2x fallback (04 §5.11)
-    }
-    default:
-        return 0.0f;  // frozen
-    }
+    const char* stage = dComIfGp_getStartStageName();
+    const bool pondStage = stage != nullptr &&
+                           (std::strcmp(stage, "F_SP127") == 0 || std::strcmp(stage, "R_SP127") == 0);
+    return RatePerTick(rate, g_env_light.daytime, pondStage);
 }
 
 // ---------------------------------------------------------------------------
@@ -465,28 +412,19 @@ void PinWeather() {
     }
 }
 
-/// Per-frame mThunderEff write mirroring the dice proc (dKy_event_proc):
-/// thunder modes force 1, Cloudy forces 0, Clear only clears a 1 — so a
-/// kytag00 thunder-area tag's mMode == 2 survives exactly as it does on the
-/// host (whose dice writes happen later in the frame). Rain modes never touch
-/// it (the host's dice doesn't write in those modes either); the receipt-side
-/// PinWeather already set it to the host's value at the mode change.
+/// Per-frame mThunderEff write mirroring the dice proc (dKy_event_proc),
+/// deferring to the wire (deepseek M1): thunder modes force 1, Cloudy clears
+/// only when the synced g_weather.thunder == 0, Clear only clears a 1 when
+/// the wire says 0 — so a synced thunder that survives a Cloudy derivation
+/// (non-dice stages: wether proc case 5 holds thunder with rain drained) is
+/// NOT undone, and a kytag00 thunder-area tag's mMode == 2 survives exactly
+/// as it does on the host. Rain modes never touch it. Pure policy in
+/// coop_time_logic.h.
 void ThunderPerMode() {
-    switch (static_cast<WeatherMode>(g_weather.mode)) {
-    case WeatherMode::ThunderLight:
-    case WeatherMode::ThunderHeavy:
-        g_env_light.mThunderEff.mMode = 1;
-        break;
-    case WeatherMode::Cloudy:
-        g_env_light.mThunderEff.mMode = 0;
-        break;
-    case WeatherMode::Clear:
-        if (g_env_light.mThunderEff.mMode == 1) {
-            g_env_light.mThunderEff.mMode = 0;
-        }
-        break;
-    default:
-        break;  // RainLight/RainHeavy/Snow: leave kytag00 area state alone
+    const u8 next = NextThunderMode(g_weather.mode, g_weather.thunder,
+                                    g_env_light.mThunderEff.mMode);
+    if (next != g_env_light.mThunderEff.mMode) {
+        g_env_light.mThunderEff.mMode = next;
     }
 }
 
@@ -562,11 +500,17 @@ bool clientClockReplica() {
     if (dKy_darkworld_check()) {
         // 04 §5.5: the client's OWN twilight clock is local story — keep
         // vanilla darkworld semantics (advance the local dark clock; daytime
-        // pinned to 0, which is the correct fixed twilight lighting).
-        env.dark_daytime += env.time_change_rate;
-        if ((u32)env.dark_daytime >= 360.0f) {
-            env.darktime_week++;
-            env.dark_daytime = 0.0f;
+        // pinned to 0, which is the correct fixed twilight lighting). The
+        // vanilla advance gates the darkworld branch on
+        // using_time_control_tag == 0 too (deepseek M2 / glm M3): an active
+        // kytag11 time-control tag holds the twilight clock on the host, so
+        // the replica must hold too.
+        if (env.using_time_control_tag == 0) {
+            env.dark_daytime += env.time_change_rate;
+            if ((u32)env.dark_daytime >= 360.0f) {
+                env.darktime_week++;
+                env.dark_daytime = 0.0f;
+            }
         }
         env.daytime = 0.0f;
     } else if (g_time.valid && g_time.rate != kTimeRateFrozen) {
@@ -615,11 +559,16 @@ void onStageCreate() {
     if (!ClientActive()) {
         return;
     }
-    // 04 §5.10: re-assert the replicated time before room-layer resolution
-    // (dComIfG_get_timelayer reads dKy_daynight_check). The stage-init write
-    // (stagInfo hour / nexttime / twilight old_time restore) is clobbered —
-    // host time is authoritative. Worst case: one stale room layer until the
-    // next room load (accepted v1).
+    // 04 §5.10: re-assert the replicated time into the save. Ordering note
+    // (deepseek M4): this runs post-dKy_Create — the start-room LAYER is
+    // resolved BEFORE it (dStage_Create: dStage_roomInit -> getLayerNo ->
+    // dKy_daynight_check -> dComIfGs_getTime, then dKankyo_create ->
+    // dKy_Create -> here); a true pre-roomInit assert would need a
+    // dStage_Create hook. The pre-assert time is the previous stage's end ≈
+    // the synced time, so a wrong layer only occurs if dusk/dawn crosses
+    // during the load — the accepted worst case of 04 §5.10, corrected at
+    // the next room change. The stage-init write (stagInfo hour / nexttime /
+    // twilight old_time restore) is clobbered — host time is authoritative.
     if (g_time.valid) {
         dComIfGs_setTime(g_time.time);
         dComIfGs_setDate(g_time.day);
