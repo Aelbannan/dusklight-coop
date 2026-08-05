@@ -32,8 +32,11 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
 //     clients — the owner validates and emits a CombatResult.
 //   - EnemySnapshot: flows owner -> clients only (host->all); never
 //     client->host then relayed.
-//   - CombatResult / EnemyEvent: host simulcast (relay).
-// The enum + switch below keep that split explicit without implementing M2.
+//   - CombatResult / EnemyEvent: host simulcast. The host is the only
+//     emitter (SendGameMessage -> SendToAll), so the host never receives
+//     these FROM a peer; PolicyFor keeps them out of the inbound relay path
+//     (a buggy/malicious client cannot get its result/event echoed).
+// The enum + switch below keep that split explicit.
 // -------------------------------------------------------------------------
 enum class RelayPolicy : u8 {
     None,  // not star-relayed (M2+ routed explicitly, not via the fallthrough)
@@ -45,11 +48,19 @@ RelayPolicy PolicyFor(MsgType type) {
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
         return RelayPolicy::Star;
+    case MsgType::EnemySnapshot:
+    case MsgType::EnemyEvent:
+    case MsgType::CombatIntent:
+    case MsgType::CombatResult:
+        // M2: all enemy/combat traffic is routed explicitly by the sim owner
+        // (host in v1), never relayed from client -> client by the host. The
+        // host's own broadcasts flow via SendGameMessage (SendToAll); an
+        // inbound copy from a peer is handed to the game handler (session.cpp
+        // HandleData) and NOT re-broadcast.
+        return RelayPolicy::None;
     default:
         // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd) is handled
-        // directly by the session, never via ForwardGameMessage. M2 game
-        // traffic (EnemySnapshot/CombatIntent/CombatResult/EnemyEvent/...)
-        // gets its own explicit dispatch at its seam, not the Star default.
+        // directly by the session, never via ForwardGameMessage.
         return RelayPolicy::None;
     }
 }
@@ -285,6 +296,20 @@ void Session::HandleData(const InboundPacket& pkt) {
         }
         if (role_ == SessionRole::Host) {
             ForwardGameMessage(pkt.peerIndex, msg.type, msg.payload);
+        }
+        break;
+    case MsgType::EnemySnapshot:
+    case MsgType::EnemyEvent:
+    case MsgType::CombatIntent:
+    case MsgType::CombatResult:
+        // M2 enemy/combat traffic. The game handler consumes it; the host
+        // does NOT relay inbound copies (PolicyFor returns None — CombatIntent
+        // goes client->sim-owner and is validated there; a client sending
+        // EnemySnapshot/CombatResult is ignored rather than echoed). The
+        // host's own EnemySnapshot/CombatResult/EnemyEvent broadcasts go out
+        // via SendGameMessage.
+        if (gameHandler_) {
+            gameHandler_(msg.type, msg.payload);
         }
         break;
     default:

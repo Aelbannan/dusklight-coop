@@ -45,7 +45,13 @@ namespace dusk::net {
 /// D4's raw-matrix pose (per-joint Mtx table + scale flags + baseTR + face +
 /// roomNo + stateFlags byte, ~2 KB with 3x4 Mtx); PlayerEvent gained an
 /// extended data2 field for item-joint payloads.
-constexpr u16 kProtocolVersion = 3;
+///
+/// v4 (M2): EnemySnapshot gained per-enemy `speed` (velocity, for knockback /
+/// anim hints) and a per-type `semantics` tag (hp | hitCount); CombatIntent
+/// was rebuilt to carry the RAW attack fields the sim owner needs to reproduce
+/// damage deterministically (atp, powerType, hitType, AtType bits) plus the
+/// contract hitPos/attackerPos — see m2-design-notes.md §1.
+constexpr u16 kProtocolVersion = 4;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -291,10 +297,13 @@ struct EnemySnapshotMsg {
     u16 hp = 0;
     u16 maxHp = 0;
     u8 aggro = kInvalidPlayerId;  // target player id; kInvalidPlayerId = none
-    u8 flags = 0;                 // frozen, dead, boss-phase...
-    s16 angle = 0;
-    u32 anim = 0;  // action/anim state hint
-    Vec3f pos;
+    u8 flags = 0;                 // dead / downed / wolf-bitten + boss-phase
+    s16 angle = 0;                // shape_angle.y
+    u32 anim = 0;  // per-type packed: action id (u16) + anim/model frame (u16)
+    Vec3f pos;     // current.pos
+    Vec3f speed;   // current velocty (knockback / anim hints)
+    u8 semantics = 0;          // DamageSemantics from the whitelist adapter
+    u8 reserved[3] = {};
 };
 
 struct EnemyEventMsg {
@@ -306,13 +315,18 @@ struct EnemyEventMsg {
 
 struct CombatIntentMsg {
     u8 attackerId = kInvalidPlayerId;
-    u8 attackKind = 0;      // weapon/effect id
+    u8 powerType = 0;  // the target enemy's mPowerType (validation vs owner)
+    u8 hitType = 0;    // HIT_TYPE_* (at_power_check output on the client)
     u8 targetPlayerId = kInvalidPlayerId;  // friendly-fire target (v1: rejected)
-    u8 reserved = 0;
     u16 targetEnemyId = 0xFFFF;
-    u16 damage = 0;
-    u32 seq = 0;  // attacker request counter, echoed by CombatResult
-    Vec3f position;
+    u8 atp = 0;             // raw At collider atp (the enemy's own handler scales it)
+    u8 reserved = 0;
+    u16 computedPower = 0;  // client's locally-computed damage (informational;
+                            // owner reproduces deterministically — m2-design-notes §1)
+    u32 seq = 0;            // attacker request counter, echoed by CombatResult
+    u32 atType = 0;         // At collider mType bits (cCcD_ObjAtType)
+    Vec3f hitPos;           // SetAtTgGObjInf contact point
+    Vec3f attackerPos;      // attacker current.pos (range validation)
 };
 
 struct CombatResultMsg {

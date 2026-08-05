@@ -162,11 +162,16 @@ u16 WireSize(MsgType type) {
     case MsgType::PlayerEvent:
         return 4 + 4 + 4;  // 12
     case MsgType::EnemySnapshot:
-        return 2 + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 12;  // 28
+        // enemyId,type,hp,maxHp,aggro,flags,angle,anim,pos,speed,semantics,reserved[3]
+        // = 2+2+2+2+1+1+2+4+12+12+1+3 = 44
+        return 2 + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 12 + 12 + 1 + 3;  // 44
     case MsgType::EnemyEvent:
         return 2 + 2 + 1 + 1;  // 6
     case MsgType::CombatIntent:
-        return 4 + 2 + 2 + 4 + 12;  // 24
+        // attackerId,powerType,hitType,targetPlayerId,targetEnemyId,atp,reserved,
+        // computedPower,seq,atType,hitPos,attackerPos
+        // = 1+1+1+1+2+1+1+2+4+4+12+12 = 42
+        return 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2 + 4 + 4 + 12 + 12;  // 42
     case MsgType::CombatResult:
         return 2 + 2 + 2 + 1 + 1 + 4;  // 12
     case MsgType::TimeSync:
@@ -215,18 +220,26 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU16(msg.payload.enemySnapshot.maxHp) &&
                w.WriteU8(msg.payload.enemySnapshot.aggro) && w.WriteU8(msg.payload.enemySnapshot.flags) &&
                w.WriteS16(msg.payload.enemySnapshot.angle) && w.WriteU32(msg.payload.enemySnapshot.anim) &&
-               w.WriteVec3f(msg.payload.enemySnapshot.pos);
+               w.WriteVec3f(msg.payload.enemySnapshot.pos) &&
+               w.WriteVec3f(msg.payload.enemySnapshot.speed) &&
+               w.WriteU8(msg.payload.enemySnapshot.semantics) &&
+               w.WriteBytes(msg.payload.enemySnapshot.reserved, 3);
     case MsgType::EnemyEvent:
         return w.WriteU16(msg.payload.enemyEvent.enemyId) && w.WriteU16(msg.payload.enemyEvent.data) &&
                w.WriteU8(msg.payload.enemyEvent.eventId) && w.WriteU8(msg.payload.enemyEvent.flags);
     case MsgType::CombatIntent:
         return w.WriteU8(msg.payload.combatIntent.attackerId) &&
-               w.WriteU8(msg.payload.combatIntent.attackKind) &&
+               w.WriteU8(msg.payload.combatIntent.powerType) &&
+               w.WriteU8(msg.payload.combatIntent.hitType) &&
                w.WriteU8(msg.payload.combatIntent.targetPlayerId) &&
-               w.WriteU8(msg.payload.combatIntent.reserved) &&
                w.WriteU16(msg.payload.combatIntent.targetEnemyId) &&
-               w.WriteU16(msg.payload.combatIntent.damage) && w.WriteU32(msg.payload.combatIntent.seq) &&
-               w.WriteVec3f(msg.payload.combatIntent.position);
+               w.WriteU8(msg.payload.combatIntent.atp) &&
+               w.WriteU8(msg.payload.combatIntent.reserved) &&
+               w.WriteU16(msg.payload.combatIntent.computedPower) &&
+               w.WriteU32(msg.payload.combatIntent.seq) &&
+               w.WriteU32(msg.payload.combatIntent.atType) &&
+               w.WriteVec3f(msg.payload.combatIntent.hitPos) &&
+               w.WriteVec3f(msg.payload.combatIntent.attackerPos);
     case MsgType::CombatResult:
         return w.WriteU16(msg.payload.combatResult.targetEnemyId) &&
                w.WriteU16(msg.payload.combatResult.damage) &&
@@ -297,7 +310,10 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.enemySnapshot.flags) &&
                r.ReadS16(out.payload.enemySnapshot.angle) &&
                r.ReadU32(out.payload.enemySnapshot.anim) &&
-               r.ReadVec3f(out.payload.enemySnapshot.pos);
+               r.ReadVec3f(out.payload.enemySnapshot.pos) &&
+               r.ReadVec3f(out.payload.enemySnapshot.speed) &&
+               r.ReadU8(out.payload.enemySnapshot.semantics) &&
+               r.ReadBytes(out.payload.enemySnapshot.reserved, 3);
     case MsgType::EnemyEvent:
         return r.ReadU16(out.payload.enemyEvent.enemyId) &&
                r.ReadU16(out.payload.enemyEvent.data) &&
@@ -305,13 +321,17 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.enemyEvent.flags);
     case MsgType::CombatIntent:
         return r.ReadU8(out.payload.combatIntent.attackerId) &&
-               r.ReadU8(out.payload.combatIntent.attackKind) &&
+               r.ReadU8(out.payload.combatIntent.powerType) &&
+               r.ReadU8(out.payload.combatIntent.hitType) &&
                r.ReadU8(out.payload.combatIntent.targetPlayerId) &&
-               r.ReadU8(out.payload.combatIntent.reserved) &&
                r.ReadU16(out.payload.combatIntent.targetEnemyId) &&
-               r.ReadU16(out.payload.combatIntent.damage) &&
+               r.ReadU8(out.payload.combatIntent.atp) &&
+               r.ReadU8(out.payload.combatIntent.reserved) &&
+               r.ReadU16(out.payload.combatIntent.computedPower) &&
                r.ReadU32(out.payload.combatIntent.seq) &&
-               r.ReadVec3f(out.payload.combatIntent.position);
+               r.ReadU32(out.payload.combatIntent.atType) &&
+               r.ReadVec3f(out.payload.combatIntent.hitPos) &&
+               r.ReadVec3f(out.payload.combatIntent.attackerPos);
     case MsgType::CombatResult:
         return r.ReadU16(out.payload.combatResult.targetEnemyId) &&
                r.ReadU16(out.payload.combatResult.damage) &&

@@ -24,6 +24,11 @@
  *   - host/client session lifecycle: JoinRequest -> JoinAccept + WorldInit,
  *     JoinReject (version mismatch, session full), PlayerLeave relay, and
  *     host SessionEnd;
+ *   - M2 relay policy: CombatIntent/EnemySnapshot/CombatResult/EnemyEvent do
+ *     NOT ride the PlayerState star-relay — a client's CombatIntent is
+ *     consumed by the sim owner and never echoed to other clients; the
+ *     owner's EnemySnapshot/CombatResult/EnemyEvent simulcasts reach every
+ *     client; a buggy client's EnemySnapshot/CombatResult is not echoed;
  *   - clean shutdown: every transport thread joined, every ENet host
  *     destroyed (leak-free exit).
  *
@@ -236,6 +241,11 @@ Message MakeMessage(MsgType type) {
         p.angle = -12345;
         p.anim = 0x01020304;
         p.pos = Vec3f{10.0f, 20.0f, 30.0f};
+        p.speed = Vec3f{-1.0f, 0.0f, 2.0f};
+        p.semantics = 1;
+        p.reserved[0] = 0xDE;
+        p.reserved[1] = 0xAD;
+        p.reserved[2] = 0xBE;
         break;
     }
     case MsgType::EnemyEvent: {
@@ -249,12 +259,16 @@ Message MakeMessage(MsgType type) {
     case MsgType::CombatIntent: {
         auto& p = m.payload.combatIntent;
         p.attackerId = 1;
-        p.attackKind = 5;
+        p.powerType = 3;
+        p.hitType = 12;
         p.targetPlayerId = kInvalidPlayerId;
         p.targetEnemyId = 77;
-        p.damage = 4;
+        p.atp = 3;
+        p.computedPower = 30;
         p.seq = 12345;
-        p.position = Vec3f{0.5f, 0.5f, 0.5f};
+        p.atType = 0x00000006;  // NORMAL_SWORD | HORSE
+        p.hitPos = Vec3f{0.5f, 1.5f, 2.5f};
+        p.attackerPos = Vec3f{512.0f, 0.0f, -256.0f};
         break;
     }
     case MsgType::CombatResult: {
@@ -814,6 +828,184 @@ void RunGameMessageDemo() {
     host.Stop();
 }
 
+/// M2 star-relay policy: enemy/combat traffic must NOT ride the
+/// PlayerState/PlayerEvent star-relay path. A client's CombatIntent reaches
+/// the sim owner (the host in v1) and is consumed there — it is never echoed
+/// to the other client; the host's EnemySnapshot/CombatResult/EnemyEvent
+/// simulcasts (SendGameMessage -> SendToAll) reach every client; a buggy
+/// client's EnemySnapshot/CombatResult is consumed but not echoed.
+void RunM2RelayPolicyCheck() {
+    std::printf("m2: enemy/combat relay policy (star seam)\n");
+    Demo demo;
+
+    Session host;
+    SessionConfig hostCfg;
+    hostCfg.port = 0;
+    hostCfg.name = "M2 Host";
+    hostCfg.maxPlayers = 3;
+    Check(host.StartHost(hostCfg), "m2 host starts (Listening)");
+    demo.live.push_back(&host);
+    const u16 port = host.boundPort();
+
+    Session a;
+    SessionConfig aCfg;
+    aCfg.joinHost = "127.0.0.1";
+    aCfg.port = port;
+    aCfg.name = "M2 Attacker";
+    aCfg.version = kProtocolVersion;
+    Check(a.StartClient(aCfg), "m2 attacker starts");
+    demo.live.push_back(&a);
+    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000),
+        "m2 attacker joined");
+
+    Session b;
+    SessionConfig bCfg;
+    bCfg.joinHost = "127.0.0.1";
+    bCfg.port = port;
+    bCfg.name = "M2 Observer";
+    bCfg.version = kProtocolVersion;
+    Check(b.StartClient(bCfg), "m2 observer starts");
+    demo.live.push_back(&b);
+    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000),
+        "m2 observer joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+        "m2 host roster has 3 players");
+
+    int hostIntents = 0;
+    int aIntents = 0;
+    int bIntents = 0;
+    int hostSnapshots = 0;
+    int aSnapshots = 0;
+    int bSnapshots = 0;
+    int hostResults = 0;
+    int aResults = 0;
+    int bResults = 0;
+    int aEvents = 0;
+    int bEvents = 0;
+    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++hostIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++hostSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++hostResults;
+            break;
+        default:
+            break;
+        }
+    });
+    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++aIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++aSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++aResults;
+            break;
+        case MsgType::EnemyEvent:
+            ++aEvents;
+            break;
+        default:
+            break;
+        }
+    });
+    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++bIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++bSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++bResults;
+            break;
+        case MsgType::EnemyEvent:
+            ++bEvents;
+            break;
+        default:
+            break;
+        }
+    });
+
+    // 1) CombatIntent: client A -> sim owner (host). The host consumes it for
+    //    validation; it must NOT be relayed to observer B or echoed back to A.
+    PayloadUnion intent = {};
+    intent.combatIntent.attackerId = a.selfId();
+    intent.combatIntent.targetEnemyId = 77;
+    intent.combatIntent.atp = 3;
+    intent.combatIntent.powerType = 1;
+    intent.combatIntent.seq = 1;
+    Check(a.SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
+    Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
+        "sim owner consumed A's CombatIntent");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(aIntents == 0 && bIntents == 0,
+        "CombatIntent is NOT relayed to other clients");
+
+    // 2) EnemySnapshot: owner (host) simulcast reaches both clients.
+    PayloadUnion snap = {};
+    snap.enemySnapshot.enemyId = 77;
+    snap.enemySnapshot.type = 0x01AF;
+    snap.enemySnapshot.hp = 42;
+    snap.enemySnapshot.maxHp = 100;
+    Check(host.SendGameMessage(MsgType::EnemySnapshot, snap), "host sends EnemySnapshot");
+    Check(demo.WaitFor([&] { return aSnapshots >= 1 && bSnapshots >= 1; }, 10000),
+        "clients received the host's EnemySnapshot");
+
+    // 3) A buggy client's EnemySnapshot is consumed but NOT echoed to B.
+    PayloadUnion clientSnap = {};
+    clientSnap.enemySnapshot.enemyId = 78;
+    clientSnap.enemySnapshot.type = 0x01AF;
+    Check(a.SendGameMessage(MsgType::EnemySnapshot, clientSnap), "A sends EnemySnapshot");
+    Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
+        "sim owner consumed A's EnemySnapshot");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(bSnapshots == 1, "A's EnemySnapshot is NOT relayed to B");
+
+    // 4) CombatResult: owner simulcast reaches both clients.
+    PayloadUnion result = {};
+    result.combatResult.targetEnemyId = 77;
+    result.combatResult.damage = 4;
+    result.combatResult.newHp = 38;
+    result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
+    result.combatResult.attackerId = a.selfId();
+    result.combatResult.seq = 1;
+    Check(host.SendGameMessage(MsgType::CombatResult, result), "host sends CombatResult");
+    Check(demo.WaitFor([&] { return aResults >= 1 && bResults >= 1; }, 10000),
+        "CombatResult simulcast reached both clients");
+
+    // 5) EnemyEvent(died): owner simulcast reaches both clients.
+    PayloadUnion ev = {};
+    ev.enemyEvent.enemyId = 77;
+    ev.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
+    ev.enemyEvent.data = 0x1E;  // drop table id
+    Check(host.SendGameMessage(MsgType::EnemyEvent, ev), "host sends EnemyEvent(died)");
+    Check(demo.WaitFor([&] { return aEvents >= 1 && bEvents >= 1; }, 10000),
+        "EnemyEvent simulcast reached both clients");
+
+    // 6) A buggy client's CombatResult is consumed but NOT echoed to B.
+    PayloadUnion rogueResult = {};
+    rogueResult.combatResult.targetEnemyId = 99;
+    Check(a.SendGameMessage(MsgType::CombatResult, rogueResult), "A sends CombatResult");
+    Check(demo.WaitFor([&] { return hostResults >= 1; }, 10000),
+        "sim owner consumed A's CombatResult");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(bResults == 1, "A's CombatResult is NOT relayed to B");
+
+    for (Session* s : demo.live) {
+        s->Stop();
+    }
+    demo.live.clear();
+    host.Stop();
+}
+
 // ---------------------------------------------------------------------------
 // Peer-slot generation guard (deepseek M4)
 // ---------------------------------------------------------------------------
@@ -1137,6 +1329,7 @@ int main() {
     RunOversizedMetricCheck();
     RunHandshakeDemo();
     RunGameMessageDemo();
+    RunM2RelayPolicyCheck();
 
     dusk::net::shutdown();
 
