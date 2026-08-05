@@ -4,6 +4,7 @@
 #include "nlohmann/json.hpp"
 
 #include "aurora/lib/logging.hpp"
+#include "dusk/coop/coop.h"
 #include "dusk/io.hpp"
 #include "dusk/net/module.h"
 #include "dusk/settings.h"
@@ -642,6 +643,10 @@ void shutdown() {
     // Matched teardown for dusk::net::initialize() (src/dusk/net/module.cpp).
     // Runs after any session transports are stopped, before aurora_shutdown().
     dusk::net::shutdown();
+
+    // Network co-op (M1): graceful session stop before ENet tears down — a
+    // client sends PlayerLeave, the host broadcasts SessionEnd.
+    dusk::coop::shutdown();
 }
 
 }  // namespace dusk::config

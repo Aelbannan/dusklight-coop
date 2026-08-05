@@ -1419,6 +1419,7 @@ set(DUSK_FILES
         include/dusk/net/protocol.h
         include/dusk/net/session.h
         include/dusk/net/transport.h
+        include/dusk/coop/coop.h
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/OSContext.cpp
         src/dusk/OSMutex.cpp
@@ -1432,6 +1433,7 @@ set(DUSK_FILES
         src/dusk/asserts.cpp
         src/dusk/autosave.cpp
         src/dusk/config.cpp
+        src/dusk/coop/coop.cpp
         src/dusk/config.hpp
         src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp

@@ -30,6 +30,7 @@
 #include "tracy/Tracy.hpp"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
+#include "dusk/coop/coop.h"
 #include "dusk/menu_pointer.h"
 #endif
 
@@ -818,6 +819,11 @@ static void duskExecute() {
     }
 
     dusk::mods::ModLoader::instance().tick();
+
+    // Network co-op (M1): session lifecycle + puppet spawn/despawn + receive
+    // handling, once per game frame before the actor phase. No-op when
+    // net.enabled is false (single-player stays vanilla).
+    dusk::coop::onGameFrame();
 }
 #endif
 
