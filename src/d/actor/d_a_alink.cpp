@@ -2424,6 +2424,22 @@ void daAlink_c::resetRootMtx() {
 }
 
 bool daAlink_c::modelCallBack(int i_jointNo) {
+#if TARGET_PC
+    // Co-op (M1): a puppet's pose is driven entirely by the received joint
+    // matrices (ApplyPuppetState pastes them and recomputes the weight
+    // envelopes — the PRIMARY render fix, commit 8cd182d4d3). Its own
+    // per-joint procedural corrections (foot IK via setFootMatrix, arm IK,
+    // upper-body orientation via setUpperFront, blend-rate morph) are
+    // computed from the puppet's frozen local animation state and would
+    // fight the pasted pose whenever the remote's action or form diverges;
+    // the sender's corrections are already baked into the synced matrices.
+    // Skipping them is defense-in-depth (harmless — the sender's feet/shadow
+    // ground-alignment rides the synced joints and pos, not these callbacks)
+    // and avoids the wasted per-joint work.
+    if (dusk::coop::isPuppet(this)) {
+        return true;
+    }
+#endif
     jointControll(i_jointNo);
 
     if (i_jointNo == 0) {
