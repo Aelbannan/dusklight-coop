@@ -3,15 +3,37 @@
 How to build, run, and verify the networked co-op milestones. Current status
 flag at the top; check it before testing.
 
-> **Status: M0–M4 + M4.5 fix pass landed (branch `net-coop`).** M4.5
-> (review-m4-glm-5.2.md) REMOVED the join-warp by user decision — stay-put
-> join policy (a joining client stays in its own stage; players meet by
-> traveling); room-scoped `EnemyEvent` (MAJOR 2); gated the SceneChange
-> room-table sniff on the wire same-stage flag (MINOR 1); dropped dead code;
-> swept all 16 message types in the wire-determinism test; and seeded the
-> announce player count before the first datagram (no 0-player announces).
-> The selftest (318 checks) is green on a forced rebuild; net-off boot is
-> untouched (all net code remains `net.enabled`-gated).
+> **Status: M0–M4 + M4.5 fix pass + M4.6 capstone pass landed (branch
+> `net-coop`).** M4.5 (review-m4-glm-5.2.md) REMOVED the join-warp by user
+> decision — stay-put join policy (a joining client stays in its own stage;
+> players meet by traveling); room-scoped `EnemyEvent` (MAJOR 2); gated the
+> SceneChange room-table sniff on the wire same-stage flag (MINOR 1); dropped
+> dead code; swept all 16 message types in the wire-determinism test; and
+> seeded the announce player count before the first datagram (no 0-player
+> announces).
+>
+> **M4.6 (capstone — review-full-deepseek-v4-flash-0731.md +
+> review-full-glm-5.2.md):** the full-implementation pass. MAJOR 1 —
+> `Session::Stop()` always stops the transport when running (a session that
+> ended from the host's side — SessionEnd / connection loss — can now start a
+> new session in the same process; selftest `RunM46SessionRestartCheck` covers
+> both the graceful and the peer-timeout paths). MAJOR 2 — `PollHostDeaths`
+> no longer derefs a freed actor: the per-type adapter is stored on the entry
+> at registration (was a use-after-free on every host enemy kill). MAJOR 3 —
+> non-owner enemies are registered on the FIRST frame of a room change (not
+> the 15-frame cadence) and freeze optimistically when unregistered in a
+> non-owned room (no native-AI damage window). The MINOR cluster: SceneChange
+> receive gate (same-stage only), dead `onRoomUnload` deleted, per-stage reset
+> keyed on (stage, room), join/start-failure toasts + distinct start-failure
+> logging + failed-start reset on net.* var change, spawn-limiter reset on
+> material movement, node-stable enemy registry (std::map), 2017-B
+> PlayerState / 44-B EnemySnapshot doc corrections, live announcer player
+> count, RoomClear + cross-stage selftest rows, one sender-gate
+> implementation, v6 `scene` semantic in the version history, stale-ownership
+> sweep, `sendPlayerState` isPuppet guard, RoomClear gate < 128, OnWorldInit
+> join-time-reference comment, 03-enemies.md supersede banners, dead-wire
+> documentation (CombatResult / aggro / type). The selftest (361 checks) is
+> green on a forced rebuild; net-off boot is untouched.
 
 ## 0. Config vars (defaults)
 
@@ -44,9 +66,13 @@ simulcast; TimeSync/WeatherChange host→all), the time/weather contract
 (1 Hz TimeSync cadence, thunder/pond/seed tables), M4 room ownership
 (sticky first-in, host-default, transfer on leave/disconnect, intent
 routing to a non-host owner, same-room snapshot/EVENT scoping, the
-cross-stage SceneChange gate), the worldStage carry (stay-put join),
-entity-id stability across takeover, and LAN discovery announce/receive
-over loopback.
+cross-stage SceneChange gate, the M4.6 RoomClear receive-gate rows and the
+explicit cross-stage EnemyEvent row), the worldStage carry (stay-put join),
+entity-id stability across takeover, LAN discovery announce/receive over
+loopback, and the M4.6 session-restart check (a client whose session ended
+from the host's side — graceful SessionEnd and hard connection loss — gets
+its transport torn down by Stop() and starts a second/third session in the
+same process).
 
 ## 2. Full build
 

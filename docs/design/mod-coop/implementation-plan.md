@@ -172,11 +172,34 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 ### M4 — Session polish + room ownership
 
-> **Status: IMPLEMENTED (M4 complete; M4.5 fix pass COMPLETE — see below).**
-> Every block below landed on `net-coop`; the selftest (318 checks incl. the
-> M4 suites: room-ownership routing to a non-host owner, same-room
-> snapshot/event scoping, ownership transfer, worldStage carry, entity-id
-> stability, LAN discovery) is green on a forced rebuild.
+> **Status: IMPLEMENTED (M4 complete; M4.5 fix pass COMPLETE; M4.6 capstone
+> fix pass COMPLETE — see below).** Every block below landed on `net-coop`;
+> the selftest (361 checks incl. the M4 suites: room-ownership routing to a
+> non-host owner, same-room snapshot/event scoping, ownership transfer,
+> worldStage carry, entity-id stability, LAN discovery, the M4.6
+> session-restart and RoomClear/cross-stage rows) is green on a forced
+> rebuild.
+>
+> **M4.6 (review-full-deepseek-v4-flash-0731.md + review-full-glm-5.2.md):**
+> MAJOR 1 — `Session::Stop()` always stops the transport when running
+> (host-side-end → same-process rejoin works; selftested). MAJOR 2 —
+> `PollHostDeaths` UAF fixed: the per-type adapter is captured on the entry
+> at registration (never re-derived from a freed actor). MAJOR 3 — immediate
+> scan on room change + optimistic freeze for unregistered whitelisted types
+> in a non-owned room (no native-AI damage window on room entry). MINORs:
+> SceneChange receive gate (same-stage only), `onRoomUnload` deleted, per-stage
+> reset keyed on (stage, room), join/start-failure toasts + distinct
+> failure-cause logging + failed-start reset on net.* var change, spawn-limiter
+> reset on material movement, node-stable enemy registry, 2017-B PlayerState /
+> 44-B EnemySnapshot doc corrections, live announcer player count, one
+> sender-gate implementation, v6 `scene` version-history note, stale-ownership
+> sweep, `sendPlayerState` isPuppet guard, RoomClear gate < 128, OnWorldInit
+> join-time-reference comment, 03-enemies.md supersede banners, dead-wire
+> documentation. The M4.6 commits: `session: always stop transport on session
+> end (host-leave rejoin)`, `enemy: store adapter on entry (fix PollHostDeaths
+> UAF)`, `enemy: immediate scan on room change + optimistic freeze`, `coop:
+> SceneChange receive gate / spawn limiter / sender-gate consolidation`, `docs:
+> 2017-B PlayerState + 44-B EnemySnapshot + supersede banners`, `M4.6 complete`.
 >
 > **M4.5 (review-m4-glm-5.2.md):** MAJOR 1 — join-warp REMOVED by user
 > decision: a joining client stays in its own save stage (stay-put; the D6
@@ -192,7 +215,7 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 > player count seeded before the first datagram (no 0-player announces).
 > MINOR 8 — the join-warp statics went away with the feature. Evidence:
 > forced clean rebuild green with zero warnings from the touched TUs;
-> `dusk_net_selftest` 318/318 PASS. (Live loopback cannot be re-run here —
+> `dusk_net_selftest` 361/361 PASS. (Live loopback cannot be re-run here —
 > the RVZ was removed from the tree.)
 
 **Room ownership (from `docs/design/network.md` §6 — moved up from M5 by user decision):**
