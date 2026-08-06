@@ -1274,10 +1274,6 @@ const net::WeatherStateInfo& worldWeather() {
     return g_session.worldWeather();
 }
 
-void setWorldStage(const net::StageInfo& stage) {
-    g_session.setWorldStage(stage);
-}
-
 bool amIRoomOwner(s8 roomNo) {
     if (!SessionLive() || roomNo < 0) {
         return false;
@@ -1316,14 +1312,6 @@ bool remoteInRoom(s8 roomNo) {
         }
     }
     return false;
-}
-
-net::SessionEndReason sessionEndReason() {
-    return g_session.endReason();
-}
-
-bool hostWorldStageKnown() {
-    return g_session.worldStage().stage[0] != '\0';
 }
 
 }  // namespace dusk::coop

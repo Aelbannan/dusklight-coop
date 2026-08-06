@@ -131,9 +131,5 @@ bool amIRoomOwner(s8 roomNo);
 /// hostage to a stale room). Drives the EnemySnapshot sender gate (M2 review
 /// MINOR-6: scope by the remote's ACTUAL room, not any present player).
 bool remoteInRoom(s8 roomNo);
-/// Client-side: why the session ended (host-leave UX, M4 D8).
-net::SessionEndReason sessionEndReason();
-/// True when the session carries a non-empty host stage (join-warp gate).
-bool hostWorldStageKnown();
 
 }  // namespace dusk::coop

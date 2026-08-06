@@ -443,7 +443,9 @@ void RunProtocolChecks() {
 /// runs produced different bytes (deepseek M3).
 void RunDeterminismChecks() {
     std::printf("wire: deterministic serialization (zero-init payload unions)\n");
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
+    // M4.5 (review MINOR 5): sweep ALL 16 types — the original bound stopped
+    // at WeatherChange (15) and skipped RoomOwnership (16, added in M4).
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::RoomOwnership);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
