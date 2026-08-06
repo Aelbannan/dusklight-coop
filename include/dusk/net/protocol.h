@@ -348,6 +348,12 @@ struct PlayerStateMsg {
 struct PlayerEventMsg {
     u8 playerId = kInvalidPlayerId;
     u8 eventId = 0;  // PlayerEventId
+    /// PlayerEventId::SceneChange only (M4.5 review MINOR 1): 1 = the move is
+    /// WITHIN the current stage (same stage, new room), 0 = the stage itself
+    /// changed (cross-stage) or not a SceneChange. The host's room-ownership
+    /// sniff keys (last-known stage, new room), which is valid for same-stage
+    /// moves only — a cross-stage SceneChange must not create a bogus
+    /// (oldStage, newRoom) entry.
     u8 scene = 0;
     u8 reserved = 0;
     u32 data = 0;   // event-specific payload (see PlayerEventId)

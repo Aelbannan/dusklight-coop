@@ -298,10 +298,11 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
 // Sender
 // ---------------------------------------------------------------------------
 
-void SendPlayerEvent(net::PlayerEventId eventId, u32 data, u32 data2) {
+void SendPlayerEvent(net::PlayerEventId eventId, u32 data, u32 data2, u8 scene = 0) {
     net::PayloadUnion payload = {};
     payload.playerEvent.playerId = SelfIdChecked();
     payload.playerEvent.eventId = static_cast<u8>(eventId);
+    payload.playerEvent.scene = scene;
     payload.playerEvent.data = data;
     payload.playerEvent.data2 = data2;
     if (!g_session.SendGameMessage(net::MsgType::PlayerEvent, payload)) {
@@ -1080,12 +1081,19 @@ void sendPlayerState(daAlink_c* link) {
     // check closes after one inbound reply — earlier than the first post-move
     // PlayerState may land. Without the window a dropped state left the
     // remote's slot on the old stage: a puppet frozen at the exit spot.
-    if (roomNow != g_lastSentRoom || std::strcmp(myStage, g_lastSentStage) != 0) {
+    // M4.5 (review MINOR 1): the event marks whether the move is WITHIN the
+    // current stage (scene=1) or a stage change (scene=0) — the host's
+    // ownership-table sniff keys (last-known stage, new room) which is only
+    // valid for same-stage moves; a cross-stage SceneChange must be left to
+    // the first new-stage PlayerState (channel 1, inside this send window).
+    const bool stageChanged = std::strcmp(myStage, g_lastSentStage) != 0;
+    if (roomNow != g_lastSentRoom || stageChanged) {
         g_lastSentRoom = roomNow;
         std::snprintf(g_lastSentStage, sizeof(g_lastSentStage), "%s", myStage);
         g_postChangeSendWindow = 30;
         SendPlayerEvent(net::PlayerEventId::SceneChange,
-            static_cast<u32>(static_cast<s32>(roomNow)), 0);
+            static_cast<u32>(static_cast<s32>(roomNow)), 0,
+            /*sameStage=*/stageChanged ? 0u : 1u);
     }
     if (g_postChangeSendWindow > 0) {
         --g_postChangeSendWindow;  // keep sending through the post-move window

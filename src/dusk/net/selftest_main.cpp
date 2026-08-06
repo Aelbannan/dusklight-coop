@@ -2094,6 +2094,64 @@ void RunM4RoomRoutingCheck() {
     Check(host.roomOwner("F_SP108", 2) == b.selfId(),
         "A arriving second does not take ownership (sticky)");
 
+    // -- 0b) M4.5 review MINOR 1: a cross-stage SceneChange (scene=0 — the
+    //    sender's stage changed) must NOT key the room table with the
+    //    player's LAST-KNOWN stage + new room (a bogus (F_SP108, 7) owner
+    //    entry that would mis-route intents for a frame or two). The crossing
+    //    room belongs to the NEW stage; the first new-stage PlayerState
+    //    (channel 1, send-window-guaranteed) establishes the entry instead.
+    PayloadUnion xStage = {};
+    xStage.playerEvent.playerId = a.selfId();
+    xStage.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    xStage.playerEvent.data = 7;  // the NEW stage's room
+    xStage.playerEvent.scene = 0; // stage changed
+    Check(a.SendGameMessage(MsgType::PlayerEvent, xStage),
+        "A sends a cross-stage SceneChange (scene=0)");
+    // A's aRoom PlayerState is unreliable; pump until the host processed it.
+    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+        "host processed A's room-2 PlayerState");
+    Check(a.SendGameMessage(MsgType::PlayerEvent, xStage),
+        "A sends a cross-stage SceneChange (scene=0)");
+    // Pump a fixed window so the reliable SceneChange is certainly delivered
+    // (its only observable guarantee is that it does NOT move the table).
+    const u64 xDeadline = NowMs() + 500;
+    while (NowMs() < xDeadline) {
+        for (Session* s : demo.live) {
+            s->Update();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Check(host.playerRoom(a.selfId()).room == 2,
+        "cross-stage SceneChange did not move A in the room table");
+    Check(host.roomOwner("F_SP108", 7) == kInvalidPlayerId,
+        "no bogus (F_SP108, 7) owner entry from the cross-stage SceneChange");
+    PayloadUnion xState = {};
+    xState.playerState.playerId = a.selfId();
+    std::strncpy(xState.playerState.stage, "F_SP104", sizeof(xState.playerState.stage) - 1);
+    xState.playerState.roomNo = 7;
+    Check(a.SendGameMessage(MsgType::PlayerState, xState),
+        "A's first new-stage PlayerState (F_SP104, 7)");
+    Check(demo.WaitFor(
+            [&] {
+                return host.playerRoom(a.selfId()).room == 7 &&
+                       std::strcmp(host.playerRoom(a.selfId()).stage, "F_SP104") == 0;
+            },
+            10000),
+        "new-stage PlayerState establishes (F_SP104, 7)");
+    Check(demo.WaitFor([&] { return host.roomOwner("F_SP104", 7) == a.selfId(); }, 10000),
+        "A owns the room it first enters on the new stage");
+    // A returns to room 2 (same-stage moves mark scene=1).
+    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
+    PayloadUnion aSceneBack = {};
+    aSceneBack.playerEvent.playerId = a.selfId();
+    aSceneBack.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    aSceneBack.playerEvent.data = 2;
+    aSceneBack.playerEvent.scene = 1; // same-stage move
+    Check(a.SendGameMessage(MsgType::PlayerEvent, aSceneBack),
+        "A announces room 2 again (same-stage, scene=1)");
+    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+        "host sees A back in room 2");
+
     // -- 1) CombatIntent from A (room 2) routes to the room owner B, NOT to
     //    the host's handler and NOT back to A.
     PayloadUnion intent = {};
@@ -2124,6 +2182,7 @@ void RunM4RoomRoutingCheck() {
     aScene1.playerEvent.playerId = a.selfId();
     aScene1.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     aScene1.playerEvent.data = 1;
+    aScene1.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
     Check(a.SendGameMessage(MsgType::PlayerEvent, aScene1), "A announces room 1 (reliable)");
     Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 1; }, 10000),
         "host sees A in room 1");
@@ -2182,6 +2241,7 @@ void RunM4RoomRoutingCheck() {
     aScene2.playerEvent.playerId = a.selfId();
     aScene2.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     aScene2.playerEvent.data = 2;
+    aScene2.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
     Check(a.SendGameMessage(MsgType::PlayerEvent, aScene2), "A announces room 2 (reliable)");
     Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
         "host sees A back in room 2");

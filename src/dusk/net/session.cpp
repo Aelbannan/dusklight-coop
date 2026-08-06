@@ -516,13 +516,21 @@ void Session::HandleData(const InboundPacket& pkt) {
             } else if (msg.type == MsgType::PlayerEvent) {
                 const auto& ev = msg.payload.playerEvent;
                 if (ev.playerId < kMaxLocalPlayers && roster_[ev.playerId].present &&
-                    static_cast<PlayerEventId>(ev.eventId) == PlayerEventId::SceneChange)
+                    static_cast<PlayerEventId>(ev.eventId) == PlayerEventId::SceneChange &&
+                    ev.scene == 1)
                 {
                     // The reliable SceneChange is the room-change authority
-                    // (a dropped PlayerState can't lose the new room). The
-                    // stage comes from the player's last-known room — skip
-                    // until the first PlayerState established it (an empty
-                    // stage here would key a bogus ("", room) entry).
+                    // for SAME-STAGE moves (a dropped PlayerState can't lose
+                    // the new room). The stage key comes from the player's
+                    // last-known room — valid only when the sender marked the
+                    // move as within the current stage (scene==1, M4.5 review
+                    // MINOR 1). A cross-stage SceneChange (scene==0) must NOT
+                    // key (oldStage, newRoom) — that would create a bogus
+                    // ownership entry and mis-route intents for a frame or two;
+                    // the first new-stage PlayerState (channel 1, inside the
+                    // sender's post-change send window) establishes the entry.
+                    // Also skip until the first PlayerState established a
+                    // stage (an empty stage would key a bogus ("", room) entry).
                     if (playerRoom_[ev.playerId].stage[0] != '\0') {
                         UpdatePlayerRoom(ev.playerId, playerRoom_[ev.playerId].stage,
                             static_cast<s8>(ev.data & 0xFF), /*isHost=*/false);
