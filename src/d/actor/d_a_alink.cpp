@@ -2532,6 +2532,21 @@ static int daAlink_headModelCallBack(J3DJoint* i_joint, int param_1) {
 }
 
 int daAlink_c::wolfModelCallBack(int i_jointNo) {
+#if TARGET_PC
+    // Co-op (M3.5 MINOR A): mirror the human modelCallBack suppression for
+    // wolf-form puppets. The wolf callback chain runs at draw time and edits
+    // the anm-matrix buffer (setWolfFootMatrix writes via
+    // setMatrixWorldAxisRot; changeWolfBlendRate morphs the blend) — the same
+    // class of post-paste overwrite modelCallBack's gate exists for. A wolf
+    // puppet's pose comes entirely from the received joint matrices
+    // (ApplyPuppetState pastes them and recomputes the weight envelopes); its
+    // own per-joint corrections are computed from its frozen local animation
+    // state and would fight the pasted pose, and the sender's wolf corrections
+    // are already baked into the synced matrices.
+    if (dusk::coop::isPuppet(this)) {
+        return 1;
+    }
+#endif
     jointControll(i_jointNo);
 
     if (i_jointNo == 36) {
