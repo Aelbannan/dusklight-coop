@@ -1270,6 +1270,10 @@ s8 localRoomNo() {
     return LocalRoomNo();
 }
 
+const char* localStageName() {
+    return LocalStageName();
+}
+
 void setWorldTime(const net::TimeStateInfo& time) {
     g_session.setWorldTime(time);
 }

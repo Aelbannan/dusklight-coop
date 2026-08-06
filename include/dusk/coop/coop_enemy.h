@@ -143,7 +143,4 @@ void hostRoomCleared(s8 roomNo);
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Clears per-stage registries on room/stage change.
-void onRoomUnload();
-
 }  // namespace dusk::coop::enemy

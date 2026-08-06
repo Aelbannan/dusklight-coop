@@ -100,6 +100,11 @@ bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload);
 bool rosterPresent(net::PlayerId pid);
 /// The real Link's current room (s8), or -1 when no real Link.
 s8 localRoomNo();
+/// The local player's CURRENT stage name (dComIfGp_getStartStageName — the
+/// play's start-stage object, re-pointed on every stage change). Capstone
+/// MINOR D: the enemy per-stage reset keys on (stage, room) because room
+/// numbers are not unique across stages.
+const char* localStageName();
 
 // --------------------------------------------------------------------------
 // M3/M4 world state (host publishes; client seeds/joins from it)

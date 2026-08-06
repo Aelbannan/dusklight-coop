@@ -350,9 +350,19 @@ std::unordered_map<u16, net::EnemySnapshotMsg> g_received;
 
 // Room-clear (03-enemies.md §5): the owner's per-room bit + which rooms had
 // synced enemies (the client ALLDIE gate only applies to those rooms).
+// Room numbers are s8 (0..127 in practice; negative rooms are skipped at
+// registration), so the arrays are sized 2x the meaningful range for the
+// sign byte; the RoomClear receive gate (< 128) keeps a malformed event
+// from writing past the meaningful range (capstone MINOR 7).
 bool g_roomClear[256] = {};
 bool g_roomHadEnemies[256] = {};
 s8 g_lastRoom = -2;
+// Capstone MINOR D (review-full-deepseek-v4-flash-0731.md MINOR D): the
+// per-stage reset keys on (stage, room), not the room number alone — a stage
+// change whose room number coincides (F_SP103 room 1 -> F_SP104 room 1)
+// previously relied on an implicit Link-less gap to reset. The stage name
+// comes from the start-stage object (dComIfGp_getStartStageName).
+char g_lastStage[net::kMaxStageNameLength] = {};
 u32 g_frameCount = 0;
 
 // Host room-clear event: per-room sent-once latch.
@@ -935,11 +945,24 @@ bool puppetExecute(fopAc_ac_c* actor) {
     }
     // M4: the ROOM OWNER's enemies run natively (this machine sims them);
     // only non-owner machines freeze + drive puppets.
-    if (OwnsRoom(fopAcM_GetRoomNo(actor))) {
+    const s8 roomNo = fopAcM_GetRoomNo(actor);
+    if (OwnsRoom(roomNo)) {
         return false;
     }
     EnemyEntry* e = FindEntryForActor(actor);
     if (e == nullptr) {
+        // Capstone MAJOR 3 (review-full-glm-5.2.md MAJOR 2): freeze
+        // OPTIMISTICALLY for whitelisted types in a non-owned room before
+        // registration lands. The room-change scan registers them on the
+        // first frame, but a mid-room spawn or a scan miss would otherwise
+        // let the local instance run its full native AI (aggro, move, attack
+        // — real damage to the client's Link, bypassing the CombatIntent
+        // path). Holding the spawn pose until the first snapshot arrives is
+        // exactly the v1 freeze semantics.
+        if (isWhitelistedType(fopAcM_GetName(const_cast<fopAc_ac_c*>(actor)))) {
+            actor->old = actor->current;
+            return true;
+        }
         return false;
     }
     if (e->state == EntryState::Dying) {
@@ -1108,7 +1131,12 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
             OnEnemyDied(ev.enemyId, static_cast<u8>(ev.data & 0xFF), ev.flagMask);
             break;
         case net::EnemyEventId::RoomClear:
-            if (ev.enemyId < 256 &&
+            // Capstone MINOR 7 (review-full-glm-5.2.md MINOR 7): room numbers
+            // are s8 (0..127 in practice); the old < 256 gate let a forged
+            // RoomClear write g_roomClear[128..255], slots no real s8 room
+            // ever reads. Tightened to < 128 (the arrays stay 256 — 2x the
+            // meaningful range for the s8 sign).
+            if (ev.enemyId < 128 &&
                 static_cast<s8>(ev.enemyId) == dusk::coop::localRoomNo())
             {
                 g_roomClear[ev.enemyId] = true;
@@ -1194,15 +1222,35 @@ void onGameFrame() {
         return;
     }
 
-    // Room-change detection -> per-stage state reset.
+    // Room-change detection -> per-stage state reset. Capstone MINOR D: the
+    // reset keys on (stage, room), not the room number alone — a stage change
+    // whose room number coincides (F_SP103 room 1 -> F_SP104 room 1)
+    // previously relied on an implicit Link-less gap (LocalRoomNo() == -1 for
+    // >= 1 frame) to reset; keying on the stage name + room makes the reset
+    // explicit, so a future change that keeps the Link alive across a stage
+    // transition cannot carry stale (room<<8)|setID entries into the new
+    // stage (which would make RegisterActor refuse the new stage's
+    // coincident-id enemies and de-frost them).
     const s8 roomNow = dusk::coop::localRoomNo();
-    if (roomNow != g_lastRoom) {
+    const char* stageNow = dusk::coop::localStageName();
+    const bool stageChanged = std::strcmp(stageNow, g_lastStage) != 0;
+    if (stageChanged || roomNow != g_lastRoom) {
         if (g_lastRoom != -2) {
-            EnemyLog.info("enemy: room change {} -> {}; resetting per-stage state",
-                static_cast<s32>(g_lastRoom), static_cast<s32>(roomNow));
+            EnemyLog.info("enemy: room change {} -> {} (stage '{}' -> '{}'); resetting per-stage state",
+                static_cast<s32>(g_lastRoom), static_cast<s32>(roomNow), g_lastStage, stageNow);
             ClearAll();
         }
+        std::snprintf(g_lastStage, sizeof(g_lastStage), "%s", stageNow);
         g_lastRoom = roomNow;
+        // Capstone MAJOR 3 (review-full-glm-5.2.md MAJOR 2): register
+        // IMMEDIATELY on the room change (NOT gated on the % 15 scan cadence)
+        // so local instances are registered — and thus frozen by
+        // puppetExecute — on the FIRST frame in the new room. A non-owner's
+        // whitelisted enemies would otherwise run full native AI (real damage
+        // to the client's Link, bypassing the intent path) until the first
+        // 15-frame scan. The 15-frame cadence stays as a backstop for
+        // mid-room spawns.
+        ScanAndRegister();
     }
 
     if (OwnsRoom(roomNow)) {
@@ -1239,11 +1287,7 @@ void onGameFrame() {
 void shutdown() {
     ClearAll();
     g_lastRoom = -2;
-}
-
-void onRoomUnload() {
-    ClearAll();
-    g_lastRoom = -2;
+    g_lastStage[0] = '\0';
 }
 
 }  // namespace dusk::coop::enemy
