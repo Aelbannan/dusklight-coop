@@ -34,6 +34,7 @@ constexpr int kRecvTimeoutMs = 250;
 constexpr size_t kMaxStoredSessions = 8;
 
 std::atomic<u64> g_announcesReceived{0};
+std::atomic<Listener*> g_activeListener{nullptr};
 
 u64 NowMs() {
     return static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -321,6 +322,14 @@ void Listener::ThreadMain() {
 
 u64 AnnouncesReceived() {
     return g_announcesReceived.load(std::memory_order_relaxed);
+}
+
+Listener* ActiveListener() {
+    return g_activeListener.load(std::memory_order_relaxed);
+}
+
+void SetActiveListener(Listener* l) {
+    g_activeListener.store(l, std::memory_order_relaxed);
 }
 
 }  // namespace dusk::net::discovery

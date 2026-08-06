@@ -11,6 +11,8 @@
 #include "dusk/hotkeys.h"
 #include "dusk/data.hpp"
 #include "dusk/file_select.hpp"
+#include "dusk/net/config.h"
+#include "dusk/net/discovery.h"
 #include "dusk/imgui/ImGuiEngine.hpp"
 #include "dusk/io.hpp"
 #include "dusk/livesplit.h"
@@ -21,6 +23,7 @@
 #include "menu_bar.hpp"
 #include "modal.hpp"
 #include "number_button.hpp"
+#include "string_button.hpp"
 #include "menu_bar.hpp"
 #include "pane.hpp"
 #include "prelaunch.hpp"
@@ -1526,6 +1529,121 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         add_speedrun_disabled_option(leftPane, rightPane, getSettings().game.recordingMode,
             "Recording Mode",
             "Disables the game HUD and all background music.<br/><br/>Useful for recording footage.");
+    });
+
+    // M4: network co-op settings — the net.* CVars (config.cpp) in a minimal
+    // surface. Most take effect on the next session start (a running session
+    // is not reconfigured mid-game). Discovered sessions are listed here so a
+    // host on the LAN can be joined by IP without typing the address.
+    add_tab("Network", [this](Rml::Element* content) {
+        auto& leftPane = add_child<Pane>(content, Pane::Type::Controlled);
+        auto& rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
+
+        leftPane.add_section("Session");
+        config_bool_select(leftPane, rightPane, dusk::net::config::enabled,
+            {
+                .key = "Co-op Networking",
+                .helpText =
+                    "Master switch for LAN co-op. Off = byte-for-byte vanilla single-player.",
+            });
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Role",
+                .getValue = [] { return Rml::String(dusk::net::config::role.getValue()); },
+                .isModified =
+                    [] { return dusk::net::config::role.getValue() != "host"; },
+            }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_button({
+                        .text = "Host",
+                        .isSelected = [] { return dusk::net::config::role.getValue() == "host"; },
+                    })
+                    .on_pressed([] {
+                        mDoAud_seStartMenu(kSoundItemChange);
+                        dusk::net::config::role.setValue("host");
+                        config::save();
+                    });
+                pane.add_button({
+                        .text = "Client",
+                        .isSelected =
+                            [] { return dusk::net::config::role.getValue() == "client"; },
+                    })
+                    .on_pressed([] {
+                        mDoAud_seStartMenu(kSoundItemChange);
+                        dusk::net::config::role.setValue("client");
+                        config::save();
+                    });
+                pane.add_text("Host listens for joins; Client connects to the join host IP.");
+            });
+        leftPane.register_control(
+            leftPane.add_child<StringButton>(StringButton::Props{
+                .key = "Session Name",
+                .getValue = [] { return Rml::String(dusk::net::config::sessionName.getValue()); },
+                .setValue =
+                    [](Rml::String value) {
+                        dusk::net::config::sessionName.setValue(value.c_str());
+                        config::save();
+                    },
+                .maxLength = 31,
+            }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_text("Host: advertised in the LAN discovery announce. Client: your "
+                              "player name in the session.");
+            });
+        leftPane.register_control(
+            leftPane.add_child<NumberButton>(NumberButton::Props{
+                .key = "Host Port",
+                .getValue = [] { return static_cast<int>(dusk::net::config::hostPort.getValue()); },
+                .setValue =
+                    [](int value) {
+                        if (value >= 0 && value <= 65535) {
+                            dusk::net::config::hostPort.setValue(static_cast<u16>(value));
+                            config::save();
+                        }
+                    },
+                .max = 65535,
+            }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_text("Host listen port (default 44770). Port 44771 is reserved for the "
+                              "LAN discovery announce.");
+            });
+        leftPane.register_control(
+            leftPane.add_child<StringButton>(StringButton::Props{
+                .key = "Join Host IP",
+                .getValue = [] { return Rml::String(dusk::net::config::joinHost.getValue()); },
+                .setValue =
+                    [](Rml::String value) {
+                        dusk::net::config::joinHost.setValue(value.c_str());
+                        config::save();
+                    },
+                .maxLength = 45,
+            }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_text("Client: the host's LAN IP (manual join fallback; discovery below "
+                              "offers discovered addresses).");
+            });
+
+        leftPane.add_section("Discovered Sessions");
+        auto* listener = dusk::net::discovery::ActiveListener();
+        if (listener != nullptr && listener->running()) {
+            const auto sessions = listener->Sessions();
+            if (sessions.empty()) {
+                leftPane.add_text("Listening... sessions found on the LAN will appear here and "
+                                  "in the log.");
+            } else {
+                for (const auto& s : sessions) {
+                    leftPane.add_text(fmt::format("{} at {}:{} ({} players)", s.name, s.ip,
+                        s.port, static_cast<u32>(s.players)));
+                }
+            }
+        } else {
+            leftPane.add_text("No discovery listener active. Start a client session to listen "
+                              "for hosts on the LAN.");
+        }
     });
 }
 

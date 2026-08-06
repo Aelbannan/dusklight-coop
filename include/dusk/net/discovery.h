@@ -99,6 +99,12 @@ private:
     std::vector<DiscoveredSession> sessions_;
 };
 
+/// The listener the coop glue currently runs (registered by coop.cpp so the
+/// settings UI can list discovered sessions), or nullptr when no client
+/// session is listening.
+Listener* ActiveListener();
+void SetActiveListener(Listener* l);
+
 /// How many received datagrams were accepted (tests + diagnostics).
 u64 AnnouncesReceived();
 

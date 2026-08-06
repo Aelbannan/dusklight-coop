@@ -1034,11 +1034,13 @@ void DriveDiscovery() {
                           g_session.state() == net::SessionState::Joined;
     if (clientUp && !g_listenerActive) {
         g_listenerActive = true;
+        dusk::net::discovery::SetActiveListener(&g_discoveryListener);
         g_discoveryListener.Start();
     }
     if (g_listenerActive) {
         if (!clientUp) {
             g_listenerActive = false;
+            dusk::net::discovery::SetActiveListener(nullptr);
             g_discoveryListener.Stop();
         } else {
             // One log line per newly-seen session (the listener stores a
