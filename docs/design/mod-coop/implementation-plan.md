@@ -132,8 +132,8 @@ Adapts the fork's existing multi-Link machinery to network puppets (01/02 mechan
 - **Sender** (02 §3): post-execute read on the real Link: `current.pos`, `shape_angle.y`,
   `mBodyAngle.x`, `checkWolf()`, `getBaseTRMtx()`, per-joint `getAnmMtx` (~40), face
   `{bckIdx, btpIdx, frame}`, `stateFlags`, scale flags. Every frame, gated on a same-room remote.
-- **Wire** (00-network §5 + R18): `PlayerState` raw matrices (~2.7 KB; stage name + roomNo),
-  `PlayerEvent` reliable (form/equip/item-joints/horse-inline/attention).
+- **Wire** (00-network §5 + R18): `PlayerState` raw matrices (~2.0 KB — 2017 B;
+  stage name + roomNo), `PlayerEvent` reliable (form/equip/item-joints/horse-inline/attention).
 - **Accept**: two fork builds on LAN; remote Link mirrors pose exactly (matrix-copy); frozen in
   cutscenes; survives room changes; no host-save damage; disable/reconnect clean.
 
