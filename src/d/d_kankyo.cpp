@@ -8372,8 +8372,10 @@ static int dKy_Create(void* i_this) {
     #endif
 
     #if TARGET_PC
-    // M3: a synced client re-asserts the replicated time into the save before
-    // room-layer resolution (04 §5.10) and re-asserts the synced weather
+    // M3: a synced client re-asserts the replicated time into the save after
+    // the start-room LAYER is resolved (04 §5.10 — dStage_Create:
+    // dStage_roomInit -> getLayerNo reads save-time-derived state, then
+    // dKankyo_create -> dKy_Create -> here) and re-asserts the synced weather
     // before the first dKyw_wether_move of the new stage (04 §5.6) — the
     // stage's envcolor_init/dKyw_wether_init just overwrote both. Host /
     // offline: vanilla unchanged (the host's own stage-init time is the
