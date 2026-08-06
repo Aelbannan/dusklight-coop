@@ -26,6 +26,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -278,10 +279,29 @@ struct EnemyEntry {
     fpc_ProcID pid = fpcM_ERROR_PROCESS_ID_e;
     fopAc_ac_c* actor = nullptr;
     s8 roomNo = -1;
+    // Capstone MAJOR 2 (review-full-glm-5.2.md MAJOR 1): the per-type
+    // adapter is captured at REGISTRATION and held on the entry. kAdapters is
+    // a static std::array that outlives every entry, so the pointer stays
+    // valid for the entry's whole lifetime — PollHostDeaths must never call
+    // AdapterForActor(e.actor) AFTER the actor is freed (the death poll can
+    // run 2+ frames after the host's delete queue freed the actor: the poll
+    // runs pre-fpcM_Management, and fpcDt_Handler frees the actor at the top
+    // of the next frame's management pass).
+    const NetEnemyAdapter* adapter = nullptr;
     // Owner-side synthetic attacker collider for this enemy (one per entry:
     // the enemy's handler reads GetTgHitObj() during its own execute, so a
     // shared static would let a same-frame second injection corrupt the first
-    // enemy's hit data).
+    // enemy's hit data). SetTgHitSynthetic stores &synthAt into the enemy's
+    // damage collider and &synthStts into the synth — those ADDRESSES must
+    // outlive the injection. g_entries is a NODE-BASED std::map so entry
+    // addresses are stable across inserts (capstone MINOR H: an
+    // unordered_map rehash would relocate live entries and dangle them).
+    // Same-frame consumption contract: inject (pre-actor) -> the enemy's own
+    // execute consumes the Tg flag and clears it -> the draw-phase collision
+    // pass sees no flag. An execute-skip (suspend box / freeze) between
+    // injection and the collision pass leaves the flag set for one frame —
+    // benign as long as the addresses remain valid (which the node-based
+    // container guarantees).
     dCcD_Sph synthAt;
     dCcD_Stts synthStts;
     // Per-entry cullMtx (M2.5, MAJOR-2 fix): fopAcM_SetMtx stores a POINTER,
@@ -314,7 +334,14 @@ struct EnemyEntry {
     u8 hitAttacker = kInvalidPlayerId;
 };
 
-std::unordered_map<u16, EnemyEntry> g_entries;
+// Capstone MINOR H (review-full-deepseek-v4-flash-0731.md MINOR H):
+// g_entries is a NODE-BASED container (std::map) so EnemyEntry addresses are
+// stable across inserts — SetTgHitSynthetic stores &e.synthAt into the
+// enemy's damage collider and &e.synthStts into the synth; an unordered_map
+// rehash would relocate live entries and dangle those pointers. The map is
+// small (per-room whitelisted enemies); the node stability is the hardening
+// and the same-frame consumption contract is documented on the members.
+std::map<u16, EnemyEntry> g_entries;
 std::unordered_map<fpc_ProcID, u16> g_pidToEnemyId;
 u16 g_dynamicIdCounter = 0;  // per-owner low counter (owner-major id, M4)
 
@@ -409,11 +436,16 @@ void RegisterActor(fopAc_ac_c* actor, u16 enemyId) {
     e.actor = actor;
     e.roomNo = fopAcM_GetRoomNo(actor);
     e.deathSwitch = 0xFF;
+    // Capstone MAJOR 2: capture the per-type adapter at registration — the
+    // death poll (and any later use) must never re-derive it from e.actor
+    // once the actor can be freed. The kAdapters table is a static array
+    // that outlives every entry, so holding the pointer is safe.
+    const NetEnemyAdapter* adapter = AdapterForActor(actor);
+    e.adapter = adapter;
     g_pidToEnemyId.emplace(e.pid, enemyId);
     if (e.roomNo >= 0) {
         g_roomHadEnemies[e.roomNo] = true;
     }
-    const NetEnemyAdapter* adapter = AdapterForActor(actor);
     EnemyLog.debug("enemy: registered {} {} enemyId=0x{:04X} room={} setID={}", e.pid,
         adapter != nullptr ? adapter->name : "?", enemyId, static_cast<s32>(e.roomNo),
         fopAcM_GetSetId(actor));
@@ -475,11 +507,19 @@ void SendPendingDiedEvents() {
 }
 
 /// Host per-frame: remove gone actors (died), refresh death-window captures.
+/// Capstone MAJOR 2 (review-full-glm-5.2.md MAJOR 1): never deref e.actor
+/// after it can be freed. The poll runs BEFORE fpcM_Management's delete pass
+/// each frame, so on the frame the actor is gone the entry's actor pointer is
+/// already dangling (freed by fpcDt_Handler the previous frame) — the
+/// per-type data is read from e.adapter (captured at registration, safe: a
+/// static table) and e.deathSwitch (captured while the actor still lived).
+/// The only e.actor derefs left are the isDead/deathSwitchNo reads, which
+/// are reached only when !gone (fopAcM_SearchByID(e.pid) == e.actor — the
+/// actor is alive then).
 void PollHostDeaths() {
     std::vector<u16> dead;
     for (auto& kv : g_entries) {
         EnemyEntry& e = kv.second;
-        const NetEnemyAdapter* adapter = AdapterForActor(e.actor);
         const bool gone = fopAcM_SearchByID(e.pid) != e.actor;
         if (gone) {
             if (!e.diedSent) {
@@ -488,8 +528,8 @@ void PollHostDeaths() {
             continue;
         }
         // Death window (actor still alive but dying): capture the switch.
-        if (adapter != nullptr && adapter->isDead != nullptr && adapter->isDead(e.actor)) {
-            e.deathSwitch = adapter->deathSwitchNo != nullptr ? adapter->deathSwitchNo(e.actor) : 0xFF;
+        if (e.adapter != nullptr && e.adapter->isDead != nullptr && e.adapter->isDead(e.actor)) {
+            e.deathSwitch = e.adapter->deathSwitchNo != nullptr ? e.adapter->deathSwitchNo(e.actor) : 0xFF;
         }
     }
     for (u16 enemyId : dead) {
@@ -499,7 +539,9 @@ void PollHostDeaths() {
         }
         EnemyEntry& e = it->second;
         e.diedSent = true;
-        const NetEnemyAdapter* adapter = AdapterForActor(e.actor);
+        // e.adapter is captured at registration (static table — valid even
+        // though the actor is gone); e.deathSwitch was captured alive.
+        const NetEnemyAdapter* adapter = e.adapter;
         PendingDied d;
         d.enemyId = enemyId;
         d.drop = adapter != nullptr ? adapter->dropTableId : 0xFF;
