@@ -33,9 +33,15 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
 //   - EnemySnapshot (room owner -> the room): inbound copies from a client
 //     owner are relayed to peers in the SENDER's room only (RoomScoped); the
 //     host's own snapshots fan out the same way via SendGameMessage.
-//   - CombatResult / EnemyEvent (owner -> all): the room owner may be a
-//     CLIENT now, so an inbound copy IS re-broadcast to every other joined
-//     peer (receivers no-op for rooms/ids they do not have).
+//   - CombatResult (owner -> all): the room owner may be a CLIENT now, so an
+//     inbound copy IS re-broadcast to every other joined peer (a result ack
+//     carries no grant/state change — harmless out of room).
+//   - EnemyEvent (owner -> THE ROOM): M4.5 (MAJOR 2) — room-scoped like
+//     EnemySnapshot. A died/room-clear event concerns the sender's room's
+//     enemy instance; stage-placed ids are (roomNo<<8)|setID, so a cross-stage
+//     peer with a coincident id would otherwise mis-kill a local enemy, spawn
+//     the wrong drop, grant a wrong save switch and corrupt its ALLDIE scan.
+//     The receive side (coop_enemy.cpp) also gates on the local room.
 //   - TimeSync / TimeEvent / WeatherChange: host-generated host->all, never
 //     relayed (unchanged).
 // -------------------------------------------------------------------------
@@ -53,13 +59,17 @@ RelayPolicy PolicyFor(MsgType type) {
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
     case MsgType::CombatResult:
-    case MsgType::EnemyEvent:
         return RelayPolicy::Star;
     case MsgType::EnemySnapshot:
+    case MsgType::EnemyEvent:
         // M4: room-owner snapshots reach the room's other players only; a
         // client in another room has no local instance to apply them to
         // (per-room actors) and the sender gate already skips them. The host
         // relays to peers whose last-known room matches the SENDER's.
+        // M4.5 (MAJOR 2): EnemyEvent (died / room-clear) is room-scoped the
+        // same way — it concerns the sender's room's enemy instance, and a
+        // cross-stage peer with a coincident (roomNo<<8)|setID would mis-kill
+        // its local enemy / spawn a wrong drop / grant a wrong save switch.
         return RelayPolicy::RoomScoped;
     case MsgType::CombatIntent:
         // M4: routed explicitly to the room's owner (RouteCombatIntent);
@@ -531,8 +541,8 @@ void Session::HandleData(const InboundPacket& pkt) {
     case MsgType::EnemyEvent:
     case MsgType::CombatResult:
         // M2/M4 enemy/combat traffic. The game handler consumes it; the host
-        // relays per PolicyFor (M4: a client room owner's EnemySnapshot is
-        // room-scoped, its CombatResult/EnemyEvent are star-relayed). A
+        // relays per PolicyFor (M4/M4.5: a client room owner's EnemySnapshot
+        // AND EnemyEvent are room-scoped; CombatResult is star-relayed). A
         // buggy/forged client's copies are never echoed to other clients.
         if (gameHandler_) {
             gameHandler_(msg.type, msg.payload);

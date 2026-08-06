@@ -1050,12 +1050,25 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
     }
     case net::MsgType::EnemyEvent: {
         const auto& ev = payload.enemyEvent;
+        // M4.5 (MAJOR 2 — defense in depth; the relay is room-scoped now):
+        // only events for THE room the client is in may act. Died carries a
+        // stage-placed id ((roomNo << 8) | setID) — a cross-stage peer with a
+        // coincident id would mis-kill a local enemy, spawn the wrong drop,
+        // grant a wrong save switch and empty its ALLDIE scan early. RoomClear
+        // carries the BARE room number. Events for any other room are dropped.
         switch (static_cast<net::EnemyEventId>(ev.eventId)) {
         case net::EnemyEventId::Died:
+            if (ev.enemyId < kDynamicIdBase &&
+                static_cast<s8>(ev.enemyId >> 8) != dusk::coop::localRoomNo())
+            {
+                return;  // another room's enemy (or a leaked cross-stage copy)
+            }
             OnEnemyDied(ev.enemyId, static_cast<u8>(ev.data & 0xFF), ev.flagMask);
             break;
         case net::EnemyEventId::RoomClear:
-            if (ev.enemyId < 256) {
+            if (ev.enemyId < 256 &&
+                static_cast<s8>(ev.enemyId) == dusk::coop::localRoomNo())
+            {
                 g_roomClear[ev.enemyId] = true;
                 EnemyLog.info("enemy: room-clear bit for room {}", static_cast<s32>(ev.enemyId));
             }

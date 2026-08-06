@@ -27,8 +27,12 @@
  *   - M2 relay policy: CombatIntent/EnemySnapshot/CombatResult/EnemyEvent do
  *     NOT ride the PlayerState star-relay — a client's CombatIntent is
  *     consumed by the sim owner and never echoed to other clients; the
- *     owner's EnemySnapshot/CombatResult/EnemyEvent simulcasts reach every
- *     client; a buggy client's EnemySnapshot/CombatResult is not echoed;
+ *     owner's EnemySnapshot/CombatResult simulcasts reach every client;
+ *     EnemyEvent is room-scoped like EnemySnapshot (M4.5 MAJOR 2: a died/
+ *     room-clear event reaches only peers in the SENDER's room — a cross-stage
+ *     peer with a coincident (roomNo<<8)|setID must not mis-kill local
+ *     enemies or grant wrong switches); a buggy client's
+ *     EnemySnapshot/CombatResult is not echoed;
  *   - M3 time/weather contract: v5 absolute-phase wire round-trips (TimeSync
  *     f32 time + day + rate + flags; TimeEvent; WeatherChange mode + thunder
  *     + intensity + colpat); host->all broadcasts of TimeSync/TimeEvent/
@@ -1038,14 +1042,17 @@ void RunM2RelayPolicyCheck() {
     Check(demo.WaitFor([&] { return aResults >= 1 && bResults >= 1; }, 10000),
         "CombatResult simulcast reached both clients");
 
-    // 5) EnemyEvent(died): owner simulcast reaches both clients.
+    // 5) EnemyEvent(died) from the host: no room was established in this
+    //    test, so the room-scoped fan-out opens (unknown-room rule — same as
+    //    the sender gate) and reaches both clients. (M4.5 MAJOR 2: with rooms
+    //    established, died/room-clear events reach only the room's players.)
     PayloadUnion ev = {};
     ev.enemyEvent.enemyId = 77;
     ev.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
     ev.enemyEvent.data = 0x1E;  // drop table id
     Check(host.SendGameMessage(MsgType::EnemyEvent, ev), "host sends EnemyEvent(died)");
     Check(demo.WaitFor([&] { return aEvents >= 1 && bEvents >= 1; }, 10000),
-        "EnemyEvent simulcast reached both clients");
+        "EnemyEvent reach both clients with no room established (open gate)");
 
     // 6) A buggy client's CombatResult is consumed but NOT echoed to B.
     PayloadUnion rogueResult = {};
@@ -1962,7 +1969,7 @@ void RunM4OwnershipTableCheck() {
 /// peers in the sender's room; CombatResult from a client owner reaches
 /// everyone; ownership stays sticky and transfers on leave.
 void RunM4RoomRoutingCheck() {
-    std::printf("m4: room-owner routing + same-room snapshot scoping (sessions)\n");
+    std::printf("m4: room-owner routing + same-room snapshot/event scoping (sessions)\n");
     Demo demo;
 
     Session host;
@@ -2009,6 +2016,9 @@ void RunM4RoomRoutingCheck() {
     int aResults = 0;
     int bResults = 0;
     int cResults = 0;
+    int hostEvents = 0;
+    int aEvents = 0;
+    int bEvents = 0;
     host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
@@ -2019,6 +2029,9 @@ void RunM4RoomRoutingCheck() {
             break;
         case MsgType::CombatResult:
             ++cResults;
+            break;
+        case MsgType::EnemyEvent:
+            ++hostEvents;
             break;
         default:
             break;
@@ -2035,6 +2048,9 @@ void RunM4RoomRoutingCheck() {
         case MsgType::CombatResult:
             ++aResults;
             break;
+        case MsgType::EnemyEvent:
+            ++aEvents;
+            break;
         default:
             break;
         }
@@ -2049,6 +2065,9 @@ void RunM4RoomRoutingCheck() {
             break;
         case MsgType::CombatResult:
             ++bResults;
+            break;
+        case MsgType::EnemyEvent:
+            ++bEvents;
             break;
         default:
             break;
@@ -2123,6 +2142,24 @@ void RunM4RoomRoutingCheck() {
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
     Check(bIntents == 1, "B (owner of room 2 only) did not receive the room-1 intent");
 
+    // -- 2b) M4.5 MAJOR 2: EnemyEvent is room-scoped like EnemySnapshot. B
+    //    (room-2 owner) sends a died event for a room-2 enemy; A is in room 1
+    //    now, so it must NOT reach A (and not echo back to B); the host still
+    //    consumes it. Before this fix the event was star-relayed and a
+    //    cross-stage peer with a coincident (roomNo<<8)|setID mis-killed a
+    //    local enemy, spawned the wrong drop and granted the wrong switch.
+    PayloadUnion ev2 = {};
+    ev2.enemyEvent.enemyId = 0x0203;  // stage-placed room-2 enemy
+    ev2.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
+    ev2.enemyEvent.data = 0x1E;       // drop table id
+    ev2.enemyEvent.flagMask = 0x04;   // save switch that must NOT reach A
+    Check(b.SendGameMessage(MsgType::EnemyEvent, ev2), "owner B sends EnemyEvent(died) for room 2");
+    Check(demo.WaitFor([&] { return hostEvents >= 1; }, 10000),
+        "host consumed B's EnemyEvent");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(aEvents == 0, "room-2 died event NOT relayed to the room-1 peer A (room scoping)");
+    Check(bEvents == 0, "died event not echoed back to the owner B");
+
     // -- 3) EnemySnapshot from owner B (room 2) reaches only room-2 peers.
     //    A is now in room 1, so B's room-2 snapshot must NOT reach A (and
     //    not echo back to B); the host still consumes it.
@@ -2156,6 +2193,15 @@ void RunM4RoomRoutingCheck() {
     Check(b.SendGameMessage(MsgType::EnemySnapshot, snap2), "owner B sends another EnemySnapshot");
     Check(demo.WaitFor([&] { return aSnapshots >= 1; }, 10000),
         "room-2 snapshot relayed to the room-2 peer A");
+    // ... and now B's room-2 died event DOES reach A (both in room 2).
+    PayloadUnion ev3 = {};
+    ev3.enemyEvent.enemyId = 0x0204;
+    ev3.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
+    ev3.enemyEvent.data = 0x1F;
+    ev3.enemyEvent.flagMask = 0x05;
+    Check(b.SendGameMessage(MsgType::EnemyEvent, ev3), "owner B sends another EnemyEvent(died)");
+    Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000),
+        "room-2 died event relayed to the room-2 peer A");
 
     // -- 5) CombatResult from owner B reaches everyone except the origin
     //    (star relay; the host relays to the other joined peer A).
