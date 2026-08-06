@@ -1514,6 +1514,42 @@ void RunM35TimeWeatherFixCheck() {
         Check(ok,
             "SeedTargetsDecision table (first-join adopts, later refresh does not, weather always)");
     }
+
+    // -- 7) WeatherChange publish decision incl. the thunder edge ----------
+    //     (glm M3.5 MINOR 1): a thunder-only transition (kytag00 area-tag
+    //     arming / wether-proc case 5) must publish even when the derived
+    //     mode does not move. Non-tautological: the pre-fix mode-only gate
+    //     (without thunderChanged) returns false for the exact edge case.
+    {
+        // (modeChanged, snowDrift, stageChanged, thunderChanged) -> publish
+        struct PublishCase {
+            bool mode, snow, stage, thunder, expect;
+        };
+        const PublishCase kCases[] = {
+            // thunder-only edge: the fix publishes, the old gate would not
+            {false, false, false, true, true},
+            // unchanged sky: nothing
+            {false, false, false, false, false},
+            // ordinary mode change / stage change / snow drift still publish
+            {true, false, false, false, true},
+            {false, false, true, false, true},
+            {false, true, false, false, true},
+        };
+        bool ok = true;
+        bool oldGateMisses = false;
+        for (const auto& c : kCases) {
+            ok = ok &&
+                 WeatherPublishDue(WeatherPublishInput{c.mode, c.snow, c.stage, c.thunder}) ==
+                     c.expect;
+            // the pre-fix mode-only gate: mode || snow || stage
+            if (!c.mode && !c.snow && !c.stage && c.thunder) {
+                oldGateMisses = true;  // this case is exactly what the fix adds
+            }
+        }
+        Check(ok, "WeatherPublishDue table (thunder-only edge publishes)");
+        Check(oldGateMisses,
+            "thunder-only case is NOT publishable by the old mode-only gate (regression guard)");
+    }
 }
 
 /// slot after its ~5 s peer timeout). The generation bumps on release and

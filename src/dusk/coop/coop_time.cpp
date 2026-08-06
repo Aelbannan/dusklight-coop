@@ -78,6 +78,7 @@ f32 g_lastPhase = 0.0f;  // observed phase (end of last sim tick)
 u16 g_lastDay = 0;
 u8 g_lastRate = 0xFF;   // last published rate bucket
 u8 g_lastMode = 0xFF;   // last published derived WeatherMode
+u8 g_lastThunder = 0xFF;  // last published thunder bit (glm M3.5 MINOR 1)
 u16 g_lastIntensity = 0;  // last published intensity (SNOW drift refresh)
 
 // ---------------------------------------------------------------------------
@@ -259,6 +260,7 @@ void PublishHostState() {
         g_lastPhase = now;
         g_lastDay = day;
         g_lastMode = 0xFF;
+        g_lastThunder = 0xFF;  // weather fully resets per stage (04 §5.6)
         g_stageSeeded = false;
     }
 
@@ -307,8 +309,18 @@ void PublishHostState() {
                                                   : g_lastIntensity - intensity;
     const bool snowDrift = mode == g_lastMode &&
                            mode == static_cast<u8>(WeatherMode::Snow) && drift >= 16;
-    if (mode != g_lastMode || snowDrift || stageChanged) {
+    // glm M3.5 MINOR 1: publish on a thunder-bit edge too — a kytag00
+    // thunder-area tag arming (wether-proc case 5, colpat already >= 1) flips
+    // mThunderEff.mMode without moving the derived mode, and a mode-only gate
+    // would never publish it (clients hold the stale bit indefinitely and
+    // NextThunderMode keeps re-asserting it). Pure decision in
+    // coop_time_logic.h (WeatherPublishDue) so the selftest guards the edge.
+    if (WeatherPublishDue(WeatherPublishInput{
+            /*modeChanged=*/mode != g_lastMode, snowDrift, stageChanged,
+            /*thunderChanged=*/thunder != g_lastThunder}))
+    {
         g_lastMode = mode;
+        g_lastThunder = thunder;
         g_lastIntensity = intensity;
         SendWeatherChange(mode, thunder, intensity, colpat);
     }
@@ -692,6 +704,7 @@ void shutdown() {
     g_lastDay = 0;
     g_lastRate = 0xFF;
     g_lastMode = 0xFF;
+    g_lastThunder = 0xFF;
     g_worldSeenTime = {};
     g_worldSeenWeather = {};
 }

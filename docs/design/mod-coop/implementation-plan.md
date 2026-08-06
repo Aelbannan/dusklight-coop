@@ -170,18 +170,48 @@ Wolf-howl rate handling is the fork's own code (R8 moot). Twilight per 04 §5.5.
 wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has none — verified).
 **Accept**: same sky, rain together, cutscene freeze matches, stage transitions re-assert.
 
-### M4 — Session polish
+### M4 — Session polish + room ownership
+
+**Room ownership (from `docs/design/network.md` §6 — moved up from M5 by user decision):**
+
+- Owner = first player in the room; the world host defaults to owning its own room. Ownership is
+  **sticky**: transfers only on leave/disconnect, never on arrival (no ping-pong).
+- The room owner sims that room's **enemies** (AI/HP/spawns) + enemy-caused world effects; every
+  other player in the room sees them as snapshotted puppets (existing M2 freeze/apply machinery,
+  now owner-scoped).
+- **Combat intents route to the room's owner** (message destination — extend the RelayPolicy seam:
+  `CombatIntent` no-relay + route-to-room-owner, `EnemySnapshot` owner→clients). Today intents go
+  to the host (`SendToPeer(0)`); room ownership redirects to the owning peer.
+- **Same-room scoping** for the enemy snapshot sender gate (M2 review MINOR-6: `RemoteInRoom` must
+  scope by the remote's actual room, not "any present player").
+- **Entity-id stability across ownership transfer**: map transfer, not renumber. Stage-placed
+  `(roomNo, setID, procName)` keys survive; the dynamic-spawn counter is per-owner, so dynamic
+  entities must be re-keyed or re-spawned on takeover (03 §3.1).
+- **Owner takeover**: re-sim per the new owner's story (dead enemies may resurrect — accepted);
+  the `roomClear` bit (already on the wire) keeps client ALLDIE scans honest.
+- **Bosses** (D9): v1 = the ROOM owner's story decides boss existence; per-player flag grant on
+  death unchanged.
+- Test: two players in different rooms — each room's enemies sim on that room's owner; clients in
+  the other room see them frozen/puppeted; combat from either side lands via the room-owner route.
+
+**Session polish:**
 
 - **Join warp policy (D6)**: unlock-gated warp + safe-anchor fallback; `dStage_playerInit`
-  assert/timelayer interaction documented; acceptance test for un-reached stages.
+  assert/timelayer interaction documented; acceptance test for un-reached stages. Fill
+  `worldStage_` from the real Link (the `stageOk` code is currently inert waiting on this).
 - **Host leave UX (D8)**: freeze puppets + toast → return to single-player; decided here.
-- Disconnect/leave: puppet despawn, slot kept for rejoin; LAN discovery + manual IP config UI.
+- Disconnect/leave: puppet despawn, slot kept for rejoin; ownership transfer on the disconnecting
+  room owner.
+- **LAN discovery**: `HostAnnounce` UDP broadcast (port 44771 reserved) + manual-IP config UI;
+  wire the `net.*` config vars (registered, currently unread); `sessionActive()`/`hostRole()`
+  retained for this.
+- **Reload/disable**: session teardown per §3.6.
 
 ### M5 — Future
 
-Room ownership (sticky transfer), dynamic waves (`EnemyEvent(spawn/die)`), horse entity channel,
-PvP (dummy damage table + `DamagePlayer` intent), enemy pose matrix-copy upgrade, interpolation
-if internet play appears.
+Dynamic waves (`EnemyEvent(spawn/die)`), horse entity channel, PvP (dummy damage table +
+`DamagePlayer` intent), enemy pose matrix-copy upgrade, interpolation if internet play appears.
+(Room ownership moved to M4.)
 
 ## 6. Risk register (Rev 3)
 

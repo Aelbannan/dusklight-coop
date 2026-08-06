@@ -213,6 +213,28 @@ inline SeedDecision SeedTargetsDecision(const SeedInput& in) {
 }
 
 // ---------------------------------------------------------------------------
+// Host publisher — WeatherChange publish decision (glm M3.5 MINOR 1).
+// ---------------------------------------------------------------------------
+
+/// Whether a WeatherChange should be published this frame. Modes drive most
+/// publishes; SNOW also refreshes on meaningful intensity drift. The
+/// thunder-only edge (glm M3.5 MINOR 1): a transition that flips
+/// mThunderEff.mMode without changing the derived WeatherMode (kytag00
+/// thunder-area tag arming on a stage whose colpat is already >= 1, wether-
+/// proc case 5 with rain drained) publishes nothing under a mode-only gate,
+/// so clients never learn the new thunder bit. `thunderChanged` covers it.
+struct WeatherPublishInput {
+    bool modeChanged = false;
+    bool snowDrift = false;
+    bool stageChanged = false;
+    bool thunderChanged = false;
+};
+
+inline bool WeatherPublishDue(const WeatherPublishInput& in) {
+    return in.modeChanged || in.snowDrift || in.stageChanged || in.thunderChanged;
+}
+
+// ---------------------------------------------------------------------------
 // Host publisher — TimeSync cadence (deepseek MAJOR 1 fix).
 // ---------------------------------------------------------------------------
 
