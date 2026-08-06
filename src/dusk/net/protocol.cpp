@@ -191,6 +191,9 @@ u16 WireSize(MsgType type) {
     case MsgType::WeatherChange:
         // u8 mode + u8 thunder + u16 intensity + u8 colpat + u8 pad
         return 1 + 1 + 2 + 1 + 1;  // 6
+    case MsgType::RoomOwnership:
+        // stage(16) + room(1) + owner(1) + reserved(2)
+        return kMaxStageNameLength + 1 + 1 + 2;  // 20
     }
     return 0;
 }
@@ -271,6 +274,11 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU8(msg.payload.weatherChange.thunder) &&
                w.WriteU16(msg.payload.weatherChange.intensity) &&
                w.WriteU8(msg.payload.weatherChange.colpat) && w.WriteU8(msg.payload.weatherChange.pad);
+    case MsgType::RoomOwnership:
+        return w.WriteFixedString(msg.payload.roomOwnership.stage, kMaxStageNameLength) &&
+               w.WriteS8(msg.payload.roomOwnership.room) &&
+               w.WriteU8(msg.payload.roomOwnership.owner) &&
+               w.WriteBytes(msg.payload.roomOwnership.reserved, 2);
     }
     return false;
 }
@@ -282,7 +290,7 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
         return false;
     }
     if (typeRaw < static_cast<u16>(MsgType::JoinRequest) ||
-        typeRaw > static_cast<u16>(MsgType::WeatherChange))
+        typeRaw > static_cast<u16>(MsgType::RoomOwnership))
     {
         return false;
     }
@@ -366,6 +374,11 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.weatherChange.thunder) &&
                r.ReadU16(out.payload.weatherChange.intensity) &&
                r.ReadU8(out.payload.weatherChange.colpat) && r.ReadU8(out.payload.weatherChange.pad);
+    case MsgType::RoomOwnership:
+        return r.ReadFixedString(out.payload.roomOwnership.stage, kMaxStageNameLength) &&
+               r.ReadS8(out.payload.roomOwnership.room) &&
+               r.ReadU8(out.payload.roomOwnership.owner) &&
+               r.ReadBytes(out.payload.roomOwnership.reserved, 2);
     }
     return false;
 }

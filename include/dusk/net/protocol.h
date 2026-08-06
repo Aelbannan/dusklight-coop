@@ -58,7 +58,16 @@ namespace dusk::net {
 /// time + day; mode + thunder + intensity + colpat). JoinAccept/WorldInit
 /// carry the same TimeStateInfo/WeatherStateInfo so a mid-game joiner starts
 /// with the host's sky.
-constexpr u16 kProtocolVersion = 5;
+///
+/// v6 (M4): added RoomOwnershipMsg (reliable, host->all) carrying one room
+/// owner assignment (stage + room + owner PlayerId) — the distributed
+/// authority map of docs/design/network.md §6. The host owns the table
+/// (sticky first-in-room ownership, host-defaults-own-its-room, transfer on
+/// leave/disconnect), broadcasts it on every change and to each joiner, and
+/// uses it to route CombatIntent to the room's owner and scope EnemySnapshot
+/// fan-out to the sender's room. Message destinations, not a separate routing
+/// layer (00-network.md §2).
+constexpr u16 kProtocolVersion = 6;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -107,6 +116,7 @@ enum class MsgType : u16 {
     TimeSync = 13,
     TimeEvent = 14,
     WeatherChange = 15,
+    RoomOwnership = 16,
 };
 
 enum class JoinRejectReason : u8 {
@@ -121,6 +131,9 @@ enum class SessionEndReason : u8 {
     HostLeft = 0,
     Kicked = 1,
     Shutdown = 2,
+    /// Client-local only: the ENet connection dropped without a SessionEnd
+    /// (host crashed / network loss); never sent on the wire.
+    ConnectionLost = 3,
 };
 
 enum class PlayerStateId : u8 {
@@ -431,6 +444,22 @@ struct WeatherChangeMsg {
     u8 pad = 0;
 };
 
+/// M4 room-owner assignment (docs/design/network.md §6). Reliable,
+/// host->all, one per changed room. The host is the only emitter: it tracks
+/// every player's (stage, room) from the PlayerState/PlayerEvent stream,
+/// maintains the sticky ownership table (host defaults to owning its own
+/// room; otherwise the first player in the room; transfers only on
+/// leave/disconnect), broadcasts each change, and sends the full map to each
+/// joiner. Message destination = authority: CombatIntent routes to the
+/// room's owner; EnemySnapshot fan-out is scoped to the sender's room.
+struct RoomOwnershipMsg {
+    char stage[kMaxStageNameLength] = {};  // e.g. "F_SP108"
+    s8 room = -1;
+    u8 owner = kInvalidPlayerId;  // PlayerId owning this room, or
+                                  // kInvalidPlayerId = ownerless
+    u8 reserved[2] = {};
+};
+
 // ---------------------------------------------------------------------------
 // ByteWriter / ByteReader: fixed little-endian primitives, bounds-checked,
 // no allocation.
@@ -605,6 +634,7 @@ union PayloadUnion {
     TimeSyncMsg timeSync;
     TimeEventMsg timeEvent;
     WeatherChangeMsg weatherChange;
+    RoomOwnershipMsg roomOwnership;
 
     PayloadUnion() { std::memset(this, 0, sizeof(PayloadUnion)); }
 };

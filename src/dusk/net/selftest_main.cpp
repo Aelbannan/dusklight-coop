@@ -53,8 +53,11 @@
  * the same dusk::net::initialize()/shutdown() the game uses.
  */
 
+#include "dusk/coop/coop_entity_logic.h"
+#include "dusk/coop/coop_join_logic.h"
 #include "dusk/coop/coop_time_logic.h"
 #include "dusk/net/clock.h"
+#include "dusk/net/discovery.h"
 #include "dusk/net/module.h"
 #include "dusk/net/protocol.h"
 #include "dusk/net/session.h"
@@ -334,6 +337,15 @@ Message MakeMessage(MsgType type) {
         p.colpat = 2;
         break;
     }
+    case MsgType::RoomOwnership: {
+        auto& p = m.payload.roomOwnership;
+        std::strncpy(p.stage, "F_SP108", sizeof(p.stage) - 1);
+        p.room = 3;
+        p.owner = 2;
+        p.reserved[0] = 0x12;
+        p.reserved[1] = 0x34;
+        break;
+    }
     }
     return m;
 }
@@ -371,8 +383,8 @@ bool RoundTrip(MsgType type) {
 }
 
 void RunProtocolChecks() {
-    std::printf("protocol: round-trip all 15 message types\n");
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
+    std::printf("protocol: round-trip all 16 message types\n");
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::RoomOwnership);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
@@ -385,6 +397,9 @@ void RunProtocolChecks() {
     Check(WireSize(MsgType::TimeSync) == 8 && WireSize(MsgType::TimeEvent) == 8 &&
               WireSize(MsgType::WeatherChange) == 6,
         "time/weather message sizes (absolute-phase contract)");
+    Check(WireSize(MsgType::RoomOwnership) == kMaxStageNameLength + 1 + 1 + 2 &&
+              ChannelFor(MsgType::RoomOwnership) == kChannelReliable,
+        "RoomOwnership wire size + reliable channel (M4)");
     Check(WireSize(MsgType::PlayerState) == PlayerStateWireSize(),
         "PlayerState wire size");
     Check(ChannelFor(MsgType::PlayerState) == kChannelUnreliable &&
@@ -1842,6 +1857,482 @@ void RunOversizedMetricCheck() {
     hostT.Stop();
 }
 
+// ---------------------------------------------------------------------------
+// M4 — room ownership (network.md §6)
+// ---------------------------------------------------------------------------
+
+/// Pure table: sticky first-in-room ownership, host-defaults-own-its-room,
+/// transfer on leave/disconnect, never on arrival (no ping-pong).
+void RunM4OwnershipTableCheck() {
+    std::printf("m4: room ownership table (sticky first-in, host default, transfer)\n");
+
+    // 1) First player in the room owns it; a later arrival does NOT take it
+    //    over (sticky — no ping-pong).
+    {
+        RoomOwnershipTable t;
+        std::vector<RoomKey> changed;
+        Check(t.OwnerOf("F_SP108", 2) == kInvalidPlayerId, "empty room has no owner");
+        t.OnPlayerEnter("F_SP108", 2, 3, /*isHost=*/false, &changed);
+        Check(t.OwnerOf("F_SP108", 2) == 3, "first player owns the room");
+        changed.clear();
+        t.OnPlayerEnter("F_SP108", 2, 4, /*isHost=*/false, &changed);
+        Check(t.OwnerOf("F_SP108", 2) == 3,
+            "later arrival does not take ownership (sticky, no ping-pong)");
+        Check(changed.empty(), "no ownership broadcast on a non-transferring arrival");
+    }
+
+    // 2) The world host defaults to owning its own room — even over an
+    //    earlier client arrival.
+    {
+        RoomOwnershipTable t;
+        std::vector<RoomKey> changed;
+        t.OnPlayerEnter("F_SP108", 1, 2, /*isHost=*/false, &changed);
+        t.OnPlayerEnter("F_SP108", 1, 3, /*isHost=*/false, &changed);
+        Check(t.OwnerOf("F_SP108", 1) == 2, "client first-in owns the room");
+        changed.clear();
+        t.OnPlayerEnter("F_SP108", 1, 0, /*isHost=*/true, &changed);
+        Check(t.OwnerOf("F_SP108", 1) == 0,
+            "host entering takes ownership (host-defaults-own-its-room)");
+        Check(!changed.empty(), "host arrival is an ownership change (broadcast)");
+    }
+
+    // 3) Owner leaves -> next player in the room takes over; the room stays
+    //    owned. All leave -> ownerless.
+    {
+        RoomOwnershipTable t;
+        std::vector<RoomKey> changed;
+        t.OnPlayerEnter("F_SP108", 3, 1, false, &changed);
+        t.OnPlayerEnter("F_SP108", 3, 2, false, &changed);
+        t.OnPlayerEnter("F_SP108", 3, 5, false, &changed);
+        Check(t.OwnerOf("F_SP108", 3) == 1, "first arrival owns");
+        changed.clear();
+        t.OnPlayerLeave("F_SP108", 3, 1, false, &changed);
+        Check(t.OwnerOf("F_SP108", 3) == 2, "owner leave transfers to the next player");
+        Check(!changed.empty(), "takeover is broadcast");
+        changed.clear();
+        t.OnPlayerLeave("F_SP108", 3, 2, false, &changed);
+        Check(t.OwnerOf("F_SP108", 3) == 5, "second transfer to the remaining player");
+        changed.clear();
+        t.OnPlayerLeave("F_SP108", 3, 5, false, &changed);
+        Check(t.OwnerOf("F_SP108", 3) == kInvalidPlayerId, "empty room becomes ownerless");
+        Check(!changed.empty(), "ownerless broadcast");
+    }
+
+    // 4) Disconnect removes the player from every room and transfers.
+    {
+        RoomOwnershipTable t;
+        std::vector<RoomKey> changed;
+        t.OnPlayerEnter("F_SP108", 2, 4, false, &changed);
+        t.OnPlayerEnter("F_SP108", 2, 6, false, &changed);
+        t.OnPlayerEnter("F_SP104", 1, 6, false, &changed);
+        Check(t.OwnerOf("F_SP108", 2) == 4 && t.OwnerOf("F_SP104", 1) == 6,
+            "two rooms owned");
+        changed.clear();
+        t.OnPlayerDisconnect(6, false, &changed);
+        Check(t.OwnerOf("F_SP108", 2) == 4, "room unaffected by the other room's owner");
+        Check(t.OwnerOf("F_SP104", 1) == kInvalidPlayerId,
+            "disconnected owner leaves its room ownerless");
+    }
+
+    // 5) Stage is part of the key: same room number on another stage is a
+    //    separate room with a separate owner.
+    {
+        RoomOwnershipTable t;
+        std::vector<RoomKey> changed;
+        t.OnPlayerEnter("F_SP102", 1, 3, false, &changed);
+        t.OnPlayerEnter("F_SP108", 1, 4, false, &changed);
+        Check(t.OwnerOf("F_SP102", 1) == 3 && t.OwnerOf("F_SP108", 1) == 4,
+            "room number alone does not co-own across stages");
+    }
+
+    // 6) SetOwner (client view) applies the host's authoritative assignment.
+    {
+        RoomOwnershipTable t;
+        t.SetOwner("F_SP108", 2, 3);
+        Check(t.OwnerOf("F_SP108", 2) == 3, "SetOwner assigns");
+        t.SetOwner("F_SP108", 2, 7);
+        Check(t.OwnerOf("F_SP108", 2) == 7, "SetOwner replaces (host authority)");
+        t.SetOwner("F_SP108", 2, kInvalidPlayerId);
+        Check(t.OwnerOf("F_SP108", 2) == kInvalidPlayerId, "SetOwner clears (ownerless)");
+    }
+}
+
+/// Full-session: CombatIntent routes to the ROOM owner (which may be a
+/// client), never to other clients and not to the host's handler unless the
+/// host owns the room; EnemySnapshot from a client owner is relayed only to
+/// peers in the sender's room; CombatResult from a client owner reaches
+/// everyone; ownership stays sticky and transfers on leave.
+void RunM4RoomRoutingCheck() {
+    std::printf("m4: room-owner routing + same-room snapshot scoping (sessions)\n");
+    Demo demo;
+
+    Session host;
+    SessionConfig hostCfg;
+    hostCfg.port = 0;
+    hostCfg.name = "M4 Host";
+    hostCfg.maxPlayers = 3;
+    Check(host.StartHost(hostCfg), "m4 host starts (Listening)");
+    demo.live.push_back(&host);
+    const u16 port = host.boundPort();
+    // The host's own room: room 1 (host-defaults-own-its-room).
+    host.setLocalRoom("F_SP108", 1);
+
+    Session a;
+    SessionConfig aCfg;
+    aCfg.joinHost = "127.0.0.1";
+    aCfg.port = port;
+    aCfg.name = "M4 Attacker";
+    aCfg.version = kProtocolVersion;
+    Check(a.StartClient(aCfg), "m4 attacker starts");
+    demo.live.push_back(&a);
+    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000),
+        "m4 attacker joined");
+
+    Session b;
+    SessionConfig bCfg;
+    bCfg.joinHost = "127.0.0.1";
+    bCfg.port = port;
+    bCfg.name = "M4 Owner";
+    bCfg.version = kProtocolVersion;
+    Check(b.StartClient(bCfg), "m4 owner starts");
+    demo.live.push_back(&b);
+    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000),
+        "m4 owner joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+        "m4 host roster has 3 players");
+
+    int hostIntents = 0;
+    int aIntents = 0;
+    int bIntents = 0;
+    int hostSnapshots = 0;
+    int aSnapshots = 0;
+    int bSnapshots = 0;
+    int aResults = 0;
+    int bResults = 0;
+    int cResults = 0;
+    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++hostIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++hostSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++cResults;
+            break;
+        default:
+            break;
+        }
+    });
+    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++aIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++aSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++aResults;
+            break;
+        default:
+            break;
+        }
+    });
+    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+        switch (type) {
+        case MsgType::CombatIntent:
+            ++bIntents;
+            break;
+        case MsgType::EnemySnapshot:
+            ++bSnapshots;
+            break;
+        case MsgType::CombatResult:
+            ++bResults;
+            break;
+        default:
+            break;
+        }
+    });
+
+    // -- room establishment: B enters room 2 first (owner=B), then A (sticky).
+    PayloadUnion bRoom = {};
+    bRoom.playerState.playerId = b.selfId();
+    std::strncpy(bRoom.playerState.stage, "F_SP108", sizeof(bRoom.playerState.stage) - 1);
+    bRoom.playerState.roomNo = 2;
+    Check(b.SendGameMessage(MsgType::PlayerState, bRoom), "B announces room 2");
+    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+        "B owns room 2 (first in)");
+    Check(demo.WaitFor([&] { return a.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+        "ownership broadcast reached A");
+
+    PayloadUnion aRoom = {};
+    aRoom.playerState.playerId = a.selfId();
+    std::strncpy(aRoom.playerState.stage, "F_SP108", sizeof(aRoom.playerState.stage) - 1);
+    aRoom.playerState.roomNo = 2;
+    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A announces room 2");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(host.roomOwner("F_SP108", 2) == b.selfId(),
+        "A arriving second does not take ownership (sticky)");
+
+    // -- 1) CombatIntent from A (room 2) routes to the room owner B, NOT to
+    //    the host's handler and NOT back to A.
+    PayloadUnion intent = {};
+    intent.combatIntent.attackerId = a.selfId();
+    intent.combatIntent.targetEnemyId = 0x0203;  // stage-placed (room 2)
+    intent.combatIntent.atp = 3;
+    intent.combatIntent.powerType = 1;
+    intent.combatIntent.seq = 1;
+    Check(a.SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
+    Check(demo.WaitFor([&] { return bIntents >= 1; }, 10000),
+        "room owner B received A's CombatIntent (routed, not relayed)");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(hostIntents == 0, "host did NOT consume the intent it routed to B");
+    Check(aIntents == 0, "intent not echoed back to A");
+
+    // -- 2) A moves into the host's room 1; the host-default rule keeps the
+    //    host as owner. A's intent in room 1 must reach the host's handler.
+    PayloadUnion aRoom1 = {};
+    aRoom1.playerState.playerId = a.selfId();
+    std::strncpy(aRoom1.playerState.stage, "F_SP108", sizeof(aRoom1.playerState.stage) - 1);
+    aRoom1.playerState.roomNo = 1;
+    Check(a.SendGameMessage(MsgType::PlayerState, aRoom1), "A moves to room 1");
+    // The reliable SceneChange is the room-change authority (the real game
+    // sends it before the unreliable states); wait for the HOST's own view of
+    // A's room rather than the (already-true) ownership, so the intent below
+    // routes on A's NEW room.
+    PayloadUnion aScene1 = {};
+    aScene1.playerEvent.playerId = a.selfId();
+    aScene1.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    aScene1.playerEvent.data = 1;
+    Check(a.SendGameMessage(MsgType::PlayerEvent, aScene1), "A announces room 1 (reliable)");
+    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 1; }, 10000),
+        "host sees A in room 1");
+    Check(host.roomOwner("F_SP108", 1) == 0,
+        "host owns room 1 even with a client present (host default)");
+    PayloadUnion intent2 = {};
+    intent2.combatIntent.attackerId = a.selfId();
+    intent2.combatIntent.targetEnemyId = 0x0103;
+    intent2.combatIntent.atp = 2;
+    intent2.combatIntent.powerType = 1;
+    intent2.combatIntent.seq = 2;
+    Check(a.SendGameMessage(MsgType::CombatIntent, intent2),
+        "A sends CombatIntent in the host's room");
+    Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
+        "host consumed the intent for its own room");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(bIntents == 1, "B (owner of room 2 only) did not receive the room-1 intent");
+
+    // -- 3) EnemySnapshot from owner B (room 2) reaches only room-2 peers.
+    //    A is now in room 1, so B's room-2 snapshot must NOT reach A (and
+    //    not echo back to B); the host still consumes it.
+    PayloadUnion snap = {};
+    snap.enemySnapshot.enemyId = 0x0205;
+    snap.enemySnapshot.type = 0x01AF;
+    snap.enemySnapshot.hp = 42;
+    snap.enemySnapshot.maxHp = 100;
+    Check(b.SendGameMessage(MsgType::EnemySnapshot, snap), "owner B sends EnemySnapshot");
+    Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
+        "host consumed B's EnemySnapshot");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(aSnapshots == 0,
+        "room-2 snapshot NOT relayed to a room-1 peer (same-room scoping)");
+    Check(bSnapshots == 0, "snapshot not echoed back to the owner");
+
+    // -- 4) A moves back to room 2: now B's snapshot reaches A.
+    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
+    PayloadUnion aScene2 = {};
+    aScene2.playerEvent.playerId = a.selfId();
+    aScene2.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    aScene2.playerEvent.data = 2;
+    Check(a.SendGameMessage(MsgType::PlayerEvent, aScene2), "A announces room 2 (reliable)");
+    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+        "host sees A back in room 2");
+    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+        "B still owns room 2 (sticky across A's moves)");
+    PayloadUnion snap2 = {};
+    snap2.enemySnapshot.enemyId = 0x0207;
+    snap2.enemySnapshot.type = 0x01AF;
+    Check(b.SendGameMessage(MsgType::EnemySnapshot, snap2), "owner B sends another EnemySnapshot");
+    Check(demo.WaitFor([&] { return aSnapshots >= 1; }, 10000),
+        "room-2 snapshot relayed to the room-2 peer A");
+
+    // -- 5) CombatResult from owner B reaches everyone except the origin
+    //    (star relay; the host relays to the other joined peer A).
+    PayloadUnion result = {};
+    result.combatResult.targetEnemyId = 0x0205;
+    result.combatResult.damage = 4;
+    result.combatResult.newHp = 38;
+    result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
+    result.combatResult.attackerId = a.selfId();
+    result.combatResult.seq = 1;
+    Check(b.SendGameMessage(MsgType::CombatResult, result), "owner B sends CombatResult");
+    Check(demo.WaitFor([&] { return aResults >= 1 && cResults >= 1; }, 10000),
+        "CombatResult from a client owner reaches the other peer + host (star relay)");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(bResults == 0, "origin B does not receive its own CombatResult back");
+
+    // -- 6) Ownership transfer on leave: B (owner of room 2) leaves; A is
+    //    still in room 2 and must take over.
+    PayloadUnion leave = {};
+    leave.playerLeave.playerId = b.selfId();
+    Check(b.SendGameMessage(MsgType::PlayerLeave, leave), "B sends PlayerLeave");
+    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == a.selfId(); }, 10000),
+        "room 2 ownership transferred to A after the owner left");
+
+    for (Session* s : demo.live) {
+        s->Stop();
+    }
+    demo.live.clear();
+    host.Stop();
+}
+
+// ---------------------------------------------------------------------------
+// M4 — join-warp (D6) + entity stability
+// ---------------------------------------------------------------------------
+
+/// Pure join-warp decision + the session-level worldStage carry (the host's
+/// stage must reach the client for the gate to decide anything).
+void RunM4JoinWarpCheck() {
+    std::printf("m4: join-warp unlock gate (D6)\n");
+    using dusk::coop::DecideJoinWarp;
+    using dusk::coop::JoinWarpDecision;
+    using dusk::coop::SafeStageSet;
+
+    // 1) Pure decision table.
+    {
+        SafeStageSet reached;
+        reached.Add("F_SP102");
+        reached.Add("F_SP103");
+        Check(DecideJoinWarp("F_SP103", "F_SP102", reached) == JoinWarpDecision::Warp,
+            "reached stage -> warp");
+        Check(DecideJoinWarp("F_SP108", "F_SP102", reached) == JoinWarpDecision::RefuseAnchor,
+            "un-reached stage -> refuse + safe anchor");
+        Check(DecideJoinWarp("F_SP102", "F_SP102", reached) == JoinWarpDecision::NoWarp,
+            "same stage -> no warp");
+        Check(DecideJoinWarp("", "F_SP102", reached) == JoinWarpDecision::NoWarp,
+            "empty target (host never filled worldStage) -> no warp");
+        reached.Add("F_SP108");
+        Check(DecideJoinWarp("F_SP108", "F_SP102", reached) == JoinWarpDecision::Warp,
+            "stage learned later -> warp");
+        Check(!reached.Contains("F_SP999"), "unknown stage never in the safe set");
+    }
+
+    // 2) Session-level: the host fills worldStage_ (the M1 TODO — cfg.stage
+    //    was inert) and JoinAccept/WorldInit carry it to the client.
+    {
+        Demo demo;
+        Session host;
+        SessionConfig hostCfg;
+        hostCfg.port = 0;
+        hostCfg.name = "Warp Host";
+        hostCfg.maxPlayers = 2;
+        Check(host.StartHost(hostCfg), "warp host starts");
+        demo.live.push_back(&host);
+        const u16 port = host.boundPort();
+
+        StageInfo hostStage;
+        std::strncpy(hostStage.stage, "F_SP103", sizeof(hostStage.stage) - 1);
+        hostStage.room = 4;
+        hostStage.layer = -1;
+        hostStage.point = 3;
+        host.setWorldStage(hostStage);
+
+        Session c;
+        SessionConfig cCfg;
+        cCfg.joinHost = "127.0.0.1";
+        cCfg.port = port;
+        cCfg.name = "Warp Client";
+        cCfg.version = kProtocolVersion;
+        Check(c.StartClient(cCfg), "warp client starts");
+        demo.live.push_back(&c);
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+            "warp client joined");
+        Check(std::strcmp(c.worldStage().stage, "F_SP103") == 0 && c.worldStage().room == 4,
+            "client received the host's filled worldStage (stage+room)");
+        Check(std::strcmp(host.worldStage().stage, "F_SP103") == 0,
+            "host retains its published worldStage");
+
+        for (Session* s : demo.live) {
+            s->Stop();
+        }
+        demo.live.clear();
+        host.Stop();
+    }
+}
+
+/// Entity-id stability across ownership transfer: stage-placed keys are a
+/// pure function of stage data (identical for any owner), dynamic ids are
+/// owner-major so two owners' spaces never collide after a takeover.
+void RunM4EntityStabilityCheck() {
+    std::printf("m4: entity-id stability across ownership transfer\n");
+    using namespace dusk::coop::enemy;
+
+    // Stage-placed keys: identical on every machine, independent of who owns
+    // the room (the transfer changes nothing — a map transfer, not renumber).
+    Check(StageEntityId(2, 3) == ((2 << 8) | 3), "stage key packs (room, setID)");
+    Check(StageEntityId(2, 3) == StageEntityId(2, 3),
+        "stage key is a pure function of stage data (stable across owners)");
+    Check(StageEntityId(2, 3) != StageEntityId(3, 3), "different rooms key differently");
+    Check(StageEntityId(4, 0xFFFF) == kInvalidEnemyId, "dynamic spawns are not stage-keyed");
+    Check(StageEntityId(-1, 3) == kInvalidEnemyId, "no room -> no key");
+
+    // Dynamic ids: owner-major — two owners can never collide, and ids stay
+    // clear of the stage-key space.
+    const u16 dynA = DynamicEntityId(3, 1);
+    const u16 dynB = DynamicEntityId(5, 1);
+    Check((dynA & kDynamicIdBase) != 0, "dynamic ids live above the stage-key space");
+    Check(dynA != dynB, "different owners allocate disjoint dynamic id spaces");
+    Check(dynA != StageEntityId(2, 3) && dynB != StageEntityId(2, 3),
+        "dynamic ids never collide with stage keys");
+    const u16 dynA2 = DynamicEntityId(3, 2);
+    Check(dynA != dynA2, "the same owner's counter advances");
+    Check(DynamicEntityId(3, 0x1234) == DynamicEntityId(3, 0x1234),
+        "same owner + same counter -> same id (deterministic)");
+}
+
+// ---------------------------------------------------------------------------
+// M4 — LAN discovery (HostAnnounce)
+// ---------------------------------------------------------------------------
+
+void RunM4DiscoveryCheck() {
+    std::printf("m4: LAN discovery HostAnnounce (loopback)\n");
+    using namespace dusk::net::discovery;
+
+    Listener listener;
+    listener.Start();
+    const u64 before = AnnouncesReceived();
+    Announcer announcer;
+    announcer.Start("Dusklight Test Session", 44770, 4);
+    announcer.SetPlayers(2);
+
+    // The announcer broadcasts every 2 s (LAN + loopback targets); the
+    // loopback send is deterministic on one machine, so a few seconds of
+    // polling is ample.
+    std::vector<DiscoveredSession> found;
+    const u64 deadline = NowMs() + 8000;
+    while (NowMs() < deadline) {
+        found = listener.Sessions();
+        if (!found.empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    Check(!found.empty(), "listener discovered the announcing host on loopback");
+    if (!found.empty()) {
+        const auto& ds = found.front();
+        Check(ds.port == 44770, "announce carries the session port");
+        Check(ds.players == 2 && ds.maxPlayers == 4, "announce carries players/max");
+        Check(std::strcmp(ds.name, "Dusklight Test Session") == 0,
+            "announce carries the session name");
+    }
+    Check(AnnouncesReceived() >= before + 1, "accepted datagrams counted");
+
+    announcer.Stop();
+    listener.Stop();
+}
+
 }  // namespace
 
 int main() {
@@ -1869,6 +2360,11 @@ int main() {
     RunM2RelayPolicyCheck();
     RunM3TimeWeatherCheck();
     RunM35TimeWeatherFixCheck();
+    RunM4OwnershipTableCheck();
+    RunM4RoomRoutingCheck();
+    RunM4JoinWarpCheck();
+    RunM4EntityStabilityCheck();
+    RunM4DiscoveryCheck();
 
     dusk::net::shutdown();
 
