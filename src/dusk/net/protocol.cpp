@@ -162,10 +162,11 @@ u16 WireSize(MsgType type) {
         return 20 + 8 + 6 + kMaxLocalPlayers * 36;  // 322
     case MsgType::PlayerState:
         // raw-matrix pose (Rev 3 D4): 5 (id/room/form/flags/jointCount)
-        // + 5 scaleFlags + 10 (yaw/pitch face bck/btp/frame/reserved)
-        // + 12 pos + sizeof(Mtx) baseTR + 40*sizeof(Mtx) joints = 2001
-        // with TP's 3x4 Mtx (48 B). See PlayerStateWireSize(); reviewed m1
-        // MINOR m1 corrected the stale 2657 (4x4 Mtx) figure.
+        // + 16 stage + 5 scaleFlags + 10 (yaw/pitch face bck/btp/frame/
+        // reserved) + 12 pos + sizeof(Mtx) baseTR + 40*sizeof(Mtx) joints
+        // = 2017 with TP's 3x4 Mtx (48 B). See PlayerStateWireSize();
+        // capstone MINOR I corrected the stale 2001 (the 16-byte stage
+        // field was omitted from the old figure).
         return PlayerStateWireSize();
     case MsgType::PlayerEvent:
         return 4 + 4 + 4;  // 12

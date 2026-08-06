@@ -173,6 +173,9 @@ exact blended/callback-baked pose with zero animation-state coupling
 ```
 playerId      u8
 roomNo        s8              // current.roomNo — same-scene/room scoping
+stage         char[16]        // current stage (e.g. "F_SP103") — same-scene
+                              // scoping: room numbers are not unique across
+                              // stages (spring / house interiors)
 form          u8              // 0 human / 1 wolf (checkWolf())
 stateFlags    u8              // kPlayerStateFlag_* bits (table below)
 jointCount    u8              // 0..kMaxJoints; joints[jointCount..] wire-zeroed
@@ -186,7 +189,9 @@ reserved      u8
 pos           f32 x3          // current.pos
 baseTR        Mtx (3x4)       // mpLinkModel->getBaseTRMtx() — exact world placement
 joints        Mtx[40] (3x4)   // per-joint getAnmMtx(j), root-relative
-~= 2001 bytes/player/frame (Mtx is f32[3][4] = 48 B)
+= 2017 bytes/player/frame (5 + 16 stage + 5 scaleFlags + 10 + 1 + 12 + 48 +
+40×48; Mtx is f32[3][4] = 48 B — capstone MINOR I corrected the stale 2001,
+which omitted the 16-byte stage field)
 ```
 
 `jointCount > kMaxJoints (40)` is rejected at parse (semantic validation,
@@ -238,7 +243,11 @@ flags     u8              // frozen, dead, boss-phase…
 angle     s16
 anim      u32             // action/anim state hint (see §7 note)
 pos       f32 x3
-~= 28 bytes/enemy/frame
+speed     f32 x3          // velocity (knockback / anim hints)
+semantics u8              // per-type damage semantics tag (hp|hitCount|special)
+reserved  u8[3]
+= 44 bytes/enemy/frame (2+2+2+2+1+1+2+4+12+12+1+3 — the v4 layout;
+capstone MINOR I corrected the stale ~28 B provisional)
 ```
 
 ## 6. Cadence — every frame, no interpolation
@@ -261,11 +270,12 @@ pos       f32 x3
 
 ### Bandwidth
 
-- 8 players × ~2.0 KB (raw matrix pose, 48-B 3x4 Mtx) + 40 enemies × ~28 B,
-  all at 60 Hz ≈ **~1.0 MB/s worst case** (players ≈ 8 × 2001 B × 60 ≈ 0.96
-  MB/s; enemies ≈ 40 × 28 B × 60 ≈ 67 KB/s). Trivial on LAN; Anchor does more
+- 8 players × ~2.0 KB (raw matrix pose, 48-B 3x4 Mtx) + 40 enemies × 44 B,
+  all at 60 Hz ≈ **~1.0 MB/s worst case** (players ≈ 8 × 2017 B × 60 ≈ 0.97
+  MB/s; enemies ≈ 40 × 44 B × 60 ≈ 106 KB/s). Trivial on LAN; Anchor does more
   (JSON) over the internet. ENet's `enet_host_bandwidth_limit` caps it if ever
-  needed. (Review m1 M3 corrected the earlier ~2.7 KB/4x4-Mtx figure.)
+  needed. (Capstone MINOR I corrected the 2001-B/28-B figures; the ~2.7
+  KB/4x4-Mtx figure was corrected back in review m1 M3.)
 
 ## 7. Enemy authority & combat
 

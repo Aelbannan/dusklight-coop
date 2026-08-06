@@ -249,7 +249,7 @@ struct TimeEvent {
     f32 time;      // phase at event
     u16 day;
 };
-// 10 bytes
+// 12 bytes (8 payload + 4 envelope; capstone MINOR I corrected the stale 10)
 ```
 
 - **NEW_DAY**: host clock wrapped 360 → `mDate++` (host fires its own `dKankyo_DayProc`).

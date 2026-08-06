@@ -162,8 +162,12 @@ PlayerState (per remote player, EVERY frame @ game fps, unreliable-sequenced)
 │ faceFrame             │ s16    │ *field_0x215c->getFrame()  (:4058)            │
 │ stateFlags            │ u8     │ see §2.1                                      │
 │ roomNo                │ s8     │ current.roomNo  (f_op_actor.h:248)            │
+│ stage                 │ 16     │ dComIfGp_getStartStageName() — same-stage     │
+│                       │        │ scoping: room numbers are not unique across    │
+│                       │        │ stages (spring / house interiors)             │
 ├───────────────────────┼────────┼──────────────────────────────────────────────┤
-│ TOTAL                 │ ~2.0KB │ ≈ 120 KB/s per player @ 60 Hz (see §6)       │
+│ TOTAL                 │ ~2.0KB │ ≈ 2017 B with the 16-B stage field (capstone  │
+│                       │        │ MINOR I; the old 2001 figure omitted it)      │
 └───────────────────────┴────────┴──────────────────────────────────────────────┘
 ```
 
@@ -173,7 +177,8 @@ PlayerState (per remote player, EVERY frame @ game fps, unreliable-sequenced)
 > leaving the session) leaves its puppet frozen in the last applied pose. The
 > seq-gap timeout → freeze/fade mechanism is deferred (see §9 Q8). The
 > ~2.0 KB total assumes TP's 3x4 Mtx (48 B), not 4x4 (the earlier 2.67 KB
-> figure assumed 64-B matrices).
+> figure assumed 64-B matrices); the shipped wire size is 2017 B (16-B stage
+> field included — capstone MINOR I).
 
 ### 2.1 `stateFlags` byte (semantic state not carried by the pose)
 

@@ -232,6 +232,13 @@ colliders, `mAtInfo`, `mHitCount` — just bigger and story-gated (§6).
 
 ### 3.4 Health is NOT one semantics
 
+> **SUPERSEDED — the E_FB ("Fire Baba") and E_GS lines below are STALE; see
+> m2-design-notes.md §2/§5 for the authoritative whitelist.** E_FB is the
+> Freezard (not the "Fire Baba" an earlier draft assumed), iron-ball-only
+> damage, dropped from the shipped whitelist; E_GS has no damage collider,
+> dropped. The shipped whitelist is `E_AI, E_HM, E_DF, E_YC, E_MD, B_TN`
+> (capstone MINOR 3, review-full-glm-5.2.md).
+
 - ~77 enemies: `health` is real HP, decremented by `cc_at_check`.
 - Armos (`E_AI`): `health = 1000` is **reset every frame** in `damage_check`;
   it "dies" by `m_hitCount >= 3` (or specific AtTypes). HP is meaningless for
@@ -487,6 +494,12 @@ bees) that rarely matter as standalone threats; the whitelist starts with the
 real room-fodder threats among them: **`E_AI` (Armos — Gate G's first entry),
 `E_HM` (Torch Slug), `E_FB` (Fire Baba), `E_DF`, `E_GS`, `E_YC`, `E_MD`**,
 plus any `B_*` boss a dungeon needs.
+
+> **SUPERSEDED — see m2-design-notes.md §2/§5.** `E_FB` (Freezard) and `E_GS`
+> are DROPPED from the shipped whitelist (`E_FB`: iron-ball-only damage, its
+> handler casts `GetTgHitAc()` to `daObjCarry_c*` and reads slot 0 — unsafe
+> for synthetic injection; `E_GS`: no damage collider). The shipped whitelist
+> is `E_AI, E_HM, E_DF, E_YC, E_MD, B_TN` (capstone MINOR 3).
 
 ### 7.2 Adapter extension (from `EnemyAdapter`)
 

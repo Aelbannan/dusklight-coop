@@ -67,6 +67,13 @@ namespace dusk::net {
 /// uses it to route CombatIntent to the room's owner and scope EnemySnapshot
 /// fan-out to the sender's room. Message destinations, not a separate routing
 /// layer (00-network.md §2).
+///
+/// M4.5 (capstone MINOR 4, review-full-glm-5.2.md): also redefined the
+/// EXISTING PlayerEventMsg.scene byte as the same-stage flag (1 = same-stage
+/// move, 0 = cross-stage / not a SceneChange — the host's room-table sniff
+/// keys (last-known stage, new room) on it). Semantic change to an existing
+/// field, NO layout change — hence no bump here; M5 bumps to v7 (it adds wire
+/// fields: spawn params, horse channel).
 constexpr u16 kProtocolVersion = 6;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
@@ -86,8 +93,9 @@ constexpr u8 kMaxStageNameLength = 16;
 /// are meaningful (the rest are written zeroed so the wire size stays fixed).
 constexpr u8 kMaxJoints = 40;
 
-/// Largest message the transport ring slots carry; fits the Rev 3 D4 raw
-/// matrix pose (~2.7 KB) plus envelope with room to spare.
+/// Largest message the transport ring slots carry; fits the raw-matrix pose
+/// (~2.0 KB — 2017 B payload + 4 B envelope, capstone MINOR I) plus envelope
+/// with room to spare.
 constexpr u16 kMaxMessageSize = 4096;
 
 constexpr u8 kInvalidPlayerId = 0xFF;
@@ -362,9 +370,17 @@ struct PlayerEventMsg {
 
 struct EnemySnapshotMsg {
     u16 enemyId = 0xFFFF;  // session-unique per room instance
+    // Capstone MINOR 2 (review-full-glm-5.2.md MINOR 2): `type` (procName) is
+    // populated on the host and serialized but INTENTIONALLY never read by
+    // the client apply path (the client already has the local actor with its
+    // own type). M5 decides wire-vs-drop; do NOT change behavior.
     u16 type = 0;          // procName / profile id
     u16 hp = 0;
     u16 maxHp = 0;
+    // Capstone MINOR 2: `aggro` (the nearest-player hint) is populated on the
+    // host (resolveNearestPlayer) and serialized but has NO consumer on the
+    // receive side in v1 (a frozen puppet doesn't aggro). M5 decides
+    // wire-vs-drop (a consumer would be enemy-attack targeting display).
     u8 aggro = kInvalidPlayerId;  // target player id; kInvalidPlayerId = none
     u8 flags = 0;                 // dead / downed / wolf-bitten + boss-phase
     s16 angle = 0;                // shape_angle.y
