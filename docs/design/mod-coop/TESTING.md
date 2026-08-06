@@ -3,10 +3,14 @@
 How to build, run, and verify the networked co-op milestones. Current status
 flag at the top; check it before testing.
 
-> **Status: M3 and M3.5 (time & weather) are landed and reviewed; the selftest
-> is green on a forced rebuild.** M0–M3.5 behavior is verified working (218/218
-> selftest checks incl. the 1 Hz cadence regression guard). M4 (session polish +
-> room ownership) is next.
+> **Status: M0–M4 (session polish + room ownership) are landed and reviewed;
+> the selftest is green on a forced rebuild.** All 300+ selftest checks pass
+> incl. the 1 Hz cadence regression guard, the room-ownership routing
+> (CombatIntent to a non-host room owner, same-room snapshot scoping,
+> ownership transfer), the join-warp gate, entity-id stability, and the LAN
+> discovery announce/receive. M4 adds: join-warp (unlock gate + safe anchor),
+> host-leave toast UX, LAN discovery, and per-room enemy authority with
+> combat routing to the room owner.
 
 ## 0. Config vars (defaults)
 
@@ -14,9 +18,13 @@ flag at the top; check it before testing.
 |-----|---------|---------|
 | `net.enabled` | `false` | master switch; `false` = byte-for-byte vanilla single-player |
 | `net.role` | `"host"` | `"host"` or `"client"` |
-| `net.hostPort` | `44770` | the port this instance binds |
+| `net.hostPort` | `44770` | the port this instance binds (44771 is reserved for the LAN discovery announce) |
 | `net.joinHost` | `127.0.0.1` | what a client connects to (LAN IP for remote) |
-| `net.sessionName` | `"Dusklight co-op"` | display name |
+| `net.sessionName` | `"Dusklight co-op"` | display name (host: advertised; client: player name) |
+
+All five are also editable in the in-game Settings → Network tab (and the
+client's "Discovered Sessions" list shows LAN hosts found by the announce
+listener — join by copying the IP into `net.joinHost`).
 
 ## 1. Automated selftest (fast, no game)
 
@@ -26,12 +34,17 @@ ninja -C build/macos-default-relwithdebinfo dusk_net_selftest
 ```
 
 Expect `PASS: all checks succeeded`, exit 0. Covers: all message round-trips
-(byte-identical serialize→deserialize), handshake (JoinRequest →
-JoinAccept+WorldInit, both rejects, PlayerLeave relay, SessionEnd),
-roster-refresh on join (3-player visibility), and the relay policies
-(PlayerState/PlayerEvent star-relay; CombatIntent NOT relayed; EnemySnapshot
-owner→clients; CombatResult/EnemyEvent simulcast; TimeSync/WeatherChange
-host→all, client-sent ones rejected — once M3 lands).
+(byte-identical serialize→deserialize, incl. the M4 RoomOwnership message),
+handshake (JoinRequest → JoinAccept+WorldInit, both rejects, PlayerLeave
+relay, SessionEnd), roster-refresh on join (3-player visibility), and the
+relay policies (PlayerState/PlayerEvent star-relay; CombatIntent routed to
+the ROOM owner; EnemySnapshot room-scoped; CombatResult/EnemyEvent
+simulcast; TimeSync/WeatherChange host→all), the time/weather contract
+(1 Hz TimeSync cadence, thunder/pond/seed tables), M4 room ownership
+(sticky first-in, host-default, transfer on leave/disconnect, intent
+routing to a non-host owner, same-room snapshot scoping), the join-warp
+unlock gate + worldStage carry, entity-id stability across takeover, and
+LAN discovery announce/receive over loopback.
 
 ## 2. Full build
 
@@ -60,15 +73,21 @@ build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
 
 ```sh
 build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
-  --cvar net.enabled=true --cvar net.role=client --cvar net.hostPort=44771 \
+  --cvar net.enabled=true --cvar net.role=client --cvar net.hostPort=44772 \
   --cvar net.joinHost=127.0.0.1
 ```
+
+(Use a session port other than 44771 — that port is now the discovery
+listener's, and the client binds it to hear HostAnnounces.)
 
 Coop/session logs print to the terminal. Watch for, in order:
 
 1. `coop: host session started (port 44770)` / `coop: client session started`
-2. On join: `puppet for player X active (pid N)` on **both** instances
-3. `apply player X to pos=(…)` — the client applies the host's pose, and vice
+2. `discovery: announcing 'Dusklight co-op' on port 44770` (host) and
+   `discovery: found session ... at 127.0.0.1:44770` (client — same machine
+   discovery works via the loopback announce)
+3. On join: `puppet for player X active (pid N)` on **both** instances
+4. `apply player X to pos=(…)` — the client applies the host's pose, and vice
    versa (the applied position must equal the received position)
 
 **In-game checks per milestone:**
@@ -79,6 +98,10 @@ Coop/session logs print to the terminal. Watch for, in order:
 | M2 enemies | Host fights an enemy → client sees the same enemy at the same HP; a client's hits kill it (host applies); drops spawn on BOTH; room-clear doors open together |
 | M2.5 targeting | Kite a whitelisted enemy (Armos `E_AI`, Kargorok `E_YC`, …) past the client's Link → it turns and attacks the NEAREST player, not just the host |
 | M3 time/weather | Same sky on both; rain arrives on both; a cutscene freezes the clock on both; a stage transition re-asserts the same time |
+| M4 join-warp | Client joins a host in a stage the client's save hasn't reached → the client STAYS put (no crash, no warp), a "Host in a far-away stage" toast appears, and the players become visible only when in a shared stage. Joining from a save that HAS reached the stage → the client warps to the host's stage beside the host |
+| M4 host-leave | Host quits or kills the process → client shows a "Host left/disconnected" toast, puppets despawn, and single-player continues normally |
+| M4 ownership | Two players in different rooms of the same stage: each room's enemies sim on that room's owner (first player in, host wins its own room); the other player sees them frozen; combat from either side lands via the room-owner route; the owner leaving transfers the room |
+| M4 LAN discovery | Host running: client's log shows `discovered session 'Dusklight co-op' at <ip>:<port>`; the Settings → Network tab lists it |
 | Save integrity | `USA/Card A/*.gci` mtime unchanged across all runs |
 
 ## 4. Two machines on LAN

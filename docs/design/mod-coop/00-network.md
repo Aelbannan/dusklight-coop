@@ -64,16 +64,22 @@ What we deliberately change vs Anchor:
 
 - **Transport: star.** The world host (session creator) relays all player
   state. Every machine connects to the host; no P2P mesh in v1.
-- **Authority: layered on top.** The sim owner of a room (v1: the world host in
-  its own room; later: the designated room owner per `docs/design/network.md`
-  §6) is the authority for that room's enemies and combat validation. Authority
-  is expressed in the protocol as message *destination*, not a separate
-  routing layer: enemy/combat messages flow to the sim owner; snapshots flow
-  back from it.
+- **Authority: layered on top.** The sim owner of a room (M2: the world host
+  in its own room; M4: the designated room owner per `docs/design/network.md`
+  §6) is the authority for that room's enemies and combat validation. Since
+  M4 the authority map is an explicit wire object: the host maintains a
+  sticky per-room owner table (host-defaults-own-its-room, transfer on
+  leave/disconnect) and broadcasts each assignment as `RoomOwnership`
+  (reliable, host→all, plus the full map to each joiner). Authority is
+  expressed in the protocol as message *destination*, not a separate routing
+  layer: enemy/combat messages flow to the room's owner; snapshots flow back
+  from it (host-relayed, room-scoped).
 - **Scene/room scoping** (Anchor model): a client only spawns/receives dummies
   and enemy state for players in its own scene. Clients in different scenes
   simply don't render each other; on scene change, the client requests the
-  current state for its new scene.
+  current state for its new scene. M4: enemy snapshots are additionally
+  room-scoped — the sender gate checks each remote's actual room, and the
+  host relays a client owner's snapshots only to peers in the sender's room.
 
 ## 3. Threading model
 
@@ -97,14 +103,14 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 
 | Step | Message | Channel | Notes |
 |------|---------|---------|-------|
-| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players 0/8 — **deferred to M4 (LAN discovery)**; v1 join is manual IP (`joinHost` CVar) |
+| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players 0/8 — **M4: implemented** (`discovery.cpp`): the host broadcasts a fixed-size announce every 2 s to the LAN broadcast + loopback; clients listen on 44771, log + list discovered sessions. Manual IP join (`joinHost` CVar) remains the fallback |
 | Discover | (listen for announce) | — | also manual IP join via config var |
 | Connect | ENet handshake | — | ENet-level |
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
 | Accept | `JoinAccept` | reliable | assigned `PlayerId` (session-wide 0–7), roster, stage, time, weather |
 | Reject | `JoinReject` | reliable | reason (full, version mismatch) |
 | Mid-game | `WorldInit` | reliable | stage (name/room/layer/point) + time + weather (v5) + full roster — **fixed size**; current player/enemy state arrives right after as a burst of ordinary per-frame `PlayerState`/`EnemySnapshot` messages. **Doubles as a roster-refresh**: on every successful join the host re-broadcasts `WorldInit` (current roster) to all already-joined peers so earlier joiners learn about later players (M1 fix; without it 3+ players were invisible to earlier joiners) |
-| Leave | `PlayerLeave` | reliable | host relays; puppet despawns |
+| Leave | `PlayerLeave` | reliable | host relays; puppet despawns; the leaver's rooms transfer ownership (M4) |
 
 - **PlayerId mapping**: host assigns session-wide ids 0–7 (`MAX_LOCAL_PLAYERS`).
   Each machine's `Runtime` keeps its local slot; remote slots are puppet-only
@@ -114,7 +120,9 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
   per-player/per-enemy state as a burst of ordinary `PlayerState`/
   `EnemySnapshot` messages on the per-frame stream (no separate full-state
   message — the first pose arrives within one frame).
-- **Host departure**: v1 ends the session with a `SessionEnd`; no host
+- **Host departure**: M4 ends the session with a `SessionEnd`; the client
+  toasts "Host left/disconnected" (per `SessionEnd` reason vs connection
+  loss), despawns puppets, and continues as vanilla single-player. No host
   migration (listed as future work).
 
 ## 5. Message protocol
@@ -132,10 +140,11 @@ Packet version in `JoinRequest`; mismatches rejected.
 | `EnemySnapshot` (per enemy) | unreliable seq | every frame | see EnemyState below |
 | `EnemyEvent` (spawn, die, room-clear, boss phase) | reliable | on change | enemy id + event + data |
 | `CombatIntent` | reliable | on attack | attacker, target enemy id, attack kind, position |
-| `CombatResult` | reliable | host→all | target enemy id, damage, new HP, outcome |
+| `CombatResult` | reliable | room owner→all | target enemy id, damage, new HP, outcome |
 | `TimeSync` | unreliable seq | **1 Hz** (real — M3.5: a 1 Hz `NetClock` gate; immediate on stage/rate change) | absolute phase `f32` 0..360 + day + rate + flags (v5; `protocol.h` `TimeSyncMsg` is normative) |
 | `TimeEvent` (new day, dusk/dawn) | reliable | on change | event id + time + day (v5) |
 | `WeatherChange` | reliable | on change | mode + thunder + intensity + colpat (v5) |
+| `RoomOwnership` | reliable | on change + to each joiner | stage + room + owner PlayerId (v6; `RoomOwnershipMsg` is normative) — the M4 authority map |
 
 Field order in the struct blocks below **is the wire order** (version-gated by
 `kProtocolVersion`); the hand-written serializers in `src/dusk/net/protocol.cpp`
@@ -294,12 +303,16 @@ client (attacker)                  host / sim owner                  all clients
 
 ## 10. Config, UI, and debug surface
 
-- Config vars (via `svc_config`): `host_port`, `join_host` (manual IP),
-  `session_name`, `enabled`.
-- Host/discovery UI: minimal v1 — host starts on a config var or a menu
-  binding; LAN discovery via broadcast announce + `svc_log` debug output.
-- Debug: LogService for session/snapshot stats; a `--net-stats` style toggle
-  prints per-frame bytes + snapshot rates.
+- Config vars (M4, `net.*` via the dusk config registry): `net.enabled`,
+  `net.role` ("host"/"client"), `net.hostPort` (session port; 44771 is
+  reserved for the announce), `net.joinHost` (manual IP fallback),
+  `net.sessionName` (host: advertised name; client: player name).
+- UI (M4): a Settings → **Network** tab edits all five vars and lists
+  LAN-discovered sessions (join by copying the IP into `net.joinHost`).
+- Discovery: broadcast announce + listener (M4, `discovery.cpp`); new
+  sessions are also logged (`coop: discovered session ...`).
+- Debug: coop/net logs via the dusk logging system; `net.enabled` off =
+  byte-for-byte vanilla single-player.
 
 ## 11. Open integration points (to resolve with investigations)
 
