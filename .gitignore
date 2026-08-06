@@ -54,3 +54,5 @@ pipeline_cache.bin
 
 extract
 net-*.log
+*.rvz
+.pi/
