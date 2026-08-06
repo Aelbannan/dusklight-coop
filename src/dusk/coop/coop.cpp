@@ -1179,6 +1179,18 @@ void onGameFrame() {
             g_startFailed = false;
         }
         g_session.Update();
+        // Capstone MAJOR 1 (glue half — the review's "alternatively"): a
+        // session that ended from the host's side (SessionEnd / connection
+        // loss) reaches Ended with the transport STILL running. Stop() now
+        // always tears the transport down; call it the frame we observe Ended
+        // so the socket thread is released promptly. g_sessionStarted stays
+        // set, so the session is NOT auto-restarted here — the user re-arms a
+        // new session via net.enabled / the Network tab (or a net.* var
+        // change, which resets the failed-start state, MINOR F).
+        if (g_session.state() == net::SessionState::Ended && g_session.transportRunning()) {
+            g_session.Stop();
+            CoopLog.info("coop: session ended remotely; transport torn down (a new session can start)");
+        }
     }
     PumpSessionAndSpawns();
     // M4 (D6 revised — M4.5): the host fills worldStage_ from the real Link

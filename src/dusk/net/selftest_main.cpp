@@ -24,6 +24,11 @@
  *   - host/client session lifecycle: JoinRequest -> JoinAccept + WorldInit,
  *     JoinReject (version mismatch, session full), PlayerLeave relay, and
  *     host SessionEnd;
+ *   - M4.6 (capstone): session restart after a remote-side end — a client
+ *     whose session Ended from the host's side (graceful SessionEnd, then a
+ *     hard connection loss via peer timeout -> HandleDisconnect) gets its
+ *     transport torn down by Stop() and starts a second/third session in the
+ *     same process without an app restart (review-full-deepseek MAJOR 1);
  *   - M2 relay policy: CombatIntent/EnemySnapshot/CombatResult/EnemyEvent do
  *     NOT ride the PlayerState star-relay — a client's CombatIntent is
  *     consumed by the sim owner and never echoed to other clients; the
@@ -2385,6 +2390,174 @@ void RunM4EntityStabilityCheck() {
 }
 
 // ---------------------------------------------------------------------------
+// M4.6 — capstone MAJOR 1: session restart after a remote-side end
+// ---------------------------------------------------------------------------
+
+/// Capstone MAJOR 1 (review-full-deepseek-v4-flash-0731.md MAJOR 1): a client
+/// whose session ended from the host's side (SessionEnd or connection loss)
+/// left its ENet transport running forever — Session::Stop() early-returned
+/// for Ended, so the next StartClient/StartHost hit "already-running
+/// transport" until an app restart. The fix: Stop() always stops the
+/// transport when it is running, independent of state_.
+///
+/// This test: handshake -> the host ends the session (graceful SessionEnd,
+/// then a hard connection-loss via peer timeout) -> the client session is
+/// Ended with its transport STILL running -> Stop() joins the transport -> a
+/// second session on the SAME Session object in the SAME process starts and
+/// joins cleanly.
+void RunM46SessionRestartCheck() {
+    std::printf("m4.6: session restart after a remote-side end (capstone MAJOR 1)\n");
+    Demo demo;
+
+    // -- leg A: graceful host leave (SessionEnd) ---------------------------
+    {
+        Session hostA;
+        SessionConfig hcfg;
+        hcfg.port = 0;
+        hcfg.name = "M46 Host A";
+        hcfg.maxPlayers = 2;
+        Check(hostA.StartHost(hcfg), "host A starts (Listening)");
+        demo.live.push_back(&hostA);
+        const u16 portA = hostA.boundPort();
+
+        Session c;
+        SessionConfig ccfg;
+        ccfg.joinHost = "127.0.0.1";
+        ccfg.port = portA;
+        ccfg.name = "M46 Client";
+        ccfg.version = kProtocolVersion;
+        Check(c.StartClient(ccfg), "client starts (Connecting)");
+        demo.live.push_back(&c);
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+            "client joined host A");
+        Check(c.transportRunning(), "client transport running while joined");
+
+        // The host ends the session from ITS side: the client goes Ended with
+        // NO transport teardown (the pre-fix dead-end — the host's SessionEnd
+        // arrives via OnSessionEnd; a hard kill arrives via HandleDisconnect;
+        // both leave state_ = Ended with the transport running).
+        hostA.Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostA),
+            demo.live.end());
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Ended; }, 10000),
+            "client session Ended (host-side end)");
+        Check(c.transportRunning(),
+            "client transport STILL running after the remote-side end (pre-teardown)");
+
+        // Stop() must tear the transport down even though state_ == Ended.
+        c.Stop();
+        Check(!c.transportRunning(), "Stop() stopped the transport after a remote-side end");
+        Check(c.state() == SessionState::Ended, "session state stays Ended after Stop");
+
+        // A second session on the same Session object in the same process.
+        Session hostB;
+        SessionConfig h2;
+        h2.port = 0;
+        h2.name = "M46 Host B";
+        h2.maxPlayers = 2;
+        Check(hostB.StartHost(h2), "host B starts (Listening)");
+        demo.live.push_back(&hostB);
+        const u16 portB = hostB.boundPort();
+
+        ccfg.port = portB;  // point the client at host B, not the dead host A
+        Check(c.StartClient(ccfg),
+            "client restarts against host B (second session, same process)");
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+            "client reached Joined in the second session");
+        Check(c.selfId() == 1, "client re-assigned a PlayerId in the second session");
+        Check(c.transportRunning(), "second-session transport running");
+
+        c.Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &c), demo.live.end());
+        hostB.Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostB),
+            demo.live.end());
+    }
+
+    // -- leg B: hard connection loss (HandleDisconnect via peer timeout) ---
+    {
+        // A raw transport acts as the "host": it completes the ENet
+        // handshake and answers the JoinRequest with a VALID JoinAccept, so
+        // the client session reaches Joined; then its transport dies WITHOUT
+        // a SessionEnd (as in a crash). The client detects the dead peer via
+        // the ENet peer timeout (~5 s) and HandleDisconnect flips it to Ended
+        // with endReason ConnectionLost.
+        Transport fakeHost;
+        Check(fakeHost.StartHost(0), "fake host transport up (crash victim)");
+        const u16 port = fakeHost.BoundPort();
+        InboundPacket pkt;
+
+        Session c;
+        SessionConfig ccfg;
+        ccfg.joinHost = "127.0.0.1";
+        ccfg.port = port;
+        ccfg.name = "M46 Crash Victim";
+        ccfg.version = kProtocolVersion;
+        Check(c.StartClient(ccfg), "crash-victim client starts (Connecting)");
+        demo.live.push_back(&c);
+        Check(WaitPoll(fakeHost,
+                   [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+                   10000, pkt),
+            "fake host sees the client connect");
+        c.Update();  // client processes Connected and sends JoinRequest
+
+        // Fake host replies with a valid JoinAccept (id 1 backed by roster).
+        Message accept = MakeMessage(MsgType::JoinAccept);
+        accept.payload.joinAccept.assignedPlayerId = 1;
+        for (auto& e : accept.payload.joinAccept.roster) {
+            e = {};
+        }
+        accept.payload.joinAccept.roster[0].present = 1;
+        accept.payload.joinAccept.roster[0].playerId = 0;
+        std::strncpy(accept.payload.joinAccept.roster[0].name, "Crash Host",
+            sizeof(accept.payload.joinAccept.roster[0].name) - 1);
+        accept.payload.joinAccept.roster[1].present = 1;
+        accept.payload.joinAccept.roster[1].playerId = 1;
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(accept, w), "fake JoinAccept serializes");
+        Check(fakeHost.Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
+            "fake host sends the valid JoinAccept");
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+            "crash-victim client reached Joined (JoinAccept accepted)");
+
+        // The host transport dies with no SessionEnd; the client's ENet peer
+        // times out and HandleDisconnect fires -> Ended (ConnectionLost).
+        fakeHost.Stop();
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Ended; }, 15000),
+            "crash-victim client Ended via connection loss (peer timeout)");
+        Check(c.endReason() == SessionEndReason::ConnectionLost,
+            "end reason is ConnectionLost (HandleDisconnect path)");
+        Check(c.transportRunning(),
+            "crash-victim transport STILL running after the connection loss (pre-teardown)");
+
+        // Stop() tears it down; a third session in the same process works.
+        c.Stop();
+        Check(!c.transportRunning(),
+            "Stop() stopped the crash-victim transport after ConnectionLost");
+
+        Session hostC;
+        SessionConfig h3;
+        h3.port = 0;
+        h3.name = "M46 Host C";
+        h3.maxPlayers = 2;
+        Check(hostC.StartHost(h3), "host C starts (Listening)");
+        demo.live.push_back(&hostC);
+        const u16 portC = hostC.boundPort();
+        ccfg.port = portC;  // point the crash victim at host C
+        Check(c.StartClient(ccfg),
+            "crash-victim client restarts (third session, same process)");
+        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+            "crash-victim client joined host C after a connection-loss end");
+        c.Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &c), demo.live.end());
+        hostC.Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostC),
+            demo.live.end());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M4 — LAN discovery (HostAnnounce)
 // ---------------------------------------------------------------------------
 
@@ -2458,6 +2631,7 @@ int main() {
     RunM35TimeWeatherFixCheck();
     RunM4OwnershipTableCheck();
     RunM4RoomRoutingCheck();
+    RunM46SessionRestartCheck();
     RunM4WorldStageCheck();
     RunM4EntityStabilityCheck();
     RunM4DiscoveryCheck();

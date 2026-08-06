@@ -245,6 +245,34 @@ void RoomOwnershipTable::OwnedRooms(std::vector<RoomKey>& out) const {
     }
 }
 
+void RoomOwnershipTable::SweepStaleHostEntries() {
+    // Capstone MINOR 5 (review-full-glm-5.2.md MINOR 5): drop entries the
+    // host cannot legitimately own. On the host, a persistent host-owned
+    // entry the host is NOT in is bogus by construction — the host-default
+    // rule requires the host's presence (RecomputeOwner sets owner=0 only
+    // when the host is in the order), and when the host leaves a room the
+    // ownership transfers to the next player or the room becomes ownerless
+    // (orderLen==0 entries are erased there too). A stale (staleStage,
+    // newRoom) entry created by a stage-transition race would otherwise
+    // linger in rooms_ until the session ends.
+    for (auto it = rooms_.begin(); it != rooms_.end();) {
+        const RoomState& rs = *it;
+        bool hostInOrder = false;
+        for (u8 i = 0; i < rs.orderLen; ++i) {
+            if (rs.order[i] == 0) {
+                hostInOrder = true;
+                break;
+            }
+        }
+        const bool stale = (rs.orderLen == 0) || (rs.owner == 0 && !hostInOrder);
+        if (stale) {
+            it = rooms_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void RoomOwnershipTable::SetOwner(const char* stage, s8 room, u8 owner) {
     if (room < 0) {
         return;
@@ -351,24 +379,36 @@ bool Session::StartClient(const SessionConfig& config) {
 }
 
 void Session::Stop() {
-    // Idempotent by guard (GLM MINOR-6): a never-started or already-stopped
-    // session has nothing to tear down.
+    // Capstone MAJOR 1 (review-full-deepseek-v4-flash-0731.md MAJOR 1): Stop()
+    // must tear down the transport whenever it is running, INDEPENDENT of
+    // state_. A session that ended from the host's side (HandleDisconnect /
+    // OnSessionEnd set Ended with NO transport_.Stop()) previously dead-ended
+    // every later StartClient/StartHost in the same process: Stop() returned
+    // early for Ended, the transport kept running (socket thread + ENet host),
+    // and the next start hit "start client called on an already-running
+    // transport" forever until an app restart.
+    //
+    // The leave/end messages are still enqueued BEFORE the teardown:
+    // Transport::Stop() joins the socket thread after a final outbox drain,
+    // so the goodbye messages go out.
+    if (transport_.IsRunning()) {
+        if (role_ == SessionRole::Host && state_ == SessionState::Listening) {
+            PayloadUnion payload = {};
+            payload.sessionEnd.reason = static_cast<u8>(SessionEndReason::HostLeft);
+            SendToAll(MsgType::SessionEnd, payload);
+            NetLog.info("net: host stopping, sent SessionEnd to {} player(s)",
+                static_cast<u32>(PresentCount()));
+        } else if (role_ == SessionRole::Client && state_ == SessionState::Joined) {
+            PayloadUnion payload = {};
+            payload.playerLeave.playerId = selfId_;
+            SendToPeer(0, MsgType::PlayerLeave, payload);
+            NetLog.info("net: client stopping, sent PlayerLeave for player {}", selfId_);
+        }
+        transport_.Stop();
+    }
     if (state_ == SessionState::Idle || state_ == SessionState::Ended) {
-        return;
+        return;  // never started, or already ended — transport (if any) is down now
     }
-    if (role_ == SessionRole::Host && state_ == SessionState::Listening) {
-        PayloadUnion payload = {};
-        payload.sessionEnd.reason = static_cast<u8>(SessionEndReason::HostLeft);
-        SendToAll(MsgType::SessionEnd, payload);
-        NetLog.info("net: host stopping, sent SessionEnd to {} player(s)",
-            static_cast<u32>(PresentCount()));
-    } else if (role_ == SessionRole::Client && state_ == SessionState::Joined) {
-        PayloadUnion payload = {};
-        payload.playerLeave.playerId = selfId_;
-        SendToPeer(0, MsgType::PlayerLeave, payload);
-        NetLog.info("net: client stopping, sent PlayerLeave for player {}", selfId_);
-    }
-    transport_.Stop();
     state_ = SessionState::Ended;
     NetLog.info("net: session stopped");
 }
@@ -455,6 +495,10 @@ void Session::HandleDisconnect(u8 peerIndex) {
     }
     // Client: the host went away (no SessionEnd arrived — ENet detected the
     // dead peer). Distinct end reason for the host-leave UX (M4 D8).
+    // Capstone MAJOR 1: no transport_.Stop() here on purpose — the coop glue
+    // calls Stop() the frame it observes Ended, and Stop() now ALWAYS stops
+    // the transport when running, so the client can start a new session in
+    // the same process after a host-side end.
     NetLog.warn("net: connection to host lost");
     endReason_ = SessionEndReason::ConnectionLost;
     state_ = SessionState::Ended;
@@ -754,10 +798,22 @@ void Session::OnSessionEnd(const Message& msg) {
     NetLog.info("net: host ended the session (reason {})", msg.payload.sessionEnd.reason);
     endReason_ = static_cast<SessionEndReason>(msg.payload.sessionEnd.reason);
     state_ = SessionState::Ended;
+    // Capstone MAJOR 1: the host-side end must remain tearable by a later
+    // Stop() call (which now always stops the transport when running) so a
+    // new session can start in the same process without an app restart.
 }
 
 void Session::OnWorldInit(const Message& msg) {
     const auto& init = msg.payload.worldInit;
+    // Capstone MINOR 8 (review-full-glm-5.2.md MINOR 8): on a client,
+    // worldStage_ is ONLY a join-time reference ("where is the host" under
+    // the stay-put join policy) — no client consumer reads worldStage() (the
+    // puppet gate keys on the remote's REAL stage from PlayerState; the time
+    // module reads worldTime/worldWeather). Every later roster-refresh
+    // WorldInit overwrites it with the host's CURRENT stage; harmless today,
+    // but a future "where is the host" UI marker would snap. The write stays
+    // unconditional by design; scope it to the joining peer if M5 adds a
+    // consumer.
     worldStage_ = init.stage;
     worldTime_ = init.time;
     worldWeather_ = init.weather;
@@ -940,6 +996,13 @@ void Session::setLocalRoom(const char* stage, s8 roomNo) {
     // ownership from an existing owner UNLESS the host is entering — the
     // host-default rule wins by design.
     UpdatePlayerRoom(0, stage, roomNo, /*isHost=*/true);
+    // Capstone MINOR 5 (review-full-glm-5.2.md MINOR 5): a stage-transition
+    // race (LocalStageName() vs the real Link's room disagreeing for a frame)
+    // can leave a bogus host-owned (staleStage, newRoom) entry that is never
+    // OnPlayerLeave'd (leave only fires for the player's CURRENT room). Sweep
+    // host-owned entries the host is not actually in on every host room
+    // publish — see SweepStaleHostEntries.
+    ownership_.SweepStaleHostEntries();
 }
 
 // ---------------------------------------------------------------------------
