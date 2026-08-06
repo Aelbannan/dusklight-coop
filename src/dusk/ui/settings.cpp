@@ -1607,8 +1607,10 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             }),
             rightPane,
             [](Pane& pane) {
-                pane.add_text("Host listen port (default 44770). Port 44771 is reserved for the "
-                              "LAN discovery announce.");
+                pane.add_text("Host: the port this instance binds (default 44770; 44771 is "
+                              "reserved for the LAN discovery announce). Client: the HOST's port "
+                              "to connect to (net.joinHost:net.hostPort) — the client never "
+                              "binds, so host and client can share the same value.");
             });
         leftPane.register_control(
             leftPane.add_child<StringButton>(StringButton::Props{

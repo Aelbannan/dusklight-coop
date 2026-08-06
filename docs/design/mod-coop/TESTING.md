@@ -18,7 +18,7 @@ flag at the top; check it before testing.
 |-----|---------|---------|
 | `net.enabled` | `false` | master switch; `false` = byte-for-byte vanilla single-player |
 | `net.role` | `"host"` | `"host"` or `"client"` |
-| `net.hostPort` | `44770` | the port this instance binds (44771 is reserved for the LAN discovery announce) |
+| `net.hostPort` | `44770` | host: the port this instance binds (and advertises in the discovery announce). **client: the HOST's port to connect to** — `net.joinHost:net.hostPort`. The client transport never binds, so the same value on both machines is correct (and required on loopback). 44771 is reserved for the discovery listener |
 | `net.joinHost` | `127.0.0.1` | what a client connects to (LAN IP for remote) |
 | `net.sessionName` | `"Dusklight co-op"` | display name (host: advertised; client: player name) |
 
@@ -73,12 +73,14 @@ build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
 
 ```sh
 build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
-  --cvar net.enabled=true --cvar net.role=client --cvar net.hostPort=44772 \
+  --cvar net.enabled=true --cvar net.role=client --cvar net.hostPort=44770 \
   --cvar net.joinHost=127.0.0.1
 ```
 
-(Use a session port other than 44771 — that port is now the discovery
-listener's, and the client binds it to hear HostAnnounces.)
+Note `net.hostPort` on the client is the **host's** port (the connect target:
+`net.joinHost:net.hostPort`); the client transport never binds, so host and
+client can share 44770 on one machine. Port 44771 is the discovery
+listener's — a second client on the same machine is fine (SO_REUSEADDR).
 
 Coop/session logs print to the terminal. Watch for, in order:
 

@@ -1030,6 +1030,16 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         if (snap.enemyId == kInvalidEnemyId) {
             return;
         }
+        // M4 same-room scoping (defense in depth): a stage-placed id decodes
+        // to its room ((roomNo << 8) | setID); drop snapshots for rooms we
+        // are not in — the host already scopes the relay to the sender's
+        // room, this catches any leaked/forged copy. Dynamic ids (>= the
+        // dynamic base) don't decode — accepted (M5 dynamic waves).
+        if (snap.enemyId < kDynamicIdBase &&
+            static_cast<s8>(snap.enemyId >> 8) != dusk::coop::localRoomNo())
+        {
+            return;
+        }
         g_received[snap.enemyId] = snap;
         // Snapshot arrival also (re)establishes the client-side puppet for
         // stage-placed enemies: scan once so the freeze/apply picks it up.
