@@ -172,6 +172,13 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 ### M4 — Session polish + room ownership
 
+> **Status: IMPLEMENTED (M4 complete).** Every block below landed on
+> `net-coop`; the selftest (306 checks incl. the M4 suites: room-ownership
+> routing to a non-host owner, same-room snapshot scoping, ownership
+> transfer, join-warp gate + worldStage carry, entity-id stability, LAN
+> discovery) is green on a forced rebuild, and live host+client loopback
+> verified join/poses/discovery/host-leave with the save mtime untouched.
+
 **Room ownership (from `docs/design/network.md` §6 — moved up from M5 by user decision):**
 
 - Owner = first player in the room; the world host defaults to owning its own room. Ownership is
