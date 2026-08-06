@@ -10,6 +10,7 @@
 
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/config.hpp"
 #include "dusk/net/config.h"
 #include "dusk/net/session.h"
 #include "f_op/f_op_actor_mng.h"
@@ -26,6 +27,7 @@
 #include <aurora/lib/logging.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -48,6 +50,10 @@ bool g_sessionStarted = false;
 bool g_wasLive = false;
 bool g_startFailed = false;
 u32 g_startFailFrame = 0;
+// Capstone MINOR F (review-full-deepseek-v4-flash-0731.md MINOR F): one-shot
+// notification latch — a join rejection / start failure toasts once per
+// occurrence instead of spamming the 3 s retry loop.
+bool g_rejectedNotified = false;
 
 // ---------------------------------------------------------------------------
 // Real Link tracking (the local player's own daAlink_c per stage).
@@ -97,6 +103,12 @@ constexpr u8 kCreateDeadlineStrikes = 3;
 struct CreateLimiter {
     u8 deadlineHits = 0;
     bool dropped = false;  // 0xFFFFFFFF suppression window (persists across entry resets)
+    // Capstone MINOR G: the real-Link anchor (room + position) where the
+    // create stuck, so the strike budget can be reset when the host moves
+    // away materially (a cliff edge is position-specific).
+    bool hasAnchor = false;
+    s8 anchorRoom = -1;
+    f32 anchor[3] = {0.0f, 0.0f, 0.0f};
 };
 std::array<CreateLimiter, kMaxLocalPlayers> g_createLimiter{};
 
@@ -174,6 +186,10 @@ bool g_listenerActive = false;
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+// Forward declaration: defined in the M4 helpers section below (used by
+// EnsureSession's capstone MINOR F start-failure toast).
+void NotifyCoop(const char* title, const char* content);
 
 bool SessionLive() {
     if (!g_sessionStarted) {
@@ -272,7 +288,18 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         // instead of depending on an unreliable packet — otherwise a remote
         // who left the room keeps rendering (and animating) on our screen.
         if (static_cast<net::PlayerEventId>(ev.eventId) == net::PlayerEventId::SceneChange) {
-            slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
+            // Capstone MINOR A (review-full-deepseek-v4-flash-0731.md MINOR A):
+            // adopt the event's room only for SAME-STAGE moves (scene == 1),
+            // exactly like the host's room-table sniff (session.cpp). A
+            // cross-stage mover sends scene=0; adopting (oldStage, newRoom)
+            // could coincide with our local room and flash the mover's puppet
+            // visible — the hidden gate `sameStage && roomNo == local` would
+            // hold — until the first new-stage PlayerState lands. Cross-stage
+            // moves are established by PlayerState only, which writes the
+            // room byte in the same message.
+            if (ev.scene == 1) {
+                slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
+            }
         }
     } else if (type == net::MsgType::EnemySnapshot || type == net::MsgType::EnemyEvent) {
         // M2: enemy authority traffic (freeze/apply + drops/room-clear).
@@ -282,7 +309,11 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         dusk::coop::combat::onGameMessage(type, payload);
     } else if (type == net::MsgType::CombatResult) {
         // M2: result ack — the authoritative HP always rides the next
-        // EnemySnapshot; nothing to apply client-side in v1.
+        // EnemySnapshot; nothing to apply client-side in v1. Capstone MINOR 2
+        // (review-full-glm-5.2.md MINOR 2): this receive side is INTENTIONALLY
+        // unconsumed in v1 — no consumer exists anywhere (the ack is
+        // star-relayed dead traffic today). M5 decides wire-vs-drop; do NOT
+        // change behavior here.
     } else if (type == net::MsgType::TimeSync || type == net::MsgType::TimeEvent ||
                type == net::MsgType::WeatherChange)
     {
@@ -369,6 +400,13 @@ void SendEventsOnChange(const daAlink_c* link) {
 /// in (or unknown to be outside) our scene — a client only renders peers in
 /// its own stage+room, so same-scene peers are the only ones that can see us.
 ///
+/// Capstone MINOR L (review-full-deepseek-v4-flash-0731.md MINOR L): this is
+/// THE sender gate — ONE implementation shared by the player sender
+/// (sendPlayerState) and the enemy snapshot sender (coop_enemy.cpp
+/// RemoteInRoom -> dusk::coop::remoteInRoom). The two previously duplicated
+/// the same rule with slightly different structure; a single implementation
+/// cannot drift as M5 adds more senders (waves, horses).
+///
 /// MAJOR M2 (mutual room-change deadlock): two players entering the same new
 /// room together hold each other's stale room, so `state.roomNo == myRoom`
 /// is false on both sides and both gates would stay shut forever (both
@@ -377,9 +415,7 @@ void SendEventsOnChange(const daAlink_c* link) {
 /// we send; one PlayerState with the new room re-opens their gate. The same
 /// holds for a cross-stage move (spring / house interior), where the room
 /// numbers are not unique across stages.
-bool RemoteInOurRoom(const daAlink_c* link) {
-    const s8 myRoom = fopAcM_GetRoomNo(link);
-    const char* myStage = LocalStageName();
+bool RemoteInOurRoom(const char* stage, s8 roomNo) {
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         if (i == SelfIdChecked()) {
             continue;
@@ -388,13 +424,17 @@ bool RemoteInOurRoom(const daAlink_c* link) {
             continue;
         }
         const ReceiveSlot& slot = g_receive[i];
-        const bool sameStage =
-            slot.hasState && std::strcmp(slot.state.stage, myStage) == 0;
-        if (!slot.hasState || (sameStage && slot.state.roomNo == myRoom)) {
+        // Unknown room (never received state) opens the gate — the Anchor
+        // rule: don't hold state hostage to a missing packet.
+        if (!slot.hasState) {
             return true;
         }
-        if (slot.myRoomAtLastRecv != myRoom ||
-            std::strcmp(slot.myStageAtLastRecv, myStage) != 0)
+        const bool sameStage = std::strcmp(slot.state.stage, stage) == 0;
+        if (sameStage && slot.state.roomNo == roomNo) {
+            return true;
+        }
+        if (slot.myRoomAtLastRecv != roomNo ||
+            std::strcmp(slot.myStageAtLastRecv, stage) != 0)
         {
             return true;  // our stage/room changed since their last send
         }
@@ -695,6 +735,19 @@ void PumpSpawns() {
                     i, g_frameCount - e.createStartFrame, e.pid);
                 fopAcM_delete(e.pid);
                 CreateLimiter& lim = g_createLimiter[i];
+                // Capstone MINOR G (review-full-deepseek MINOR G): remember
+                // the anchor where this create stuck (real Link pos + room) so
+                // the strike budget can be reset when the host moves away
+                // materially — the abort cause is position-specific.
+                lim.anchorRoom = LocalRoomNo();
+                if (g_realLink != nullptr) {
+                    lim.anchor[0] = g_realLink->current.pos.x;
+                    lim.anchor[1] = g_realLink->current.pos.y;
+                    lim.anchor[2] = g_realLink->current.pos.z;
+                    lim.hasAnchor = true;
+                } else {
+                    lim.hasAnchor = false;
+                }
                 if (++lim.deadlineHits >= kCreateDeadlineStrikes) {
                     lim.dropped = true;
                     CoopLog.warn(
@@ -733,7 +786,30 @@ void PumpSpawns() {
             continue;
         }
         if (g_createLimiter[i].dropped) {
-            continue;  // M3: spawn was dropped after repeated deadline aborts
+            // Capstone MINOR G (review-full-deepseek-v4-flash-0731.md MINOR G):
+            // the M3 strike budget is position-specific, not permanent — after
+            // 3 create-deadline aborts the spawn was dropped forever until
+            // leave/rejoin, so a host standing at a cliff edge for 30+ s
+            // permanently hid the remote's puppet. Reset the budget when the
+            // host's position/room changed materially since the stuck anchor:
+            // the next spawn attempt from a clear spot can then succeed.
+            CreateLimiter& lim = g_createLimiter[i];
+            if (lim.hasAnchor) {
+                const bool moved = lim.anchorRoom != LocalRoomNo() || g_realLink == nullptr ||
+                                   std::fabs(g_realLink->current.pos.x - lim.anchor[0]) > 300.0f ||
+                                   std::fabs(g_realLink->current.pos.y - lim.anchor[1]) > 300.0f ||
+                                   std::fabs(g_realLink->current.pos.z - lim.anchor[2]) > 300.0f;
+                if (moved) {
+                    lim = CreateLimiter{};
+                    CoopLog.info(
+                        "coop: puppet {} spawn limiter reset (host moved away from the stuck anchor)",
+                        i);
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
         }
         // Wait for the real Link's create to complete (its create and a
         // puppet create must never overlap on the shared bgWaitFlg).
@@ -817,7 +893,42 @@ void PumpSessionAndSpawns() {
     PumpSpawns();
 }
 
+/// Capstone MINOR F: reset the failed-start state (and re-arm a restart after
+/// a terminal client-side end) whenever a relevant net.* var changes. The
+/// user edits these from the Settings -> Network tab / cvars to fix a
+/// port-busy or join failure; without this the failed start retried the SAME
+/// broken values forever.
+void RegisterNetVarCallbacks() {
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+    registered = true;
+    const auto onNetVarChange = [](dusk::config::ConfigVarBase&, const void*) {
+        g_startFailed = false;
+        // A terminal client-side end (Rejected / Ended) must be re-armable
+        // with the new values — tear the old session down so the next
+        // EnsureSession starts fresh. An ACTIVE session is left untouched
+        // (a mid-game name/port edit does not kill the current game).
+        if (g_sessionStarted &&
+            (g_session.state() == net::SessionState::Rejected ||
+             g_session.state() == net::SessionState::Ended))
+        {
+            g_session.Stop();
+            g_sessionStarted = false;
+            g_rejectedNotified = false;
+            CoopLog.info("coop: net.* vars changed; re-arming session start");
+        }
+    };
+    dusk::config::subscribe(net::config::enabled.getName(), onNetVarChange);
+    dusk::config::subscribe(net::config::hostPort.getName(), onNetVarChange);
+    dusk::config::subscribe(net::config::joinHost.getName(), onNetVarChange);
+    dusk::config::subscribe(net::config::sessionName.getName(), onNetVarChange);
+    dusk::config::subscribe(net::config::role.getName(), onNetVarChange);
+}
+
 void EnsureSession() {
+    RegisterNetVarCallbacks();
     const bool wantEnabled = net::config::enabled.getValue();
     if (!wantEnabled) {
         if (g_sessionStarted) {
@@ -849,10 +960,25 @@ void EnsureSession() {
         ok = g_session.StartHost(cfg);
     }
     if (!ok) {
+        const bool first = !g_startFailed;
         g_startFailed = true;
         g_startFailFrame = g_frameCount;
-        CoopLog.error("coop: failed to start {} session; retrying in 3s",
-            isClient ? "client" : "host");
+        // Capstone MINOR F: log the failure cause distinctly (port-busy vs
+        // already-running vs resolve-failed) and toast ONCE per failure — the
+        // old code logged a generic line every 3 s forever.
+        const char* reason = g_session.startFailureReason();
+        if (reason == nullptr || reason[0] == '\0') {
+            reason = "unknown cause";
+        }
+        CoopLog.error("coop: failed to start {} session ({}); retrying in 3s{}",
+            isClient ? "client" : "host", reason, first ? "" : " (retry)");
+        if (first) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%s: %s",
+                isClient ? "Could not start the client session" : "Could not host the session",
+                reason);
+            NotifyCoop("Co-op session failed to start", buf);
+        }
         return;
     }
     g_sessionStarted = true;
@@ -1065,6 +1191,13 @@ void sendPlayerState(daAlink_c* link) {
     if (link == nullptr || !SessionLive() || SelfIdChecked() >= kMaxLocalPlayers) {
         return;
     }
+    // Capstone MINOR 6 (review-full-glm-5.2.md MINOR 6): defense-in-depth —
+    // the puppet execute path returns before this call today, but the sender
+    // must not rely on that ordering (a puppet's pose is never "ours" to
+    // send; the puppet apply path owns it).
+    if (isPuppet(link)) {
+        return;
+    }
     // MAJOR M2: the room-change event is sent regardless of the sender gate.
     // Two players entering the same new room together both hold the other's
     // stale room; the gate (which now also opens on "my room changed since
@@ -1097,7 +1230,7 @@ void sendPlayerState(daAlink_c* link) {
     }
     if (g_postChangeSendWindow > 0) {
         --g_postChangeSendWindow;  // keep sending through the post-move window
-    } else if (!RemoteInOurRoom(link)) {
+    } else if (!RemoteInOurRoom(myStage, roomNow)) {
         return;
     }
 
@@ -1168,6 +1301,19 @@ bool puppetDrawHidden(const daAlink_c* link) {
 void onGameFrame() {
     ++g_frameCount;
     EnsureSession();
+    // Capstone MINOR F: the client's join rejection gets a ONE-SHOT toast
+    // (version mismatch / session full / invalid slot / join timeout) —
+    // previously only a log line, leaving the client stuck until the user
+    // toggled net.enabled (which now also resets via any net.* var change).
+    if (g_sessionStarted && g_session.state() == net::SessionState::Rejected) {
+        if (!g_rejectedNotified) {
+            g_rejectedNotified = true;
+            CoopLog.warn("coop: join rejected: {}", g_session.rejectReasonName());
+            NotifyCoop("Join rejected", g_session.rejectReasonName());
+        }
+    } else {
+        g_rejectedNotified = false;
+    }
     // Capture liveness BEFORE Update() drains the inbox: a SessionEnd / host
     // disconnect arriving this frame flips the state to Ended inside Update,
     // so a pre-Update capture is the only way to detect the live->dead
@@ -1304,30 +1450,11 @@ bool remoteInRoom(s8 roomNo) {
     if (!SessionLive()) {
         return false;
     }
-    const char* myStage = LocalStageName();
-    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
-        if (i == SelfIdChecked()) {
-            continue;
-        }
-        if (!g_session.roster()[i].present) {
-            continue;
-        }
-        const ReceiveSlot& slot = g_receive[i];
-        // M2 review MINOR-6: scope by the remote's ACTUAL room (its last
-        // PlayerState carries stage + roomNo), not "any present player". An
-        // unknown room (never received) opens the gate like the sender gate's
-        // stale-room rule — don't hold state hostage to a missing packet.
-        if (!slot.hasState) {
-            return true;
-        }
-        if (std::strcmp(slot.state.stage, myStage) != 0) {
-            continue;  // remote is on another stage — not in this room
-        }
-        if (slot.state.roomNo == roomNo) {
-            return true;
-        }
-    }
-    return false;
+    // Capstone MINOR L: consolidated sender gate — same implementation as the
+    // player sender's RemoteInOurRoom, keyed on our current stage + room. The
+    // enemy snapshot sender (owner side) streams to remotes actually in the
+    // room it owns; the receive side gates on the local room as well.
+    return RemoteInOurRoom(LocalStageName(), roomNo);
 }
 
 }  // namespace dusk::coop

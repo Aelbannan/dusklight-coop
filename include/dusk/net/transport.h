@@ -212,6 +212,13 @@ public:
     /// too large.
     bool Send(u8 peerIndex, u8 channel, const void* data, u16 size);
 
+    /// Capstone MINOR F: why the most recent StartHost/StartClient failed
+    /// ("" when none or when the last start succeeded). const char* to a
+    /// static string, valid for the process lifetime. Lets the session/coop
+    /// glue log start-failure causes distinctly (port-busy vs
+    /// already-running vs resolve-failed).
+    [[nodiscard]] const char* LastStartError() const { return lastStartError_; }
+
     /// Game-thread API: pop the next inbound packet (reliable inbox first,
     /// then the snapshot inbox). Drops stale packets whose peer slot was
     /// reused by a newer connection (bumps InboundGenerationDropped()).
@@ -256,6 +263,8 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<bool> running_{false};
     std::mutex lifecycleMutex_;
+    /// Capstone MINOR F: static reason string for the last failed start.
+    const char* lastStartError_ = "";
 
     // Written only by the socket thread (the game thread never touches this).
     std::array<ENetPeer*, kMaxPeers> peerSlots_{};

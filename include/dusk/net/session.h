@@ -218,6 +218,9 @@ public:
 
     [[nodiscard]] u64 sessionFrames() const { return frame_; }
     [[nodiscard]] const char* rejectReasonName() const { return rejectReasonName_; }
+    /// Capstone MINOR F: why the most recent StartHost/StartClient failed
+    /// ("" when none), for the glue's distinct failure logging.
+    [[nodiscard]] const char* startFailureReason() const { return startFailureReason_; }
 
 private:
     // -- transport event handlers (game thread) --
@@ -261,6 +264,7 @@ private:
     SessionState state_ = SessionState::Idle;
     PlayerId selfId_ = kInvalidPlayerId;
     const char* rejectReasonName_ = "";
+    const char* startFailureReason_ = "";
     SessionEndReason endReason_ = SessionEndReason::Shutdown;
     std::array<PlayerSlot, kMaxLocalPlayers> roster_{};
     std::array<PlayerId, Transport::kMaxPeers> peerToPlayer_{};

@@ -26,8 +26,10 @@ Transport::~Transport() {
 
 bool Transport::StartHost(u16 port, size_t maxPeers) {
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    lastStartError_ = "";
     if (host_ != nullptr) {
         NetLog.warn("start host called on an already-running transport");
+        lastStartError_ = "transport already running";
         return false;
     }
     if (maxPeers == 0 || maxPeers > kMaxPeers) {
@@ -41,6 +43,7 @@ bool Transport::StartHost(u16 port, size_t maxPeers) {
     ENetHost* host = enet_host_create(&address, maxPeers, /*channelLimit=*/2, 0, 0);
     if (host == nullptr) {
         NetLog.error("enet_host_create failed for port {}", port);
+        lastStartError_ = "listen failed (port busy or no sockets)";
         return false;
     }
     host_ = host;
@@ -59,20 +62,24 @@ bool Transport::StartHost(u16 port, size_t maxPeers) {
 
 bool Transport::StartClient(const std::string& host, u16 port) {
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    lastStartError_ = "";
     if (host_ != nullptr) {
         NetLog.warn("start client called on an already-running transport");
+        lastStartError_ = "transport already running";
         return false;
     }
 
     ENetHost* clientHost = enet_host_create(nullptr, /*peerCount=*/1, /*channelLimit=*/2, 0, 0);
     if (clientHost == nullptr) {
         NetLog.error("enet_host_create failed for client");
+        lastStartError_ = "socket create failed";
         return false;
     }
 
     ENetAddress address;
     if (enet_address_set_host(&address, host.c_str()) != 0) {
         NetLog.error("enet_address_set_host failed for '{}'", host);
+        lastStartError_ = "cannot resolve join host";
         enet_host_destroy(clientHost);
         return false;
     }
@@ -81,6 +88,7 @@ bool Transport::StartClient(const std::string& host, u16 port) {
     ENetPeer* peer = enet_host_connect(clientHost, &address, /*channelCount=*/2, 0);
     if (peer == nullptr) {
         NetLog.error("enet_host_connect failed for {}:{}", host, port);
+        lastStartError_ = "connect failed";
         enet_host_destroy(clientHost);
         return false;
     }

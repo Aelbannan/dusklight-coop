@@ -315,6 +315,7 @@ bool Session::StartHost(const SessionConfig& config) {
     state_ = SessionState::Idle;
     selfId_ = 0;
     rejectReasonName_ = "";
+    startFailureReason_ = "";
     endReason_ = SessionEndReason::Shutdown;
     frame_ = 0;
     connectedAtMs_ = 0;
@@ -327,7 +328,12 @@ bool Session::StartHost(const SessionConfig& config) {
     worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartHost(config_.port)) {
-        NetLog.error("net: failed to start host transport on port {}", config_.port);
+        // Capstone MINOR F: surface the distinct cause (port-busy vs
+        // already-running vs socket failure) so the glue can log it
+        // distinctly instead of a generic "failed to start".
+        NetLog.error("net: failed to start host transport on port {}: {}", config_.port,
+            transport_.LastStartError());
+        startFailureReason_ = transport_.LastStartError();
         role_ = SessionRole::None;
         return false;
     }
@@ -356,6 +362,7 @@ bool Session::StartClient(const SessionConfig& config) {
     state_ = SessionState::Idle;
     selfId_ = kInvalidPlayerId;
     rejectReasonName_ = "";
+    startFailureReason_ = "";
     endReason_ = SessionEndReason::Shutdown;
     frame_ = 0;
     connectedAtMs_ = 0;
@@ -368,7 +375,11 @@ bool Session::StartClient(const SessionConfig& config) {
     worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartClient(config_.joinHost, config_.port)) {
-        NetLog.error("net: failed to start client transport to {}:{}", config_.joinHost, config_.port);
+        // Capstone MINOR F: surface the distinct cause (resolve-failed vs
+        // connect-failed vs already-running) for the glue's distinct log.
+        NetLog.error("net: failed to start client transport to {}:{}: {}", config_.joinHost,
+            config_.port, transport_.LastStartError());
+        startFailureReason_ = transport_.LastStartError();
         role_ = SessionRole::None;
         return false;
     }
