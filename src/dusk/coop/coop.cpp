@@ -173,6 +173,7 @@ SafeStageSet g_reachedStages;
 bool g_warpPending = false;         // warp decided, waiting for a warp window
 u32 g_warpPendingFrame = 0;
 bool g_warpRefusedNotified = false; // one refusal notice per join
+bool g_saveStageSeeded = false;     // dMeter2Info_getSaveStageName seeded once per session
 
 // LAN discovery lifecycle (host announces, clients listen).
 dusk::net::discovery::Announcer g_discoveryAnnouncer;
@@ -902,10 +903,18 @@ void DriveJoinWarp() {
     const char* myStage = LocalStageName();
     if (myStage != nullptr && myStage[0] != '\0') {
         g_reachedStages.Add(myStage);
+    } else {
+        // Not in a stage yet (boot/logo/save-select). The decision is
+        // meaningless here — the gate re-runs every frame once the play scene
+        // loads and the real Link's stage is known. Refusing now would be a
+        // false negative (the save HAS reached the stage; we just haven't
+        // loaded it yet).
+        return;
     }
-    static bool sSaveStageSeeded = false;
+    static bool sSaveStageSeeded = g_saveStageSeeded;
     if (!sSaveStageSeeded) {
         sSaveStageSeeded = true;
+        g_saveStageSeeded = true;
         const char* saveStage = dMeter2Info_getSaveStageName();
         if (saveStage != nullptr && saveStage[0] != '\0') {
             g_reachedStages.Add(saveStage);
@@ -1042,22 +1051,10 @@ void DriveDiscovery() {
             g_listenerActive = false;
             dusk::net::discovery::SetActiveListener(nullptr);
             g_discoveryListener.Stop();
-        } else {
-            // One log line per newly-seen session (the listener stores a
-            // bounded, de-duplicated list).
-            const auto sessions = g_discoveryListener.Sessions();
-            for (const auto& s : sessions) {
-                if (s.lastSeenMs > g_lastDiscoveryLogMs) {
-                    CoopLog.info(
-                        "coop: discovered session '{}' at {}:{} ({} players) — join with "
-                        "net.joinHost={} and net.role=client",
-                        s.name, s.ip, s.port, static_cast<u32>(s.players), s.ip);
-                }
-            }
-            if (!sessions.empty()) {
-                g_lastDiscoveryLogMs = sessions.back().lastSeenMs;
-            }
         }
+        // New sessions are logged once each by the listener itself
+        // ("discovery: found session ...") and listed in Settings -> Network;
+        // nothing to do here beyond keeping the listener alive.
     }
 }
 
@@ -1274,6 +1271,11 @@ bool puppetDrawHidden(const daAlink_c* link) {
 void onGameFrame() {
     ++g_frameCount;
     EnsureSession();
+    // Capture liveness BEFORE Update() drains the inbox: a SessionEnd / host
+    // disconnect arriving this frame flips the state to Ended inside Update,
+    // so a pre-Update capture is the only way to detect the live->dead
+    // transition for the host-leave UX (M4 D8).
+    const bool wasLive = SessionLive();
     if (g_sessionStarted) {
         // Retry a failed start after a backoff.
         if (g_startFailed && g_frameCount - g_startFailFrame >= 180) {
@@ -1281,7 +1283,6 @@ void onGameFrame() {
         }
         g_session.Update();
     }
-    const bool wasLive = SessionLive();
     PumpSessionAndSpawns();
     // M4 (D6): the host fills worldStage_ from the real Link every frame — the
     // M1 TODO ('cfg.stage was inert with stage[0]=0') — so a mid-game joiner
@@ -1336,6 +1337,7 @@ void shutdown() {
     g_reachedStages = SafeStageSet{};
     g_warpPending = false;
     g_warpRefusedNotified = false;
+    g_saveStageSeeded = false;
     g_lastDiscoveryLogMs = 0;
     // M2: clear per-stage enemy state (registry, receive slots, room-clear).
     dusk::coop::enemy::shutdown();

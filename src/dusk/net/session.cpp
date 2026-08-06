@@ -509,10 +509,14 @@ void Session::HandleData(const InboundPacket& pkt) {
                     static_cast<PlayerEventId>(ev.eventId) == PlayerEventId::SceneChange)
                 {
                     // The reliable SceneChange is the room-change authority
-                    // (a dropped PlayerState can't lose the new room); stage
-                    // comes from the last PlayerState (playerRoom_ keeps it).
-                    UpdatePlayerRoom(ev.playerId, playerRoom_[ev.playerId].stage,
-                        static_cast<s8>(ev.data & 0xFF), /*isHost=*/false);
+                    // (a dropped PlayerState can't lose the new room). The
+                    // stage comes from the player's last-known room — skip
+                    // until the first PlayerState established it (an empty
+                    // stage here would key a bogus ("", room) entry).
+                    if (playerRoom_[ev.playerId].stage[0] != '\0') {
+                        UpdatePlayerRoom(ev.playerId, playerRoom_[ev.playerId].stage,
+                            static_cast<s8>(ev.data & 0xFF), /*isHost=*/false);
+                    }
                 }
             }
         }
@@ -883,6 +887,12 @@ void Session::SendOwnershipMap(u8 peerIndex) {
 
 void Session::UpdatePlayerRoom(u8 pid, const char* stage, s8 roomNo, bool isHost) {
     if (pid >= kMaxLocalPlayers || roomNo < 0) {
+        return;
+    }
+    // Transient pre-load states (a boot/logo scene, a not-yet-set start stage)
+    // carry an empty stage; they must not create a bogus ("", room) ownership
+    // entry — the first real PlayerState with a stage establishes the room.
+    if (stage == nullptr || stage[0] == '\0') {
         return;
     }
     RoomKey& cur = playerRoom_[pid];
