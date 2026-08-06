@@ -3,6 +3,7 @@
 #include "dusk/coop/coop.h"
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_context.h"
+#include "dusk/coop/coop_entity_logic.h"
 
 #include "d/actor/d_a_b_tn.h"
 #include "d/actor/d_a_e_ai.h"
@@ -315,7 +316,7 @@ struct EnemyEntry {
 
 std::unordered_map<u16, EnemyEntry> g_entries;
 std::unordered_map<fpc_ProcID, u16> g_pidToEnemyId;
-u16 g_dynamicIdCounter = 0x8000;  // dynamic spawns live above the stage-key space
+u16 g_dynamicIdCounter = 0;  // per-owner low counter (owner-major id, M4)
 
 // Client receive slots: latest snapshot per enemy id.
 std::unordered_map<u16, net::EnemySnapshotMsg> g_received;
@@ -342,8 +343,17 @@ bool SessionLive() {
     return dusk::coop::sessionActive();
 }
 
-bool IsHost() {
-    return dusk::coop::hostRole();
+/// M4 room ownership (network.md §6): this machine is the room owner of
+/// `roomNo` in the CURRENT stage per the session ownership table. The room
+/// owner sims that room's enemies natively (AI/HP/spawns), snapshots them,
+/// and validates combat for them; every other player in the room sees frozen
+/// puppets driven by those snapshots. v1-co-located host-role decisions all
+/// become owner decisions here.
+bool OwnsRoom(s8 roomNo) {
+    if (!SessionLive()) {
+        return false;
+    }
+    return dusk::coop::amIRoomOwner(roomNo);
 }
 
 const NetEnemyAdapter* AdapterForActor(const fopAc_ac_c* actor) {
@@ -355,15 +365,11 @@ const NetEnemyAdapter* AdapterForActor(const fopAc_ac_c* actor) {
 
 u16 StageKey(const fopAc_ac_c* actor) {
     // Stage-placed key: (roomNo, setID) — identical on every machine for the
-    // same stage. setID values in TP rooms are small (< 0x100); larger setIDs
-    // (clones/waves) fall back to the owner's dynamic counter (M5).
-    const int setID = fopAcM_GetSetId(actor);
-    const s8 roomNo = fopAcM_GetRoomNo(actor);
-    if (setID != 0xFFFF && roomNo >= 0 && setID < 0x100) {
-        return static_cast<u16>((static_cast<u16>(roomNo & 0xFF) << 8) |
-                                static_cast<u16>(setID & 0xFF));
-    }
-    return kInvalidEnemyId;
+    // same stage, and STABLE across ownership transfers (the new owner
+    // registers the same keys; clients' id-keyed maps never renumber). setID
+    // values in TP rooms are small (< 0x100); larger setIDs (clones/waves)
+    // fall back to the owner's dynamic counter (M5).
+    return StageEntityId(fopAcM_GetRoomNo(actor), fopAcM_GetSetId(actor));
 }
 
 EnemyEntry* FindEntryForActor(const fopAc_ac_c* actor) {
@@ -562,19 +568,16 @@ u8 PackFlags(fopAc_ac_c* actor) {
     return flags;
 }
 
-bool RemoteInRoom() {
+/// M4 same-room scoping (M2 review MINOR-6): the snapshot sender gate must
+/// scope by the remotes' ACTUAL room (their PlayerState carries stage +
+/// roomNo), not "any present player" — a room owner only streams to players
+/// in the room it owns, so a client in another room never receives (nor
+/// needs) this room's snapshots.
+bool RemoteInRoom(s8 roomNo) {
     if (!SessionLive()) {
         return false;
     }
-    for (u8 i = 0; i < net::kMaxLocalPlayers; ++i) {
-        if (i == dusk::coop::selfId()) {
-            continue;
-        }
-        if (dusk::coop::rosterPresent(i)) {
-            return true;  // v1 co-located: any remote is in our room
-        }
-    }
-    return false;
+    return dusk::coop::remoteInRoom(roomNo);
 }
 
 void SendSnapshot(EnemyEntry& e, const NetEnemyAdapter* adapter) {
@@ -851,14 +854,17 @@ u16 registerDynamicEnemy(fopAc_ac_c* actor) {
     if (actor == nullptr || isRegistered(actor)) {
         return kInvalidEnemyId;
     }
-    // Owner-assigned monotonic counter; the top bit keeps dynamic ids out of
-    // the stage-key space. Clients learn dynamic ids via EnemyEvent(spawn)
-    // (v1 co-located is stage-placed only, so this path is dormant).
-    if (++g_dynamicIdCounter >= 0xFFFF) {
-        g_dynamicIdCounter = 0x8000;
-    }
-    RegisterActor(actor, g_dynamicIdCounter);
-    return g_dynamicIdCounter;
+    // Owner-assigned monotonic counter, OWNER-MAJOR (coop_entity_logic.h):
+    // the top bit keeps dynamic ids out of the stage-key space, the upper
+    // nibble carries the owning PlayerId, and the low counter wraps per
+    // owner — after an ownership transfer the new owner's dynamic ids can
+    // never collide with the previous owner's (entity-id stability, M4).
+    // Clients learn dynamic ids via EnemyEvent(spawn) (v1 co-located is
+    // stage-placed only, so this path is dormant).
+    g_dynamicIdCounter = (g_dynamicIdCounter + 1) & kDynamicCounterMask;
+    const u16 enemyId = DynamicEntityId(dusk::coop::selfId(), g_dynamicIdCounter);
+    RegisterActor(actor, enemyId);
+    return enemyId;
 }
 
 void applyInjectedHit(fopAc_ac_c* actor, const net::CombatIntentMsg& intent) {
@@ -882,7 +888,12 @@ void applyInjectedHit(fopAc_ac_c* actor, const net::CombatIntentMsg& intent) {
 // ---------------------------------------------------------------------------
 
 bool puppetExecute(fopAc_ac_c* actor) {
-    if (!SessionLive() || IsHost() || actor == nullptr) {
+    if (!SessionLive() || actor == nullptr) {
+        return false;
+    }
+    // M4: the ROOM OWNER's enemies run natively (this machine sims them);
+    // only non-owner machines freeze + drive puppets.
+    if (OwnsRoom(fopAcM_GetRoomNo(actor))) {
         return false;
     }
     EnemyEntry* e = FindEntryForActor(actor);
@@ -945,18 +956,29 @@ bool puppetExecute(fopAc_ac_c* actor) {
 }
 
 bool hostNeedsContext(const fopAc_ac_c* actor) {
-    if (!SessionLive() || !IsHost() || actor == nullptr) {
+    if (!SessionLive() || actor == nullptr) {
+        return false;
+    }
+    // M4: the ROOM OWNER's enemies chase the nearest real player (D3 context
+    // swap); non-owner machines never push (their enemies are frozen).
+    if (!OwnsRoom(fopAcM_GetRoomNo(actor))) {
         return false;
     }
     return isRegistered(actor) && AdapterForActor(actor) != nullptr;
 }
 
 void hostOnExecuted(fopAc_ac_c* actor) {
-    if (!SessionLive() || !IsHost() || actor == nullptr) {
+    if (!SessionLive() || actor == nullptr) {
         return;
     }
     EnemyEntry* e = FindEntryForActor(actor);
     if (e == nullptr) {
+        return;
+    }
+    // M4: only the room owner snapshots/death-polls the enemy. (The owner is
+    // in the room it owns, so e->roomNo == the local room on the owner; the
+    // check is belt-and-braces.)
+    if (!OwnsRoom(e->roomNo)) {
         return;
     }
     const NetEnemyAdapter* adapter = AdapterForActor(actor);
@@ -973,7 +995,8 @@ void hostOnExecuted(fopAc_ac_c* actor) {
     if (e->roomNo != dusk::coop::localRoomNo()) {
         return;
     }
-    if (RemoteInRoom()) {
+    // M4 same-room scoping: only stream to remotes actually in this room.
+    if (RemoteInRoom(e->roomNo)) {
         SendSnapshot(*e, adapter);
     }
     // Post-execute CombatResult for an injected hit (accurate HP now that the
@@ -1049,7 +1072,12 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
 // ---------------------------------------------------------------------------
 
 bool clientRoomClearGated(s8 roomNo) {
-    if (!SessionLive() || IsHost() || roomNo < 0) {
+    if (!SessionLive() || roomNo < 0) {
+        return false;
+    }
+    // M4: the ROOM OWNER's ALLDIE scan is authoritative (its enemies died
+    // natively); only non-owner machines gate on the owner's roomClear bit.
+    if (OwnsRoom(roomNo)) {
         return false;
     }
     // Gate only rooms that had synced enemies: their death mirror must be
@@ -1063,10 +1091,15 @@ bool clientRoomClearGated(s8 roomNo) {
 }
 
 void hostRoomCleared(s8 roomNo) {
-    if (!SessionLive() || !IsHost()) {
+    if (!SessionLive()) {
         return;
     }
     if (roomNo < 0) {
+        return;
+    }
+    // M4: the room owner's vanilla scan coming up empty is the authoritative
+    // room-clear (the bit keeps clients' ALLDIE scans honest).
+    if (!OwnsRoom(roomNo)) {
         return;
     }
     if (g_hostRoomClearSent && g_hostRoomClearRoom == roomNo) {
@@ -1107,22 +1140,23 @@ void onGameFrame() {
         g_lastRoom = roomNow;
     }
 
-    if (IsHost()) {
-        // Registration scan (stage-placed whitelisted enemies in the current
-        // room). Every 15 frames is ample; new enemies appear on room entry.
+    if (OwnsRoom(roomNow)) {
+        // ROOM OWNER: registration scan (stage-placed whitelisted enemies in
+        // the current room), native death poll, and combat-intent injection
+        // before the actor phase (the enemy's execute then polls the injected
+        // Tg hit flag and runs its authentic damage reaction). The snapshot
+        // sender runs post-execute in hostOnExecuted, owner-gated.
         if (g_frameCount % 15 == 0) {
             ScanAndRegister();
         }
         PollHostDeaths();
-        // Combat intents queued by the receive path are injected BEFORE the
-        // actor phase runs this frame (the enemy's execute then polls the
-        // injected Tg hit flag and runs its authentic damage reaction).
         combat::flushHostIntents();
     } else {
+        // NON-OWNER: register local instances as freeze targets; delete
+        // puppets whose death beat finished.
         if (g_frameCount % 15 == 0) {
             ScanAndRegister();
         }
-        // Client: delete puppets whose death beat finished.
         for (auto it = g_entries.begin(); it != g_entries.end();) {
             EnemyEntry& e = it->second;
             if (e.state == EntryState::Dying && g_frameCount - e.dyingFrame >= 18) {

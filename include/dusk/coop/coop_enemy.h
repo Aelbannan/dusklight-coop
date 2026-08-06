@@ -20,6 +20,7 @@
  */
 
 #include "dolphin/types.h"
+#include "dusk/coop/coop_entity_logic.h"
 #include "dusk/net/protocol.h"
 
 class fopAc_ac_c;
@@ -71,7 +72,9 @@ bool isWhitelistedType(s16 procName);
 // Registry — enemyId <-> fopAc_ac_c*
 // ---------------------------------------------------------------------------
 
-constexpr u16 kInvalidEnemyId = 0xFFFF;
+// kInvalidEnemyId / StageEntityId / DynamicEntityId come from
+// coop_entity_logic.h (M4: the id scheme is shared with the selftest so the
+// ownership-transfer stability contract is table-tested).
 
 /// Entity id for a stage-placed actor: (roomNo, setID) packed — every machine
 /// has the same stage, so host and client derive identical ids without a

@@ -2,23 +2,27 @@
 
 /**
  * \file coop_combat.h
- * M2 — combat validation + hit injection (03-enemies.md §4,
+ * M2/M4 — combat validation + hit injection (03-enemies.md §4,
  * m2-design-notes.md §1).
  *
- * Client side: the dCcS::SetAtTgGObjInf intercept (d_cc_s.cpp, TARGET_PC)
- * calls noteAtTgHit() when a local Link's attack contacts a registered enemy
- * puppet; the raw attack fields (atp, AtType bits, powerType, hitType,
- * computed deterministic power, hitPos, attacker pos) are sent to the sim
- * owner as a reliable CombatIntent. Puppet HP is never touched locally (the
- * freeze guarantees the puppet never reaches its damage handler).
+ * Client/non-owner side: the dCcS::SetAtTgGObjInf intercept (d_cc_s.cpp,
+ * TARGET_PC) calls noteAtTgHit() when a local Link's attack contacts a
+ * registered enemy puppet; the raw attack fields (atp, AtType bits, powerType,
+ * hitType, computed deterministic power, hitPos, attacker pos) are sent to
+ * the ROOM OWNER as a reliable CombatIntent (M4: the host routes it to the
+ * owner peer; v1 co-located always routed to the host). Puppet HP is never
+ * touched locally (the freeze guarantees the puppet never reaches its damage
+ * handler); a machine that owns the room sims the enemy natively and its own
+ * hits apply directly.
  *
- * Host side (sim owner): onCombatIntentHost() validates (entity exists,
- * attacker is a real player, no friendly-fire, in range) and queues intents
- * per enemy per frame; flushHostIntents() (before the actor phase) injects
- * the strongest intent via the enemy's OWN damage collider — the Tg hit flag
- * is set with a synthetic full dCcD_Obj whose dCcD_GObjInf is populated, so
- * the enemy's next execute runs its authentic damage reaction (damage,
- * hitstun, death). The result is broadcast as CombatResult.
+ * Room-owner side: onCombatIntentHost() validates (entity exists, attacker is
+ * a real player, no friendly-fire, in range, this machine owns the target's
+ * room) and queues intents per enemy per frame; flushHostIntents() (before
+ * the actor phase) injects the strongest intent via the enemy's OWN damage
+ * collider — the Tg hit flag is set with a synthetic full dCcD_Obj whose
+ * dCcD_GObjInf is populated, so the enemy's next execute runs its authentic
+ * damage reaction (damage, hitstun, death). The result is broadcast as
+ * CombatResult (host relays it star to every other peer).
  */
 
 #include "dolphin/types.h"

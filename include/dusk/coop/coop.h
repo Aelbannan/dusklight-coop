@@ -101,17 +101,37 @@ bool rosterPresent(net::PlayerId pid);
 /// The real Link's current room (s8), or -1 when no real Link.
 s8 localRoomNo();
 
-// ---------------------------------------------------------------------------
-// M3 time/weather world state
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// M3/M4 world state (host publishes; client seeds/joins from it)
+// --------------------------------------------------------------------------
 
-/// Host publishes its clock/sky into the session every frame so a mid-game
-/// joiner receives current values in JoinAccept/WorldInit (M3 task 6).
+/// Host publishes its clock/sky/stage into the session every frame so a
+/// mid-game joiner receives current values in JoinAccept/WorldInit (M3 task 6;
+/// M4: the stage fill makes the join-warp gate live).
 void setWorldTime(const net::TimeStateInfo& time);
 void setWorldWeather(const net::WeatherStateInfo& weather);
+void setWorldStage(const net::StageInfo& stage);
 /// Latest world time/weather the session carries (host: last publish; client:
 /// JoinAccept/WorldInit receipt) — the M3 replica seeds from these.
 const net::TimeStateInfo& worldTime();
 const net::WeatherStateInfo& worldWeather();
+
+// --------------------------------------------------------------------------
+// M4 room ownership / scoping accessors (enemy module, sender gates)
+// --------------------------------------------------------------------------
+
+/// True when THIS machine is the room owner of (my stage, roomNo) per the
+/// session ownership table (network.md §6) — the owner sims that room's
+/// enemies natively and validates combat for it.
+bool amIRoomOwner(s8 roomNo);
+/// True when at least one remote player is currently in (my stage, roomNo) —
+/// or its room is unknown (the Anchor sender-gate rule: don't hold state
+/// hostage to a stale room). Drives the EnemySnapshot sender gate (M2 review
+/// MINOR-6: scope by the remote's ACTUAL room, not any present player).
+bool remoteInRoom(s8 roomNo);
+/// Client-side: why the session ended (host-leave UX, M4 D8).
+net::SessionEndReason sessionEndReason();
+/// True when the session carries a non-empty host stage (join-warp gate).
+bool hostWorldStageKnown();
 
 }  // namespace dusk::coop

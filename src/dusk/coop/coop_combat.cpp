@@ -49,10 +49,15 @@ void RejectIntent(const net::CombatIntentMsg& intent, const char* why) {
 
 void noteAtTgHit(fopAc_ac_c* atActor, fopAc_ac_c* tgActor, cCcD_Obj* atObj,
                  const cXyz* hitPos) {
-    // Host: the sim owner applies local hits natively (the collision pass
-    // already ran; the enemy's own handler polls the real hit flag). Intents
-    // are client -> sim owner only.
-    if (!dusk::coop::sessionActive() || dusk::coop::hostRole()) {
+    // M4 room ownership: the sim owner applies local hits natively (the
+    // collision pass already ran; the enemy's own handler polls the real hit
+    // flag). Intents are non-owner -> ROOM owner only. A machine that owns
+    // the target's room sims the enemy natively, so its local hits never
+    // become intents.
+    if (!dusk::coop::sessionActive()) {
+        return;
+    }
+    if (dusk::coop::amIRoomOwner(fopAcM_GetRoomNo(tgActor))) {
         return;
     }
     if (atActor == nullptr || tgActor == nullptr || atObj == nullptr || hitPos == nullptr) {
@@ -114,12 +119,12 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
     if (type != net::MsgType::CombatIntent) {
         return;
     }
-    if (!dusk::coop::sessionActive() || !dusk::coop::hostRole()) {
-        return;  // only the sim owner validates
+    if (!dusk::coop::sessionActive()) {
+        return;
     }
     const auto& intent = payload.combatIntent;
 
-    // --- validation (00-network.md §7, 03-enemies.md §4.4) ---
+    // --- validation (00-network.md §7, 03-enemies.md §4.4, M4) ---
     if (intent.attackerId >= kMaxLocalPlayers || !dusk::coop::rosterPresent(intent.attackerId)) {
         RejectIntent(intent, "unknown attacker");
         return;
@@ -135,6 +140,13 @@ void onGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
     fopAc_ac_c* enemy = dusk::coop::enemy::actorForEntityId(intent.targetEnemyId);
     if (enemy == nullptr || !dusk::coop::enemy::isRegistered(enemy)) {
         RejectIntent(intent, "target gone");
+        return;
+    }
+    // M4 room ownership: only the target's ROOM owner validates + injects.
+    // The host routes intents to the owner peer, so a non-owner machine that
+    // receives one (a forged/misrouted copy) ignores it rather than fighting
+    // the owner's result.
+    if (!dusk::coop::amIRoomOwner(fopAcM_GetRoomNo(enemy))) {
         return;
     }
     // Range: the collider contact already implies proximity; the owner's check
