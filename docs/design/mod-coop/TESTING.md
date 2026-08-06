@@ -42,9 +42,10 @@ the ROOM owner; EnemySnapshot room-scoped; CombatResult/EnemyEvent
 simulcast; TimeSync/WeatherChange host→all), the time/weather contract
 (1 Hz TimeSync cadence, thunder/pond/seed tables), M4 room ownership
 (sticky first-in, host-default, transfer on leave/disconnect, intent
-routing to a non-host owner, same-room snapshot scoping), the join-warp
-unlock gate + worldStage carry, entity-id stability across takeover, and
-LAN discovery announce/receive over loopback.
+routing to a non-host owner, same-room snapshot/EVENT scoping, the
+cross-stage SceneChange gate), the worldStage carry (stay-put join),
+entity-id stability across takeover, and LAN discovery announce/receive
+over loopback.
 
 ## 2. Full build
 
@@ -100,10 +101,10 @@ Coop/session logs print to the terminal. Watch for, in order:
 | M2 enemies | Host fights an enemy → client sees the same enemy at the same HP; a client's hits kill it (host applies); drops spawn on BOTH; room-clear doors open together |
 | M2.5 targeting | Kite a whitelisted enemy (Armos `E_AI`, Kargorok `E_YC`, …) past the client's Link → it turns and attacks the NEAREST player, not just the host |
 | M3 time/weather | Same sky on both; rain arrives on both; a cutscene freezes the clock on both; a stage transition re-asserts the same time |
-| M4 join-warp | Client joins a host in a stage the client's save hasn't reached → the client STAYS put (no crash, no warp), a "Host in a far-away stage" toast appears, and the players become visible only when in a shared stage. Joining from a save that HAS reached the stage → the client warps to the host's stage beside the host |
+| M4.5 join (stay-put) | Client joins a host in ANOTHER stage → both players STAY in their own stages (no warp, no toast, no teleport-back leash; the old wander-off-and-get-yanked behavior is gone), puppets stay hidden until both travel to a shared stage, and room ownership + combat work as normal once they meet. Save mtime untouched |
 | M4 host-leave | Host quits or kills the process → client shows a "Host left/disconnected" toast, puppets despawn, and single-player continues normally |
 | M4 ownership | Two players in different rooms of the same stage: each room's enemies sim on that room's owner (first player in, host wins its own room); the other player sees them frozen; combat from either side lands via the room-owner route; the owner leaving transfers the room |
-| M4 LAN discovery | Host running: client's log shows `discovered session 'Dusklight co-op' at <ip>:<port>`; the Settings → Network tab lists it |
+| M4 LAN discovery | Host running: client's log shows `discovery: found session 'Dusklight co-op' at <ip>:<port> (players n/m)` (glue line emitted by `discovery.cpp`); the Settings → Network tab lists it |
 | Save integrity | `USA/Card A/*.gci` mtime unchanged across all runs |
 
 ## 4. Two machines on LAN

@@ -38,7 +38,7 @@ protocol) is **unchanged** — it's orthogonal to fork-vs-mod. Only the attachme
 | D3 | Enemy targeting | **Full retargeting via context swap** — the fork's per-actor player resolution, so host enemies aggro the nearest real player (host Link or remote puppet) |
 | D4 | Pose format | **Raw matrices** (2.67 KB/player/frame) — quantization struck from the future list |
 | D5 | Drops | **Client-side spawn** on `EnemyEvent(died)` + death-presentation beat |
-| D6 | Join warp | **Unlock-gated** — refuse/pin safe anchor if the client's save hasn't reached the host's stage |
+| D6 | Join policy | **Stay-put (warp removed by user decision)** — a joining client stays in its own stage; players meet by traveling to a shared stage |
 | D8 | Host migration | **None v1** — session ends on host leave; UX decided in M4 |
 | D9 | Boss union-bit | **Deferred** — v1: boss exists iff the room owner's story needs it |
 | D10 | Scale flags | **Ship now** (5 B/frame + per-joint `setScaleFlag`) |
@@ -203,9 +203,11 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 **Session polish:**
 
-- **Join warp policy (D6)**: unlock-gated warp + safe-anchor fallback; `dStage_playerInit`
-  assert/timelayer interaction documented; acceptance test for un-reached stages. Fill
-  `worldStage_` from the real Link (the `stageOk` code is currently inert waiting on this).
+- **Join policy (D6 — REVISED: join-warp removed by user decision)**: a joining client stays in
+  its own stage; no forced teleports; players meet by traveling to a shared stage. KEEP the
+  `worldStage_` fill from the real Link + the stage carry in JoinAccept/WorldInit — the
+  cross-stage `stageOk` puppet-visibility gate depends on them (puppets stay hidden until both
+  players share a stage). The `DecideJoinWarp`/`PerformJoinWarp`/leash machinery is removed.
 - **Host leave UX (D8)**: freeze puppets + toast → return to single-player; decided here.
 - Disconnect/leave: puppet despawn, slot kept for rejoin; ownership transfer on the disconnecting
   room owner.
@@ -231,7 +233,7 @@ Dynamic waves (`EnemyEvent(spawn/die)`), horse entity channel, PvP (dummy damage
 | 5 | **Context-swap targeting gaps** (new — D3) | Med | Per-whitelisted-type verification of covered reads; fallback = per-type action hooks |
 | 6 | Puppet colliders not re-registered (freeze) | High | Per-frame Tg registration in the puppet path (D1) |
 | 7 | Client drops never spawn | High | Explicit spawn on `EnemyEvent(died)` + death beat (D5) |
-| 8 | Join warp vs save progression | High | Unlock gate + safe anchor (D6) |
+| 8 | Cross-stage join (no warp) | Low | Stay-put policy; `stageOk` hides puppets; players meet by traveling (D6 revised) |
 | 9 | Room-clear desync (corpse linger / dynamic spawns) | Med | `EnemyEvent(roomClear)` bit |
 | 10 | Frozen puppets in local cutscenes | Low | Accepted; optional pose polish |
 | 11 | Joint-count/form mismatch (human 40 / wolf 37+) | Med | `jointCount` in packet; form atomic before pose |

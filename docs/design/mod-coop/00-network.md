@@ -76,10 +76,16 @@ What we deliberately change vs Anchor:
   from it (host-relayed, room-scoped).
 - **Scene/room scoping** (Anchor model): a client only spawns/receives dummies
   and enemy state for players in its own scene. Clients in different scenes
-  simply don't render each other; on scene change, the client requests the
-  current state for its new scene. M4: enemy snapshots are additionally
-  room-scoped — the sender gate checks each remote's actual room, and the
-  host relays a client owner's snapshots only to peers in the sender's room.
+  simply don't render each other (puppets stay hidden until both players
+  share a stage — the `stageOk` gate keys on the remote's REAL stage from
+  `PlayerState`); players meet by traveling. M4/M4.5: enemy snapshots AND
+  enemy events (died/room-clear) are additionally room-scoped — the sender
+  gate checks each remote's actual room, and the host relays a client
+  owner's snapshots/events only to peers in the sender's room. EnemyEvent
+  room-scoping (M4.5 MAJOR 2) closes the cross-stage hazard: a died event
+  from another stage with a coincident `(roomNo<<8)|setID` must not mis-kill
+  a local enemy, spawn the wrong drop, grant a wrong save switch, or corrupt
+  ALLDIE.
 
 ## 3. Threading model
 
@@ -103,7 +109,7 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 
 | Step | Message | Channel | Notes |
 |------|---------|---------|-------|
-| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players 0/8 — **M4: implemented** (`discovery.cpp`): the host broadcasts a fixed-size announce every 2 s to the LAN broadcast + loopback; clients listen on 44771, log + list discovered sessions. Manual IP join (`joinHost` CVar) remains the fallback |
+| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players n/max — **M4: implemented** (`discovery.cpp`): the host broadcasts a fixed-size announce every 2 s to the LAN broadcast + loopback; clients listen on 44771, log (`discovery: found session ...`, emitted by `discovery.cpp`) + list discovered sessions. Manual IP join (`joinHost` CVar) remains the fallback. **M4.5**: the player count is seeded BEFORE the announcer thread starts, so no datagram ever advertises 0 players |
 | Discover | (listen for announce) | — | also manual IP join via config var |
 | Connect | ENet handshake | — | ENet-level |
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
@@ -115,11 +121,16 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 - **PlayerId mapping**: host assigns session-wide ids 0–7 (`MAX_LOCAL_PLAYERS`).
   Each machine's `Runtime` keeps its local slot; remote slots are puppet-only
   (see `docs/design/network.md` §3).
-- **Join mid-game**: client warps to the host's stage/room via a forced stage
-  change, then receives `WorldInit` (stage + roster), followed by the current
+- **Join mid-game**: **M4.5 — the join-warp is REMOVED (user decision) —
+  stay-put policy**: the client boots into its OWN save stage and stays
+  there; no forced stage change. Players meet by traveling to a shared
+  stage, where their puppets become visible to each other. On join the
+  client receives `WorldInit` (host stage + roster), followed by the current
   per-player/per-enemy state as a burst of ordinary `PlayerState`/
   `EnemySnapshot` messages on the per-frame stream (no separate full-state
-  message — the first pose arrives within one frame).
+  message — the first pose arrives within one frame). The host's stage in
+  `WorldInit`/`JoinAccept` is the joiner's "where is the host" reference
+  (the `worldStage_` carry from the real Link) — it does NOT trigger a warp.
 - **Host departure**: M4 ends the session with a `SessionEnd`; the client
   toasts "Host left/disconnected" (per `SessionEnd` reason vs connection
   loss), despawns puppets, and continues as vanilla single-player. No host
@@ -136,9 +147,9 @@ Packet version in `JoinRequest`; mismatches rejected.
 | `JoinRequest` / `JoinAccept` / `JoinReject` / `PlayerLeave` / `SessionEnd` | reliable | event | see §4 |
 | `WorldInit` | reliable | on join **+ re-broadcast as roster-refresh on every later join** | stage (name/room/layer/point) + time + weather (v5) + full roster — no other state sections; snapshot-on-join rides the per-frame stream (burst of `PlayerState`/`EnemySnapshot` right after) |
 | `PlayerState` (per remote player, same scene) | unreliable seq | every frame | see PlayerState below |
-| `PlayerEvent` (form change, mount/dismount, respawn, scene change, equip, attention) | reliable | on change | player id + event + scene + data + data2 (see PlayerEvent below) |
+| `PlayerEvent` (form change, mount/dismount, respawn, scene change, equip, attention) | reliable | on change | player id + event + scene + data + data2 (see PlayerEvent below; M4.5: for `SceneChange`, `scene`=1 marks a same-stage move — the host's room-table sniff keys (last-known stage, new room), valid for same-stage moves only) |
 | `EnemySnapshot` (per enemy) | unreliable seq | every frame | see EnemyState below |
-| `EnemyEvent` (spawn, die, room-clear, boss phase) | reliable | on change | enemy id + event + data |
+| `EnemyEvent` (spawn, die, room-clear, boss phase) | reliable | on change | enemy id + event + data — **M4.5: room-scoped** (a died/room-clear event reaches only peers in the SENDER's room; the receive side also gates on the local room) |
 | `CombatIntent` | reliable | on attack | attacker, target enemy id, attack kind, position |
 | `CombatResult` | reliable | room owner→all | target enemy id, damage, new HP, outcome |
 | `TimeSync` | unreliable seq | **1 Hz** (real — M3.5: a 1 Hz `NetClock` gate; immediate on stage/rate change) | absolute phase `f32` 0..360 + day + rate + flags (v5; `protocol.h` `TimeSyncMsg` is normative) |
@@ -310,17 +321,18 @@ client (attacker)                  host / sim owner                  all clients
 - UI (M4): a Settings → **Network** tab edits all five vars and lists
   LAN-discovered sessions (join by copying the IP into `net.joinHost`).
 - Discovery: broadcast announce + listener (M4, `discovery.cpp`); new
-  sessions are also logged (`coop: discovered session ...`).
+  sessions are logged by the listener itself (`discovery: found session
+  ...`, `discovery.cpp`).
 - Debug: coop/net logs via the dusk logging system; `net.enabled` off =
   byte-for-byte vanilla single-player.
 
 ## 11. Open integration points (to resolve with investigations)
 
-1. **Forced stage change on join** — client must warp to host stage/room;
-   calling `dStage_changeScene` from a mod (public) or a warp hook — confirm
-   with investigation 01.
-2. **Spawn anchor** for mid-game joins — host picks a safe anchor (near host
-   player or a warp point); needs stage/room data from investigations 01/03.
+1. ~~**Forced stage change on join**~~ — **RESOLVED (M4.5, user decision):
+   the join-warp is REMOVED.** A joining client stays in its own save stage
+   (stay-put); the net layer never calls `dStage_changeScene`.
+2. ~~**Spawn anchor** for mid-game joins~~ — **RESOLVED (M4.5):** no warp
+   means no anchor; players meet by traveling to a shared stage.
 3. **Enemy id stability** — `enemyId` must stay stable across snapshots; assign
    at spawn on the sim owner, map through room-owner changes (investigation 03).
 4. **TP pose surface** — joint count, read path, and pointer-swap vs per-joint
