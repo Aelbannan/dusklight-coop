@@ -10,7 +10,7 @@
 #   ./tools/run-coop.sh --stop          # kill running instances
 #
 # Env/config defaults (override with flags or edit below):
-#   HOST_PORT=44770  CLIENT_PORT=44771  JOIN_HOST=127.0.0.1
+#   HOST_PORT=44770  CLIENT_PORT=44770  JOIN_HOST=127.0.0.1   (client net.hostPort = the HOST's port)
 
 set -euo pipefail
 
