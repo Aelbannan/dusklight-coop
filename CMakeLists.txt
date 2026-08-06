@@ -739,7 +739,8 @@ if (NOT ANDROID AND NOT IOS AND NOT TVOS)
             src/dusk/net/protocol.cpp
             src/dusk/net/transport.cpp
             src/dusk/net/session.cpp
-            src/dusk/net/clock.cpp)
+            src/dusk/net/clock.cpp
+            src/dusk/net/discovery.cpp)
     target_compile_definitions(dusk_net_selftest PRIVATE TARGET_PC=1)
     target_include_directories(dusk_net_selftest PRIVATE
             include
