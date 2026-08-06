@@ -172,12 +172,28 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 ### M4 — Session polish + room ownership
 
-> **Status: IMPLEMENTED (M4 complete).** Every block below landed on
-> `net-coop`; the selftest (306 checks incl. the M4 suites: room-ownership
-> routing to a non-host owner, same-room snapshot scoping, ownership
-> transfer, join-warp gate + worldStage carry, entity-id stability, LAN
-> discovery) is green on a forced rebuild, and live host+client loopback
-> verified join/poses/discovery/host-leave with the save mtime untouched.
+> **Status: IMPLEMENTED (M4 complete; M4.5 fix pass COMPLETE — see below).**
+> Every block below landed on `net-coop`; the selftest (318 checks incl. the
+> M4 suites: room-ownership routing to a non-host owner, same-room
+> snapshot/event scoping, ownership transfer, worldStage carry, entity-id
+> stability, LAN discovery) is green on a forced rebuild.
+>
+> **M4.5 (review-m4-glm-5.2.md):** MAJOR 1 — join-warp REMOVED by user
+> decision: a joining client stays in its own save stage (stay-put; the D6
+> row + §5 M4 block below record the revised policy). KEPT: the `worldStage_`
+> fill from the real Link + the stage carry in JoinAccept/WorldInit (the
+> cross-stage `stageOk` puppet gate needs them). MAJOR 2 — `EnemyEvent`
+> (died/room-clear) routed room-scoped like `EnemySnapshot`, plus a
+> receive-side local-room gate (no cross-stage `(roomNo<<8)|setID` mis-kill /
+> wrong drop / wrong save switch / ALLDIE corruption). MINOR 1 — the
+> SceneChange room-table sniff keys only same-stage moves (the wire `scene`
+> flag). MINOR 2 — dead code dropped. MINOR 4 — discovery log-line doc fix.
+> MINOR 5 — wire-determinism sweep covers all 16 types. MINOR 6 — announce
+> player count seeded before the first datagram (no 0-player announces).
+> MINOR 8 — the join-warp statics went away with the feature. Evidence:
+> forced clean rebuild green with zero warnings from the touched TUs;
+> `dusk_net_selftest` 318/318 PASS. (Live loopback cannot be re-run here —
+> the RVZ was removed from the tree.)
 
 **Room ownership (from `docs/design/network.md` §6 — moved up from M5 by user decision):**
 

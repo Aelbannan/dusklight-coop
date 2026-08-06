@@ -2307,7 +2307,7 @@ void RunM4RoomRoutingCheck() {
 /// "where is the host" reference; the cross-stage `stageOk` puppet gate keys
 /// on the remote's REAL stage from PlayerState, so puppets stay hidden until
 /// both players share a stage).
-void RunM4JoinWarpCheck() {
+void RunM4WorldStageCheck() {
     std::printf("m4: worldStage carry (stay-put join policy, D6 revised)\n");
 
     // Session-level: the host fills worldStage_ (the M1 TODO — cfg.stage
@@ -2458,7 +2458,7 @@ int main() {
     RunM35TimeWeatherFixCheck();
     RunM4OwnershipTableCheck();
     RunM4RoomRoutingCheck();
-    RunM4JoinWarpCheck();
+    RunM4WorldStageCheck();
     RunM4EntityStabilityCheck();
     RunM4DiscoveryCheck();
 

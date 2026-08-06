@@ -3,14 +3,15 @@
 How to build, run, and verify the networked co-op milestones. Current status
 flag at the top; check it before testing.
 
-> **Status: M0–M4 (session polish + room ownership) are landed and reviewed;
-> the selftest is green on a forced rebuild.** All 300+ selftest checks pass
-> incl. the 1 Hz cadence regression guard, the room-ownership routing
-> (CombatIntent to a non-host room owner, same-room snapshot scoping,
-> ownership transfer), the join-warp gate, entity-id stability, and the LAN
-> discovery announce/receive. M4 adds: join-warp (unlock gate + safe anchor),
-> host-leave toast UX, LAN discovery, and per-room enemy authority with
-> combat routing to the room owner.
+> **Status: M0–M4 + M4.5 fix pass landed (branch `net-coop`).** M4.5
+> (review-m4-glm-5.2.md) REMOVED the join-warp by user decision — stay-put
+> join policy (a joining client stays in its own stage; players meet by
+> traveling); room-scoped `EnemyEvent` (MAJOR 2); gated the SceneChange
+> room-table sniff on the wire same-stage flag (MINOR 1); dropped dead code;
+> swept all 16 message types in the wire-determinism test; and seeded the
+> announce player count before the first datagram (no 0-player announces).
+> The selftest (318 checks) is green on a forced rebuild; net-off boot is
+> untouched (all net code remains `net.enabled`-gated).
 
 ## 0. Config vars (defaults)
 
