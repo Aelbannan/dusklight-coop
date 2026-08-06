@@ -1481,6 +1481,39 @@ void RunM35TimeWeatherFixCheck() {
         }
         Check(ok, "AdvanceStep pond table (exact windows, vanilla 1x fallback)");
     }
+
+    // -- 6) Seed-adoption decision (deepseek MINOR B) ----------------------
+    {
+        struct SeedCase {
+            bool timeValid;
+            bool timeChanged;
+            bool weatherChanged;
+            bool expectAdoptTime;
+            bool expectAdoptWeather;
+        };
+        // first-join adopts the clock (no TimeSync yet, world state present)
+        const SeedCase kCases[] = {
+            {false, true, true, true, true},
+            // a later roster-refresh with g_time.valid does NOT regress the
+            // clock (an unreliable TimeSync can overtake the reliable
+            // WorldInit it precedes)
+            {true, true, true, false, true},
+            // same-world-state re-seed with no actual change: nothing
+            {false, false, false, false, false},
+            // weather re-seeds unconditionally on change even when the clock
+            // is already valid
+            {true, false, true, false, true},
+        };
+        bool ok = true;
+        for (const auto& c : kCases) {
+            const SeedDecision d = SeedTargetsDecision(
+                SeedInput{c.timeValid, c.timeChanged, c.weatherChanged});
+            ok = ok && d.adoptTime == c.expectAdoptTime &&
+                 d.adoptWeather == c.expectAdoptWeather;
+        }
+        Check(ok,
+            "SeedTargetsDecision table (first-join adopts, later refresh does not, weather always)");
+    }
 }
 
 /// slot after its ~5 s peer timeout). The generation bumps on release and

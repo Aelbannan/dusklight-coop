@@ -176,6 +176,43 @@ inline f32 RatePerTick(u8 rate, f32 daytime, bool pondStage) {
 }
 
 // ---------------------------------------------------------------------------
+// Client re-seed decision (deepseek MINOR B) — whether a session world-state
+// re-seed (JoinAccept / WorldInit / roster-refresh re-broadcast) adopts the
+// carried clock/sky. Pure decision shared with the selftest.
+// ---------------------------------------------------------------------------
+
+/// Inputs to a re-seed decision. `timeValid` is true once a TimeSync has been
+/// received (g_time.valid); `timeChanged`/`weatherChanged` are true when the
+/// session's world state differs from the last seen copy (the caller's own
+/// change detection, incl. the first seed where both are true).
+struct SeedInput {
+    bool timeValid = false;
+    bool timeChanged = false;
+    bool weatherChanged = false;
+};
+
+struct SeedDecision {
+    bool adoptTime = false;
+    bool adoptWeather = false;
+};
+
+/// glm MINOR 1 (re-seed race) as a pure table: the clock is adopted only when
+/// no TimeSync has been received yet — the first join, where the reliable
+/// JoinAccept/WorldInit are the only time source and nothing can have raced
+/// ahead. Once a TimeSync has landed (unreliable channel — it can overtake an
+/// in-flight reliable WorldInit), a later roster-refresh WorldInit carrying an
+/// OLDER time must not regress the clock, so re-seeds with `timeValid` do not
+/// adopt time. Weather has no fresher per-frame stream (WeatherChange is
+/// reliable like WorldInit, same channel, ordered), so it re-seeds
+/// unconditionally on change.
+inline SeedDecision SeedTargetsDecision(const SeedInput& in) {
+    SeedDecision d;
+    d.adoptTime = !in.timeValid && in.timeChanged;
+    d.adoptWeather = in.weatherChanged;
+    return d;
+}
+
+// ---------------------------------------------------------------------------
 // Host publisher — TimeSync cadence (deepseek MAJOR 1 fix).
 // ---------------------------------------------------------------------------
 

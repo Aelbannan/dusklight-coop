@@ -448,22 +448,22 @@ void SnowPerFrame() {
 }
 
 /// Client re-seed from JoinAccept / WorldInit (session worldTime/weather).
-void SeedTargets() {
+/// The TIME adoption is the pure SeedTargetsDecision (coop_time_logic.h,
+/// deepseek MINOR B — table-tested): only when no TimeSync has been received
+/// yet. The first join (JoinAccept/WorldInit are the only time source, and
+/// reliable, so nothing can have raced ahead) adopts; a later roster-refresh
+/// WorldInit (a reliable copy that was in flight when an unreliable TimeSync
+/// was sent can arrive after it) does not regress the clock. Weather has no
+/// fresher per-frame stream (WeatherChange is reliable like WorldInit, same
+/// channel, ordered), so the g_weather re-seed below is always safe.
+void SeedTargets(bool timeChanged, bool weatherChanged) {
     const TimeStateInfo& t = dusk::coop::worldTime();
     const WeatherStateInfo& w = dusk::coop::worldWeather();
+    const SeedDecision d =
+        SeedTargetsDecision(SeedInput{/*timeValid=*/g_time.valid, timeChanged, weatherChanged});
     g_worldSeenTime = t;
     g_worldSeenWeather = w;
-    // glm MINOR 1 (re-seed race): only adopt the session TIME when no
-    // TimeSync has been received yet — the first join, where
-    // JoinAccept/WorldInit are the only time source and (reliable, ordered)
-    // nothing can have raced ahead. Once a TimeSync has landed, a reliable
-    // roster-refresh WorldInit that was in flight when the TimeSync was sent
-    // (TimeSync is unreliable and can race ahead of the reliable WorldInit it
-    // precedes) may still arrive later; re-adopting its OLDER time would
-    // regress the clock by up to ~1 s on every 3rd+ join. Weather has no
-    // fresher per-frame stream (WeatherChange is reliable like WorldInit,
-    // same channel, ordered), so the g_weather re-seed below is always safe.
-    if (!g_time.valid) {
+    if (d.adoptTime) {
         g_time.time = t.time;
         g_time.day = t.day;
         g_time.rate = t.rate;
@@ -475,15 +475,17 @@ void SeedTargets() {
         dComIfGs_setTime(t.time);
         dComIfGs_setDate(t.day);
     }
-    g_weather.mode = w.mode;
-    g_weather.thunder = w.thunder;
-    g_weather.intensity = w.intensity;
-    g_weather.colpat = w.colpat;
-    g_weather.valid = true;
-    // Adopt into the sky immediately so a mid-game joiner starts with the
-    // host's sky (task 6); a dKyw_wether_init overwrite later in the same
-    // frame is re-clobbered by onStageCreate / the per-frame force.
-    PinWeather();
+    if (d.adoptWeather) {
+        g_weather.mode = w.mode;
+        g_weather.thunder = w.thunder;
+        g_weather.intensity = w.intensity;
+        g_weather.colpat = w.colpat;
+        g_weather.valid = true;
+        // Adopt into the sky immediately so a mid-game joiner starts with the
+        // host's sky (task 6); a dKyw_wether_init overwrite later in the same
+        // frame is re-clobbered by onStageCreate / the per-frame force.
+        PinWeather();
+    }
 }
 
 }  // namespace
@@ -664,7 +666,7 @@ void onGameFrame() {
     // WorldInit, no fresher stream).
     if (!g_clientSeeded) {
         g_clientSeeded = true;
-        SeedTargets();
+        SeedTargets(/*timeChanged=*/true, /*weatherChanged=*/true);
         return;
     }
     const TimeStateInfo& t = dusk::coop::worldTime();
@@ -676,7 +678,7 @@ void onGameFrame() {
                                 w.intensity != g_worldSeenWeather.intensity ||
                                 w.colpat != g_worldSeenWeather.colpat;
     if (timeChanged || weatherChanged) {
-        SeedTargets();
+        SeedTargets(timeChanged, weatherChanged);
     }
 }
 
