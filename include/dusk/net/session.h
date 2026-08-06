@@ -113,6 +113,11 @@ public:
     /// (RoomOwnershipMsg). Replaces the stored owner for (stage, room);
     /// kInvalidPlayerId clears the entry (ownerless).
     void SetOwner(const char* stage, s8 room, u8 owner);
+    /// Host-side: drop entries the host cannot legitimately own (ownerless
+    /// entries, and host-owned entries the host is not actually in). Called
+    /// from setLocalRoom to sweep stale entries left by a stage-transition
+    /// race (capstone MINOR 5).
+    void SweepStaleHostEntries();
     void Clear() { rooms_.clear(); }
 
 private:
@@ -168,6 +173,10 @@ public:
     [[nodiscard]] SessionState state() const { return state_; }
     [[nodiscard]] PlayerId selfId() const { return selfId_; }
     [[nodiscard]] u16 boundPort() const { return transport_.BoundPort(); }
+    /// Capstone MAJOR 1: whether the ENet transport is currently running (its
+    /// socket thread is alive). Exposed so the coop glue / selftest can
+    /// observe that Stop() tears the transport down even for an Ended session.
+    [[nodiscard]] bool transportRunning() const { return transport_.IsRunning(); }
     [[nodiscard]] const std::array<PlayerSlot, kMaxLocalPlayers>& roster() const { return roster_; }
     /// Stage/time/weather from the last JoinAccept/WorldInit (client) — what
     /// the host believes the world looks like; on the host these are the
