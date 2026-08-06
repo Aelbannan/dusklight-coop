@@ -534,16 +534,16 @@ void RunRingPolicyChecks() {
 /// drops) and snapshot Sends must never fail.
 void RunRingOverflowChecks() {
     std::printf("rings: overflow accounting over real sockets\n");
-    Transport hostT;
-    Check(hostT.StartHost(0), "host transport up");
-    const u16 port = hostT.BoundPort();
-    Transport cliT;
-    Check(cliT.StartClient("127.0.0.1", port), "client transport up");
+    auto hostT = std::make_unique<Transport>();
+    Check(hostT->StartHost(0), "host transport up");
+    const u16 port = hostT->BoundPort();
+    auto cliT = std::make_unique<Transport>();
+    Check(cliT->StartClient("127.0.0.1", port), "client transport up");
     InboundPacket pkt;
-    Check(WaitPoll(hostT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+    Check(WaitPoll(*hostT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
                10000, pkt),
         "host sees the client connect");
-    Check(WaitPoll(cliT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+    Check(WaitPoll(*cliT, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
                10000, pkt),
         "client sees the host connect");
 
@@ -552,17 +552,17 @@ void RunRingOverflowChecks() {
 
     // Reliable flood: Send()==false must imply the counter bumped, and vice
     // versa — a reliable event is never silently dropped.
-    const u64 dropped0 = cliT.ReliableOutboundDropped();
+    const u64 dropped0 = cliT->ReliableOutboundDropped();
     u64 ok = 0;
     u64 fail = 0;
     for (int i = 0; i < 20000; ++i) {
-        if (cliT.Send(0, kChannelReliable, msg, sizeof(msg))) {
+        if (cliT->Send(0, kChannelReliable, msg, sizeof(msg))) {
             ++ok;
         } else {
             ++fail;
         }
     }
-    const u64 dropped1 = cliT.ReliableOutboundDropped();
+    const u64 dropped1 = cliT->ReliableOutboundDropped();
     Check(ok + fail == 20000, "every Send returned");
     Check(fail == dropped1 - dropped0,
         "every rejected reliable Send is counted (explicit failure, no silent drop)");
@@ -570,10 +570,10 @@ void RunRingOverflowChecks() {
     // thread (the counter is delivery-independent, so no host drain needed).
     {
         const u64 deadline = NowMs() + 15000;
-        while (NowMs() < deadline && cliT.PacketsSent() < ok) {
+        while (NowMs() < deadline && cliT->PacketsSent() < ok) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        Check(cliT.PacketsSent() == ok, "every accepted reliable Send was sent on the socket thread");
+        Check(cliT->PacketsSent() == ok, "every accepted reliable Send was sent on the socket thread");
     }
 
     // Snapshot flood: replace-newest means Send never fails, and the ring
@@ -581,7 +581,7 @@ void RunRingOverflowChecks() {
     // the socket thread's drain, so the 128-slot ring fills and replaces).
     u64 snapOk = 0;
     for (int i = 0; i < 20000; ++i) {
-        if (cliT.Send(0, kChannelUnreliable, msg, sizeof(msg))) {
+        if (cliT->Send(0, kChannelUnreliable, msg, sizeof(msg))) {
             ++snapOk;
         }
     }
@@ -591,15 +591,15 @@ void RunRingOverflowChecks() {
     // only the freshest reach the host and the 128-slot inbox may never fill.)
     {
         const u64 deadline = NowMs() + 3000;
-        while (NowMs() < deadline && cliT.SnapshotOutboundReplaced() == 0) {
+        while (NowMs() < deadline && cliT->SnapshotOutboundReplaced() == 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        Check(cliT.SnapshotOutboundReplaced() > 0,
+        Check(cliT->SnapshotOutboundReplaced() > 0,
             "snapshot outbox replaced stale entries under flood");
     }
 
-    cliT.Stop();
-    hostT.Stop();
+    cliT->Stop();
+    hostT->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +677,7 @@ void RunHandshakeDemo() {
     Demo demo;
 
     // -- host --
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hostCfg;
     hostCfg.port = 0;  // ephemeral; the demo reads boundPort()
     hostCfg.name = "Test Host";
@@ -686,99 +686,99 @@ void RunHandshakeDemo() {
     hostCfg.stage.room = 2;
     hostCfg.stage.layer = 1;
     hostCfg.stage.point = 7;
-    Check(host.StartHost(hostCfg), "host session starts (Listening)");
-    demo.live.push_back(&host);
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hostCfg), "host session starts (Listening)");
+    demo.live.push_back(host.get());
+    const u16 port = host->boundPort();
     Check(port != 0, "host bound an ephemeral port");
     std::printf("    host listening on 127.0.0.1:%u\n", port);
 
     // -- client A joins --
     {
-        Session a;
+        auto a = std::make_unique<Session>();
         SessionConfig cfg;
         cfg.joinHost = "127.0.0.1";
         cfg.port = port;
         cfg.name = "Player A";
         cfg.version = kProtocolVersion;
-        Check(a.StartClient(cfg), "client A starts (Connecting)");
-        demo.live.push_back(&a);
+        Check(a->StartClient(cfg), "client A starts (Connecting)");
+        demo.live.push_back(a.get());
 
-        Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000),
+        Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000),
             "A reaches Joined (JoinRequest -> JoinAccept)");
-        Check(a.selfId() == 1, "A assigned PlayerId 1");
-        Check(demo.WaitFor([&] { return PresentCountOf(host) == 2; }, 10000),
+        Check(a->selfId() == 1, "A assigned PlayerId 1");
+        Check(demo.WaitFor([&] { return PresentCountOf(*host) == 2; }, 10000),
             "host roster has 2 players (host + A)");
-        Check(std::strcmp(a.worldStage().stage, "F_SP108") == 0 && a.worldStage().room == 2 &&
-                  a.worldStage().point == 7,
+        Check(std::strcmp(a->worldStage().stage, "F_SP108") == 0 && a->worldStage().room == 2 &&
+                  a->worldStage().point == 7,
             "A received WorldInit stage/room/point from the host");
-        Check(a.roster()[0].present && std::strcmp(a.roster()[0].name, "Test Host") == 0,
+        Check(a->roster()[0].present && std::strcmp(a->roster()[0].name, "Test Host") == 0,
             "A sees the host in the roster");
 
         // -- client B: wrong protocol version -> reject --
-        Session b;
+        auto b = std::make_unique<Session>();
         SessionConfig bCfg;
         bCfg.joinHost = "127.0.0.1";
         bCfg.port = port;
         bCfg.name = "Player B (old)";
         bCfg.version = kProtocolVersion + 100;
-        Check(b.StartClient(bCfg), "client B starts");
-        demo.live.push_back(&b);
-        Check(demo.WaitFor([&] { return b.state() == SessionState::Rejected; }, 10000),
+        Check(b->StartClient(bCfg), "client B starts");
+        demo.live.push_back(b.get());
+        Check(demo.WaitFor([&] { return b->state() == SessionState::Rejected; }, 10000),
             "B rejected (version mismatch)");
-        Check(std::strstr(b.rejectReasonName(), "version") != nullptr,
+        Check(std::strstr(b->rejectReasonName(), "version") != nullptr,
             "B rejection reason is version mismatch");
-        b.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &b), demo.live.end());
+        b->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), b.get()), demo.live.end());
 
         // -- client C: roster full (maxPlayers=2) -> reject --
-        Session c;
+        auto c = std::make_unique<Session>();
         SessionConfig cCfg;
         cCfg.joinHost = "127.0.0.1";
         cCfg.port = port;
         cCfg.name = "Player C";
         cCfg.version = kProtocolVersion;
-        Check(c.StartClient(cCfg), "client C starts");
-        demo.live.push_back(&c);
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Rejected; }, 10000),
+        Check(c->StartClient(cCfg), "client C starts");
+        demo.live.push_back(c.get());
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Rejected; }, 10000),
             "C rejected (session full)");
-        Check(std::strstr(c.rejectReasonName(), "full") != nullptr,
+        Check(std::strstr(c->rejectReasonName(), "full") != nullptr,
             "C rejection reason is session full");
-        c.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &c), demo.live.end());
+        c->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), c.get()), demo.live.end());
 
         // -- A leaves: PlayerLeave relayed, host roster shrinks --
-        Check(a.state() == SessionState::Joined, "A still joined before leaving");
-        a.Stop();
-        Check(a.state() == SessionState::Ended, "A session Ended after Stop");
-        Check(demo.WaitFor([&] { return PresentCountOf(host) == 1; }, 10000),
+        Check(a->state() == SessionState::Joined, "A still joined before leaving");
+        a->Stop();
+        Check(a->state() == SessionState::Ended, "A session Ended after Stop");
+        Check(demo.WaitFor([&] { return PresentCountOf(*host) == 1; }, 10000),
             "host roster back to 1 (host) after A's PlayerLeave");
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &a), demo.live.end());
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), a.get()), demo.live.end());
     }
 
     // -- client D joins, then the host ends the session --
     {
-        Session d;
+        auto d = std::make_unique<Session>();
         SessionConfig cfg;
         cfg.joinHost = "127.0.0.1";
         cfg.port = port;
         cfg.name = "Player D";
         cfg.version = kProtocolVersion;
-        Check(d.StartClient(cfg), "client D starts");
-        demo.live.push_back(&d);
-        Check(demo.WaitFor([&] { return d.state() == SessionState::Joined; }, 10000),
+        Check(d->StartClient(cfg), "client D starts");
+        demo.live.push_back(d.get());
+        Check(demo.WaitFor([&] { return d->state() == SessionState::Joined; }, 10000),
             "D reaches Joined (PlayerId reuses slot 1)");
-        Check(d.selfId() == 1, "D assigned PlayerId 1");
+        Check(d->selfId() == 1, "D assigned PlayerId 1");
 
-        host.Stop();
-        Check(host.state() == SessionState::Ended, "host session Ended after Stop");
-        Check(demo.WaitFor([&] { return d.state() == SessionState::Ended; }, 10000),
+        host->Stop();
+        Check(host->state() == SessionState::Ended, "host session Ended after Stop");
+        Check(demo.WaitFor([&] { return d->state() == SessionState::Ended; }, 10000),
             "D observes SessionEnd(HostLeft) and goes Ended");
-        d.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &d), demo.live.end());
+        d->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), d.get()), demo.live.end());
     }
 
-    demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &host), demo.live.end());
-    Check(host.sessionFrames() > 0, "host session pumped frames");
+    demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), host.get()), demo.live.end());
+    Check(host->sessionFrames() > 0, "host session pumped frames");
 }
 
 /// Game-message routing (M1 integration seam): clients send PlayerState/
@@ -788,44 +788,44 @@ void RunGameMessageDemo() {
     std::printf("handshake: game-message routing (host relay)\n");
     Demo demo;
 
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hostCfg;
     hostCfg.port = 0;
     hostCfg.name = "Relay Host";
     hostCfg.maxPlayers = 3;
-    Check(host.StartHost(hostCfg), "relay host starts (Listening)");
-    demo.live.push_back(&host);
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hostCfg), "relay host starts (Listening)");
+    demo.live.push_back(host.get());
+    const u16 port = host->boundPort();
 
-    Session a;
+    auto a = std::make_unique<Session>();
     SessionConfig aCfg;
     aCfg.joinHost = "127.0.0.1";
     aCfg.port = port;
     aCfg.name = "Player A";
     aCfg.version = kProtocolVersion;
-    Check(a.StartClient(aCfg), "relay client A starts");
-    demo.live.push_back(&a);
-    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000), "A joined");
+    Check(a->StartClient(aCfg), "relay client A starts");
+    demo.live.push_back(a.get());
+    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000), "A joined");
 
-    Session b;
+    auto b = std::make_unique<Session>();
     SessionConfig bCfg;
     bCfg.joinHost = "127.0.0.1";
     bCfg.port = port;
     bCfg.name = "Player B";
     bCfg.version = kProtocolVersion;
-    Check(b.StartClient(bCfg), "relay client B starts");
-    demo.live.push_back(&b);
-    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000), "B joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+    Check(b->StartClient(bCfg), "relay client B starts");
+    demo.live.push_back(b.get());
+    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000), "B joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
         "host roster has 3 players");
     // Roster-refresh broadcast (MAJOR M1): A joined before B, so A must learn
     // about B through the WorldInit the host re-broadcasts on B's join (A's
     // roster never had B otherwise — join and leave were asymmetric).
-    Check(demo.WaitFor([&] { return a.roster()[b.selfId()].present; }, 10000),
+    Check(demo.WaitFor([&] { return a->roster()[b->selfId()].present; }, 10000),
         "A's roster shows B after B joined (WorldInit roster-refresh)");
-    Check(b.roster()[a.selfId()].present && b.roster()[0].present,
+    Check(b->roster()[a->selfId()].present && b->roster()[0].present,
         "B's roster shows A and the host");
-    Check(!a.roster()[b.selfId() + 1].present,
+    Check(!a->roster()[b->selfId() + 1].present,
         "A's roster has no phantom players beyond the roster");
 
     int hostStates = 0;
@@ -835,7 +835,7 @@ void RunGameMessageDemo() {
     int aEvents = 0;
     u8 hostStatePid = kInvalidPlayerId;
     u8 bStatePid = kInvalidPlayerId;
-    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         if (type == MsgType::PlayerState) {
             ++hostStates;
             hostStatePid = p.playerState.playerId;
@@ -843,14 +843,14 @@ void RunGameMessageDemo() {
             ++hostEvents;
         }
     });
-    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         if (type == MsgType::PlayerState) {
             ++aStates;
         } else if (type == MsgType::PlayerEvent) {
             ++aEvents;
         }
     });
-    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         if (type == MsgType::PlayerState) {
             ++bStates;
             bStatePid = p.playerState.playerId;
@@ -859,41 +859,41 @@ void RunGameMessageDemo() {
 
     // A sends a PlayerState: the host consumes it locally and relays it to B.
     PayloadUnion ps = {};
-    ps.playerState.playerId = a.selfId();
+    ps.playerState.playerId = a->selfId();
     ps.playerState.pos = Vec3f{1.0f, 2.0f, 3.0f};
-    Check(a.SendGameMessage(MsgType::PlayerState, ps), "A sends PlayerState");
+    Check(a->SendGameMessage(MsgType::PlayerState, ps), "A sends PlayerState");
     Check(demo.WaitFor([&] { return hostStates >= 1 && bStates >= 1; }, 10000),
         "host consumed A's PlayerState and relayed it to B");
-    Check(hostStatePid == a.selfId() && bStatePid == a.selfId(),
+    Check(hostStatePid == a->selfId() && bStatePid == a->selfId(),
         "relayed PlayerState keeps the source playerId");
     Check(aStates == 0, "A never receives its own PlayerState back");
 
     // Host's own PlayerState reaches both clients.
     PayloadUnion hostPs = {};
     hostPs.playerState.playerId = 0;
-    Check(host.SendGameMessage(MsgType::PlayerState, hostPs), "host sends PlayerState");
+    Check(host->SendGameMessage(MsgType::PlayerState, hostPs), "host sends PlayerState");
     Check(demo.WaitFor([&] { return aStates >= 1 && bStates >= 2; }, 10000),
         "clients received the host's PlayerState");
 
     // B's PlayerEvent is relayed to A (and consumed by the host).
     PayloadUnion ev = {};
-    ev.playerEvent.playerId = b.selfId();
+    ev.playerEvent.playerId = b->selfId();
     ev.playerEvent.eventId = static_cast<u8>(PlayerEventId::FormChange);
     ev.playerEvent.data = 1;
-    Check(b.SendGameMessage(MsgType::PlayerEvent, ev), "B sends PlayerEvent");
+    Check(b->SendGameMessage(MsgType::PlayerEvent, ev), "B sends PlayerEvent");
     Check(demo.WaitFor([&] { return hostEvents >= 1 && aEvents >= 1; }, 10000),
         "host relayed B's PlayerEvent to A");
 
     // SendGameMessage is refused outside a playable session state.
-    Session idle;
-    Check(!idle.SendGameMessage(MsgType::PlayerState, ps),
+    auto idle = std::make_unique<Session>();
+    Check(!idle->SendGameMessage(MsgType::PlayerState, ps),
         "SendGameMessage refused while idle");
 
     for (Session* s : demo.live) {
         s->Stop();
     }
     demo.live.clear();
-    host.Stop();
+    host->Stop();
 }
 
 /// M2 star-relay policy: enemy/combat traffic must NOT ride the
@@ -906,37 +906,37 @@ void RunM2RelayPolicyCheck() {
     std::printf("m2: enemy/combat relay policy (star seam)\n");
     Demo demo;
 
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hostCfg;
     hostCfg.port = 0;
     hostCfg.name = "M2 Host";
     hostCfg.maxPlayers = 3;
-    Check(host.StartHost(hostCfg), "m2 host starts (Listening)");
-    demo.live.push_back(&host);
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hostCfg), "m2 host starts (Listening)");
+    demo.live.push_back(host.get());
+    const u16 port = host->boundPort();
 
-    Session a;
+    auto a = std::make_unique<Session>();
     SessionConfig aCfg;
     aCfg.joinHost = "127.0.0.1";
     aCfg.port = port;
     aCfg.name = "M2 Attacker";
     aCfg.version = kProtocolVersion;
-    Check(a.StartClient(aCfg), "m2 attacker starts");
-    demo.live.push_back(&a);
-    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000),
+    Check(a->StartClient(aCfg), "m2 attacker starts");
+    demo.live.push_back(a.get());
+    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000),
         "m2 attacker joined");
 
-    Session b;
+    auto b = std::make_unique<Session>();
     SessionConfig bCfg;
     bCfg.joinHost = "127.0.0.1";
     bCfg.port = port;
     bCfg.name = "M2 Observer";
     bCfg.version = kProtocolVersion;
-    Check(b.StartClient(bCfg), "m2 observer starts");
-    demo.live.push_back(&b);
-    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000),
+    Check(b->StartClient(bCfg), "m2 observer starts");
+    demo.live.push_back(b.get());
+    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000),
         "m2 observer joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
         "m2 host roster has 3 players");
 
     int hostIntents = 0;
@@ -950,7 +950,7 @@ void RunM2RelayPolicyCheck() {
     int bResults = 0;
     int aEvents = 0;
     int bEvents = 0;
-    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++hostIntents;
@@ -965,7 +965,7 @@ void RunM2RelayPolicyCheck() {
             break;
         }
     });
-    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++aIntents;
@@ -983,7 +983,7 @@ void RunM2RelayPolicyCheck() {
             break;
         }
     });
-    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++bIntents;
@@ -1005,12 +1005,12 @@ void RunM2RelayPolicyCheck() {
     // 1) CombatIntent: client A -> sim owner (host). The host consumes it for
     //    validation; it must NOT be relayed to observer B or echoed back to A.
     PayloadUnion intent = {};
-    intent.combatIntent.attackerId = a.selfId();
+    intent.combatIntent.attackerId = a->selfId();
     intent.combatIntent.targetEnemyId = 77;
     intent.combatIntent.atp = 3;
     intent.combatIntent.powerType = 1;
     intent.combatIntent.seq = 1;
-    Check(a.SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
+    Check(a->SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
     Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
         "sim owner consumed A's CombatIntent");
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -1023,7 +1023,7 @@ void RunM2RelayPolicyCheck() {
     snap.enemySnapshot.type = 0x01AF;
     snap.enemySnapshot.hp = 42;
     snap.enemySnapshot.maxHp = 100;
-    Check(host.SendGameMessage(MsgType::EnemySnapshot, snap), "host sends EnemySnapshot");
+    Check(host->SendGameMessage(MsgType::EnemySnapshot, snap), "host sends EnemySnapshot");
     Check(demo.WaitFor([&] { return aSnapshots >= 1 && bSnapshots >= 1; }, 10000),
         "clients received the host's EnemySnapshot");
 
@@ -1031,7 +1031,7 @@ void RunM2RelayPolicyCheck() {
     PayloadUnion clientSnap = {};
     clientSnap.enemySnapshot.enemyId = 78;
     clientSnap.enemySnapshot.type = 0x01AF;
-    Check(a.SendGameMessage(MsgType::EnemySnapshot, clientSnap), "A sends EnemySnapshot");
+    Check(a->SendGameMessage(MsgType::EnemySnapshot, clientSnap), "A sends EnemySnapshot");
     Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
         "sim owner consumed A's EnemySnapshot");
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -1043,9 +1043,9 @@ void RunM2RelayPolicyCheck() {
     result.combatResult.damage = 4;
     result.combatResult.newHp = 38;
     result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
-    result.combatResult.attackerId = a.selfId();
+    result.combatResult.attackerId = a->selfId();
     result.combatResult.seq = 1;
-    Check(host.SendGameMessage(MsgType::CombatResult, result), "host sends CombatResult");
+    Check(host->SendGameMessage(MsgType::CombatResult, result), "host sends CombatResult");
     Check(demo.WaitFor([&] { return aResults >= 1 && bResults >= 1; }, 10000),
         "CombatResult simulcast reached both clients");
 
@@ -1057,14 +1057,14 @@ void RunM2RelayPolicyCheck() {
     ev.enemyEvent.enemyId = 77;
     ev.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
     ev.enemyEvent.data = 0x1E;  // drop table id
-    Check(host.SendGameMessage(MsgType::EnemyEvent, ev), "host sends EnemyEvent(died)");
+    Check(host->SendGameMessage(MsgType::EnemyEvent, ev), "host sends EnemyEvent(died)");
     Check(demo.WaitFor([&] { return aEvents >= 1 && bEvents >= 1; }, 10000),
         "EnemyEvent reach both clients with no room established (open gate)");
 
     // 6) A buggy client's CombatResult is consumed but NOT echoed to B.
     PayloadUnion rogueResult = {};
     rogueResult.combatResult.targetEnemyId = 99;
-    Check(a.SendGameMessage(MsgType::CombatResult, rogueResult), "A sends CombatResult");
+    Check(a->SendGameMessage(MsgType::CombatResult, rogueResult), "A sends CombatResult");
     Check(demo.WaitFor([&] { return hostResults >= 1; }, 10000),
         "sim owner consumed A's CombatResult");
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -1074,7 +1074,7 @@ void RunM2RelayPolicyCheck() {
         s->Stop();
     }
     demo.live.clear();
-    host.Stop();
+    host->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,14 +1136,14 @@ void RunM3TimeWeatherCheck() {
             "WeatherChange fields survive the round-trip");
     }
 
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hostCfg;
     hostCfg.port = 0;
     hostCfg.name = "M3 Host";
     hostCfg.maxPlayers = 3;
-    Check(host.StartHost(hostCfg), "m3 host starts (Listening)");
-    demo.live.push_back(&host);
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hostCfg), "m3 host starts (Listening)");
+    demo.live.push_back(host.get());
+    const u16 port = host->boundPort();
 
     // The host has a clock and a sky BEFORE joiners arrive (task 6 — the
     // coop publisher updates this every frame in-game; here the test seeds
@@ -1156,44 +1156,44 @@ void RunM3TimeWeatherCheck() {
     hostWeather.mode = static_cast<u8>(WeatherMode::RainLight);
     hostWeather.intensity = 40;
     hostWeather.colpat = 1;
-    host.setWorldTime(hostTime);
-    host.setWorldWeather(hostWeather);
+    host->setWorldTime(hostTime);
+    host->setWorldWeather(hostWeather);
 
-    Session a;
+    auto a = std::make_unique<Session>();
     SessionConfig aCfg;
     aCfg.joinHost = "127.0.0.1";
     aCfg.port = port;
     aCfg.name = "M3 A";
     aCfg.version = kProtocolVersion;
-    Check(a.StartClient(aCfg), "m3 client A starts");
-    demo.live.push_back(&a);
-    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000), "A joined");
-    Check(a.worldTime().time == hostTime.time && a.worldTime().day == hostTime.day &&
-              a.worldTime().rate == hostTime.rate,
+    Check(a->StartClient(aCfg), "m3 client A starts");
+    demo.live.push_back(a.get());
+    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000), "A joined");
+    Check(a->worldTime().time == hostTime.time && a->worldTime().day == hostTime.day &&
+              a->worldTime().rate == hostTime.rate,
         "JoinAccept carries the host's clock to the joiner");
-    Check(a.worldWeather().mode == hostWeather.mode &&
-              a.worldWeather().intensity == hostWeather.intensity &&
-              a.worldWeather().colpat == hostWeather.colpat,
+    Check(a->worldWeather().mode == hostWeather.mode &&
+              a->worldWeather().intensity == hostWeather.intensity &&
+              a->worldWeather().colpat == hostWeather.colpat,
         "JoinAccept carries the host's sky to the joiner");
 
-    Session b;
+    auto b = std::make_unique<Session>();
     SessionConfig bCfg;
     bCfg.joinHost = "127.0.0.1";
     bCfg.port = port;
     bCfg.name = "M3 B";
     bCfg.version = kProtocolVersion;
-    Check(b.StartClient(bCfg), "m3 client B starts");
-    demo.live.push_back(&b);
-    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000), "B joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+    Check(b->StartClient(bCfg), "m3 client B starts");
+    demo.live.push_back(b.get());
+    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000), "B joined");
+    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
         "host roster has 3 players");
-    Check(demo.WaitFor([&] { return a.roster()[b.selfId()].present; }, 10000),
+    Check(demo.WaitFor([&] { return a->roster()[b->selfId()].present; }, 10000),
         "A learned about B via the WorldInit re-broadcast");
 
     int hostSyncs = 0, aSyncs = 0, bSyncs = 0;
     int hostEvents = 0, aEvents = 0;
     int hostWeatherCount = 0, aWeatherCount = 0, bWeatherCount = 0;
-    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::TimeSync:
             ++hostSyncs;
@@ -1208,7 +1208,7 @@ void RunM3TimeWeatherCheck() {
             break;
         }
     });
-    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::TimeSync:
             ++aSyncs;
@@ -1223,7 +1223,7 @@ void RunM3TimeWeatherCheck() {
             break;
         }
     });
-    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::TimeSync:
             ++bSyncs;
@@ -1241,7 +1241,7 @@ void RunM3TimeWeatherCheck() {
     sync.timeSync.time = 332.0f;
     sync.timeSync.day = 5;
     sync.timeSync.rate = kTimeRateNormal;
-    Check(host.SendGameMessage(MsgType::TimeSync, sync), "host sends TimeSync");
+    Check(host->SendGameMessage(MsgType::TimeSync, sync), "host sends TimeSync");
     Check(demo.WaitFor([&] { return aSyncs >= 1 && bSyncs >= 1; }, 10000),
         "TimeSync reached both clients");
 
@@ -1249,7 +1249,7 @@ void RunM3TimeWeatherCheck() {
     ev.timeEvent.eventId = static_cast<u8>(TimeEventId::Dusk);
     ev.timeEvent.time = 332.0f;
     ev.timeEvent.day = 5;
-    Check(host.SendGameMessage(MsgType::TimeEvent, ev), "host sends TimeEvent(Dusk)");
+    Check(host->SendGameMessage(MsgType::TimeEvent, ev), "host sends TimeEvent(Dusk)");
     Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000), "TimeEvent reached client A");
 
     PayloadUnion wc = {};
@@ -1257,7 +1257,7 @@ void RunM3TimeWeatherCheck() {
     wc.weatherChange.thunder = 0;
     wc.weatherChange.intensity = 250;
     wc.weatherChange.colpat = 2;
-    Check(host.SendGameMessage(MsgType::WeatherChange, wc), "host sends WeatherChange");
+    Check(host->SendGameMessage(MsgType::WeatherChange, wc), "host sends WeatherChange");
     Check(demo.WaitFor([&] { return aWeatherCount >= 1 && bWeatherCount >= 1; }, 10000),
         "WeatherChange reached both clients");
 
@@ -1265,12 +1265,12 @@ void RunM3TimeWeatherCheck() {
     // consumed by the host (handler) but not echoed to the other client.
     PayloadUnion rogueSync = {};
     rogueSync.timeSync.time = 42.0f;
-    Check(a.SendGameMessage(MsgType::TimeSync, rogueSync), "A sends a rogue TimeSync");
+    Check(a->SendGameMessage(MsgType::TimeSync, rogueSync), "A sends a rogue TimeSync");
     Check(demo.WaitFor([&] { return hostSyncs >= 1; }, 10000),
         "host consumed A's rogue TimeSync");
     PayloadUnion rogueWc = {};
     rogueWc.weatherChange.mode = static_cast<u8>(WeatherMode::Clear);
-    Check(a.SendGameMessage(MsgType::WeatherChange, rogueWc), "A sends a rogue WeatherChange");
+    Check(a->SendGameMessage(MsgType::WeatherChange, rogueWc), "A sends a rogue WeatherChange");
     Check(demo.WaitFor([&] { return hostWeatherCount >= 1; }, 10000),
         "host consumed A's rogue WeatherChange");
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -1281,7 +1281,7 @@ void RunM3TimeWeatherCheck() {
         s->Stop();
     }
     demo.live.clear();
-    host.Stop();
+    host->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,9 +1585,9 @@ void RunM35TimeWeatherFixCheck() {
 /// traffic flows normally.
 void RunGenerationGuardCheck() {
     std::printf("generation: no stale delivery across peer-slot reuse\n");
-    Transport hostT;
-    Check(hostT.StartHost(0), "host transport up");
-    const u16 port = hostT.BoundPort();
+    auto hostT = std::make_unique<Transport>();
+    Check(hostT->StartHost(0), "host transport up");
+    const u16 port = hostT->BoundPort();
 
     // A: a raw ENet peer driven by the test thread, so the disconnect is a
     // controlled, acknowledged handshake rather than a silent socket close.
@@ -1612,7 +1612,7 @@ void RunGenerationGuardCheck() {
                 }
             }
             InboundPacket p;
-            while (hostT.Poll(p)) {
+            while (hostT->Poll(p)) {
                 if (p.type == NetEventType::Connected && p.peerIndex == 0) {
                     hostSeen = true;
                 }
@@ -1653,10 +1653,10 @@ void RunGenerationGuardCheck() {
 
     // D reconnects onto the freed slot.
     {
-        Transport dT;
-        Check(dT.StartClient("127.0.0.1", port), "client D transport connects (slot reuse)");
+        auto dT = std::make_unique<Transport>();
+        Check(dT->StartClient("127.0.0.1", port), "client D transport connects (slot reuse)");
         InboundPacket pkt;
-        Check(WaitPoll(hostT,
+        Check(WaitPoll(*hostT,
                    [](const InboundPacket& p) {
                        return p.type == NetEventType::Connected && p.peerIndex == 0;
                    },
@@ -1666,19 +1666,19 @@ void RunGenerationGuardCheck() {
         // the generation guard, never delivered as if from D.
         bool sawStale = false;
         InboundPacket p;
-        while (hostT.Poll(p)) {
+        while (hostT->Poll(p)) {
             if (p.type == NetEventType::Data) {
                 sawStale = sawStale || (p.size == 5 && std::memcmp(p.data, "STALE", 5) == 0);
             }
         }
         Check(!sawStale, "host never delivered A's stale snapshot to D");
-        Check(hostT.InboundGenerationDropped() == 1,
+        Check(hostT->InboundGenerationDropped() == 1,
             "stale inbound packet dropped by the generation guard");
 
         // D's fresh snapshot crosses the same slot fine.
         const u8 fresh[] = {'F', 'R', 'E', 'S', 'H'};
-        Check(dT.Send(0, kChannelUnreliable, fresh, sizeof(fresh)), "D enqueues a fresh snapshot");
-        Check(WaitPoll(hostT,
+        Check(dT->Send(0, kChannelUnreliable, fresh, sizeof(fresh)), "D enqueues a fresh snapshot");
+        Check(WaitPoll(*hostT,
                    [](const InboundPacket& p) {
                        return p.type == NetEventType::Data && p.size == 5 &&
                               std::memcmp(p.data, "FRESH", 5) == 0;
@@ -1687,9 +1687,9 @@ void RunGenerationGuardCheck() {
             "host receives D's fresh snapshot on the reused slot");
         Check(pkt.peerIndex == 0 && pkt.channel == kChannelUnreliable,
             "fresh snapshot attributed to peer slot 0 on the snapshot channel");
-        dT.Stop();
+        dT->Stop();
     }
-    hostT.Stop();
+    hostT->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,20 +1700,20 @@ void RunGenerationGuardCheck() {
 /// host must not assign a second PlayerId.
 void RunDuplicateJoinCheck() {
     std::printf("join: duplicate JoinRequest is ignored\n");
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hc;
     hc.port = 0;
     hc.name = "DupHost";
     hc.maxPlayers = 4;
-    Check(host.StartHost(hc), "host session up (maxPlayers 4)");
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hc), "host session up (maxPlayers 4)");
+    const u16 port = host->boundPort();
 
     // Raw transport "client" that speaks the wire protocol but not the
     // session machine — it can send JoinRequest as many times as it likes.
-    Transport rogue;
-    Check(rogue.StartClient("127.0.0.1", port), "rogue client transport connects");
+    auto rogue = std::make_unique<Transport>();
+    Check(rogue->StartClient("127.0.0.1", port), "rogue client transport connects");
     InboundPacket pkt;
-    Check(WaitPoll(rogue, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+    Check(WaitPoll(*rogue, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
                10000, pkt),
         "rogue sees Connected");
 
@@ -1726,13 +1726,13 @@ void RunDuplicateJoinCheck() {
     ByteWriter w(buf, sizeof(buf));
     Check(SerializeMessage(jr, w), "rogue JoinRequest serializes");
 
-    Check(rogue.Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #1");
+    Check(rogue->Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #1");
     {
         const u64 deadline = NowMs() + 10000;
         bool joined = false;
         while (NowMs() < deadline) {
-            host.Update();
-            if (PresentCountOf(host) == 2) {
+            host->Update();
+            if (PresentCountOf(*host) == 2) {
                 joined = true;
                 break;
             }
@@ -1740,23 +1740,23 @@ void RunDuplicateJoinCheck() {
         }
         Check(joined, "host assigned player 1 to the rogue (roster == 2)");
     }
-    Check(host.roster()[1].present, "rogue holds PlayerId 1");
+    Check(host->roster()[1].present, "rogue holds PlayerId 1");
 
     // Same peer sends JoinRequest again; the roster must not grow.
-    Check(rogue.Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #2");
+    Check(rogue->Send(0, kChannelReliable, buf, w.size()), "rogue sends JoinRequest #2");
     {
-        const u64 before = PresentCountOf(host);
+        const u64 before = PresentCountOf(*host);
         const u64 deadline = NowMs() + 1000;
         while (NowMs() < deadline) {
-            host.Update();
+            host->Update();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        Check(PresentCountOf(host) == before, "duplicate JoinRequest ignored — no second slot");
-        Check(!host.roster()[2].present && !host.roster()[3].present, "slots 2/3 stay free");
+        Check(PresentCountOf(*host) == before, "duplicate JoinRequest ignored — no second slot");
+        Check(!host->roster()[2].present && !host->roster()[3].present, "slots 2/3 stay free");
     }
 
-    rogue.Stop();
-    host.Stop();
+    rogue->Stop();
+    host->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1768,26 +1768,26 @@ void RunDuplicateJoinCheck() {
 /// slot is not marked present.
 void RunJoinAcceptValidationCheck() {
     std::printf("validation: forged JoinAccept rejected by the client session\n");
-    Transport fakeHost;
-    Check(fakeHost.StartHost(0), "fake host transport up");
-    const u16 port = fakeHost.BoundPort();
+    auto fakeHost = std::make_unique<Transport>();
+    Check(fakeHost->StartHost(0), "fake host transport up");
+    const u16 port = fakeHost->BoundPort();
     InboundPacket pkt;
 
     for (int caseNo = 0; caseNo < 2; ++caseNo) {
-        Session c;
+        auto c = std::make_unique<Session>();
         SessionConfig cfg;
         cfg.joinHost = "127.0.0.1";
         cfg.port = port;
         cfg.name = "Victim";
-        Check(c.StartClient(cfg), "client session starts");
+        Check(c->StartClient(cfg), "client session starts");
         // Note: each case's client stops with a HARD transport teardown, so
         // the fake host does not free the peer slot until ENet's ~5 s peer
         // timeout — later cases land on higher slots. Always send to the
         // slot captured from the connect event.
-        Check(WaitPoll(fakeHost, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
+        Check(WaitPoll(*fakeHost, [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
                    10000, pkt),
             "fake host sees the client connect");
-        c.Update();  // let the client process its own Connected (sends JoinRequest, ignored)
+        c->Update();  // let the client process its own Connected (sends JoinRequest, ignored)
 
         Message accept = MakeMessage(MsgType::JoinAccept);
         if (caseNo == 0) {
@@ -1801,16 +1801,16 @@ void RunJoinAcceptValidationCheck() {
         u8 buf[kMaxMessageSize];
         ByteWriter w(buf, sizeof(buf));
         Check(SerializeMessage(accept, w), "forged JoinAccept serializes");
-        Check(fakeHost.Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
+        Check(fakeHost->Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
             "fake host sends the forged JoinAccept");
-        Check(WaitSessionState(c, SessionState::Rejected, 10000),
+        Check(WaitSessionState(*c, SessionState::Rejected, 10000),
             caseNo == 0 ? "client rejected out-of-range assignedPlayerId"
                         : "client rejected roster-not-present assignment");
-        Check(std::strstr(c.rejectReasonName(), "invalid") != nullptr,
+        Check(std::strstr(c->rejectReasonName(), "invalid") != nullptr,
             "rejection reason is 'invalid join accept'");
-        c.Stop();
+        c->Stop();
     }
-    fakeHost.Stop();
+    fakeHost->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1822,9 +1822,9 @@ void RunJoinAcceptValidationCheck() {
 /// transport must drop it and count it as InboundOversized.
 void RunOversizedMetricCheck() {
     std::printf("metric: oversized inbound packets counted\n");
-    Transport hostT;
-    Check(hostT.StartHost(0), "host transport up");
-    const u16 port = hostT.BoundPort();
+    auto hostT = std::make_unique<Transport>();
+    Check(hostT->StartHost(0), "host transport up");
+    const u16 port = hostT->BoundPort();
 
     ENetHost* raw = enet_host_create(nullptr, 1, 2, 0, 0);
     Check(raw != nullptr, "raw ENet client host up");
@@ -1858,16 +1858,16 @@ void RunOversizedMetricCheck() {
 
     InboundPacket p;
     const u64 deadline = NowMs() + 10000;
-    while (NowMs() < deadline && hostT.InboundOversized() == 0) {
-        while (hostT.Poll(p)) {  // drain the connect event etc.
+    while (NowMs() < deadline && hostT->InboundOversized() == 0) {
+        while (hostT->Poll(p)) {  // drain the connect event etc.
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    Check(hostT.InboundOversized() >= 1, "oversized inbound packet dropped and counted");
+    Check(hostT->InboundOversized() >= 1, "oversized inbound packet dropped and counted");
 
     enet_peer_reset(rawPeer);
     enet_host_destroy(raw);
-    hostT.Stop();
+    hostT->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -1979,39 +1979,39 @@ void RunM4RoomRoutingCheck() {
     std::printf("m4: room-owner routing + same-room snapshot/event scoping (sessions)\n");
     Demo demo;
 
-    Session host;
+    auto host = std::make_unique<Session>();
     SessionConfig hostCfg;
     hostCfg.port = 0;
     hostCfg.name = "M4 Host";
     hostCfg.maxPlayers = 3;
-    Check(host.StartHost(hostCfg), "m4 host starts (Listening)");
-    demo.live.push_back(&host);
-    const u16 port = host.boundPort();
+    Check(host->StartHost(hostCfg), "m4 host starts (Listening)");
+    demo.live.push_back(host.get());
+    const u16 port = host->boundPort();
     // The host's own room: room 1 (host-defaults-own-its-room).
-    host.setLocalRoom("F_SP108", 1);
+    host->setLocalRoom("F_SP108", 1);
 
-    Session a;
+    auto a = std::make_unique<Session>();
     SessionConfig aCfg;
     aCfg.joinHost = "127.0.0.1";
     aCfg.port = port;
     aCfg.name = "M4 Attacker";
     aCfg.version = kProtocolVersion;
-    Check(a.StartClient(aCfg), "m4 attacker starts");
-    demo.live.push_back(&a);
-    Check(demo.WaitFor([&] { return a.state() == SessionState::Joined; }, 10000),
+    Check(a->StartClient(aCfg), "m4 attacker starts");
+    demo.live.push_back(a.get());
+    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000),
         "m4 attacker joined");
 
-    Session b;
+    auto b = std::make_unique<Session>();
     SessionConfig bCfg;
     bCfg.joinHost = "127.0.0.1";
     bCfg.port = port;
     bCfg.name = "M4 Owner";
     bCfg.version = kProtocolVersion;
-    Check(b.StartClient(bCfg), "m4 owner starts");
-    demo.live.push_back(&b);
-    Check(demo.WaitFor([&] { return b.state() == SessionState::Joined; }, 10000),
+    Check(b->StartClient(bCfg), "m4 owner starts");
+    demo.live.push_back(b.get());
+    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000),
         "m4 owner joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(host) == 3; }, 10000),
+    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
         "m4 host roster has 3 players");
 
     int hostIntents = 0;
@@ -2026,7 +2026,7 @@ void RunM4RoomRoutingCheck() {
     int hostEvents = 0;
     int aEvents = 0;
     int bEvents = 0;
-    host.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++hostIntents;
@@ -2044,7 +2044,7 @@ void RunM4RoomRoutingCheck() {
             break;
         }
     });
-    a.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++aIntents;
@@ -2062,7 +2062,7 @@ void RunM4RoomRoutingCheck() {
             break;
         }
     });
-    b.SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
+    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         switch (type) {
         case MsgType::CombatIntent:
             ++bIntents;
@@ -2083,22 +2083,22 @@ void RunM4RoomRoutingCheck() {
 
     // -- room establishment: B enters room 2 first (owner=B), then A (sticky).
     PayloadUnion bRoom = {};
-    bRoom.playerState.playerId = b.selfId();
+    bRoom.playerState.playerId = b->selfId();
     std::strncpy(bRoom.playerState.stage, "F_SP108", sizeof(bRoom.playerState.stage) - 1);
     bRoom.playerState.roomNo = 2;
-    Check(b.SendGameMessage(MsgType::PlayerState, bRoom), "B announces room 2");
-    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+    Check(b->SendGameMessage(MsgType::PlayerState, bRoom), "B announces room 2");
+    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
         "B owns room 2 (first in)");
-    Check(demo.WaitFor([&] { return a.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+    Check(demo.WaitFor([&] { return a->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
         "ownership broadcast reached A");
 
     PayloadUnion aRoom = {};
-    aRoom.playerState.playerId = a.selfId();
+    aRoom.playerState.playerId = a->selfId();
     std::strncpy(aRoom.playerState.stage, "F_SP108", sizeof(aRoom.playerState.stage) - 1);
     aRoom.playerState.roomNo = 2;
-    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A announces room 2");
+    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A announces room 2");
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    Check(host.roomOwner("F_SP108", 2) == b.selfId(),
+    Check(host->roomOwner("F_SP108", 2) == b->selfId(),
         "A arriving second does not take ownership (sticky)");
 
     // -- 0b) M4.5 review MINOR 1: a cross-stage SceneChange (scene=0 — the
@@ -2108,16 +2108,16 @@ void RunM4RoomRoutingCheck() {
     //    room belongs to the NEW stage; the first new-stage PlayerState
     //    (channel 1, send-window-guaranteed) establishes the entry instead.
     PayloadUnion xStage = {};
-    xStage.playerEvent.playerId = a.selfId();
+    xStage.playerEvent.playerId = a->selfId();
     xStage.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     xStage.playerEvent.data = 7;  // the NEW stage's room
     xStage.playerEvent.scene = 0; // stage changed
-    Check(a.SendGameMessage(MsgType::PlayerEvent, xStage),
+    Check(a->SendGameMessage(MsgType::PlayerEvent, xStage),
         "A sends a cross-stage SceneChange (scene=0)");
     // A's aRoom PlayerState is unreliable; pump until the host processed it.
-    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
         "host processed A's room-2 PlayerState");
-    Check(a.SendGameMessage(MsgType::PlayerEvent, xStage),
+    Check(a->SendGameMessage(MsgType::PlayerEvent, xStage),
         "A sends a cross-stage SceneChange (scene=0)");
     // Pump a fixed window so the reliable SceneChange is certainly delivered
     // (its only observable guarantee is that it does NOT move the table).
@@ -2128,46 +2128,46 @@ void RunM4RoomRoutingCheck() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    Check(host.playerRoom(a.selfId()).room == 2,
+    Check(host->playerRoom(a->selfId()).room == 2,
         "cross-stage SceneChange did not move A in the room table");
-    Check(host.roomOwner("F_SP108", 7) == kInvalidPlayerId,
+    Check(host->roomOwner("F_SP108", 7) == kInvalidPlayerId,
         "no bogus (F_SP108, 7) owner entry from the cross-stage SceneChange");
     PayloadUnion xState = {};
-    xState.playerState.playerId = a.selfId();
+    xState.playerState.playerId = a->selfId();
     std::strncpy(xState.playerState.stage, "F_SP104", sizeof(xState.playerState.stage) - 1);
     xState.playerState.roomNo = 7;
-    Check(a.SendGameMessage(MsgType::PlayerState, xState),
+    Check(a->SendGameMessage(MsgType::PlayerState, xState),
         "A's first new-stage PlayerState (F_SP104, 7)");
     Check(demo.WaitFor(
             [&] {
-                return host.playerRoom(a.selfId()).room == 7 &&
-                       std::strcmp(host.playerRoom(a.selfId()).stage, "F_SP104") == 0;
+                return host->playerRoom(a->selfId()).room == 7 &&
+                       std::strcmp(host->playerRoom(a->selfId()).stage, "F_SP104") == 0;
             },
             10000),
         "new-stage PlayerState establishes (F_SP104, 7)");
-    Check(demo.WaitFor([&] { return host.roomOwner("F_SP104", 7) == a.selfId(); }, 10000),
+    Check(demo.WaitFor([&] { return host->roomOwner("F_SP104", 7) == a->selfId(); }, 10000),
         "A owns the room it first enters on the new stage");
     // A returns to room 2 (same-stage moves mark scene=1).
-    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
+    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
     PayloadUnion aSceneBack = {};
-    aSceneBack.playerEvent.playerId = a.selfId();
+    aSceneBack.playerEvent.playerId = a->selfId();
     aSceneBack.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     aSceneBack.playerEvent.data = 2;
     aSceneBack.playerEvent.scene = 1; // same-stage move
-    Check(a.SendGameMessage(MsgType::PlayerEvent, aSceneBack),
+    Check(a->SendGameMessage(MsgType::PlayerEvent, aSceneBack),
         "A announces room 2 again (same-stage, scene=1)");
-    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
         "host sees A back in room 2");
 
     // -- 1) CombatIntent from A (room 2) routes to the room owner B, NOT to
     //    the host's handler and NOT back to A.
     PayloadUnion intent = {};
-    intent.combatIntent.attackerId = a.selfId();
+    intent.combatIntent.attackerId = a->selfId();
     intent.combatIntent.targetEnemyId = 0x0203;  // stage-placed (room 2)
     intent.combatIntent.atp = 3;
     intent.combatIntent.powerType = 1;
     intent.combatIntent.seq = 1;
-    Check(a.SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
+    Check(a->SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
     Check(demo.WaitFor([&] { return bIntents >= 1; }, 10000),
         "room owner B received A's CombatIntent (routed, not relayed)");
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -2177,31 +2177,31 @@ void RunM4RoomRoutingCheck() {
     // -- 2) A moves into the host's room 1; the host-default rule keeps the
     //    host as owner. A's intent in room 1 must reach the host's handler.
     PayloadUnion aRoom1 = {};
-    aRoom1.playerState.playerId = a.selfId();
+    aRoom1.playerState.playerId = a->selfId();
     std::strncpy(aRoom1.playerState.stage, "F_SP108", sizeof(aRoom1.playerState.stage) - 1);
     aRoom1.playerState.roomNo = 1;
-    Check(a.SendGameMessage(MsgType::PlayerState, aRoom1), "A moves to room 1");
+    Check(a->SendGameMessage(MsgType::PlayerState, aRoom1), "A moves to room 1");
     // The reliable SceneChange is the room-change authority (the real game
     // sends it before the unreliable states); wait for the HOST's own view of
     // A's room rather than the (already-true) ownership, so the intent below
     // routes on A's NEW room.
     PayloadUnion aScene1 = {};
-    aScene1.playerEvent.playerId = a.selfId();
+    aScene1.playerEvent.playerId = a->selfId();
     aScene1.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     aScene1.playerEvent.data = 1;
     aScene1.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
-    Check(a.SendGameMessage(MsgType::PlayerEvent, aScene1), "A announces room 1 (reliable)");
-    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 1; }, 10000),
+    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene1), "A announces room 1 (reliable)");
+    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 1; }, 10000),
         "host sees A in room 1");
-    Check(host.roomOwner("F_SP108", 1) == 0,
+    Check(host->roomOwner("F_SP108", 1) == 0,
         "host owns room 1 even with a client present (host default)");
     PayloadUnion intent2 = {};
-    intent2.combatIntent.attackerId = a.selfId();
+    intent2.combatIntent.attackerId = a->selfId();
     intent2.combatIntent.targetEnemyId = 0x0103;
     intent2.combatIntent.atp = 2;
     intent2.combatIntent.powerType = 1;
     intent2.combatIntent.seq = 2;
-    Check(a.SendGameMessage(MsgType::CombatIntent, intent2),
+    Check(a->SendGameMessage(MsgType::CombatIntent, intent2),
         "A sends CombatIntent in the host's room");
     Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
         "host consumed the intent for its own room");
@@ -2219,12 +2219,86 @@ void RunM4RoomRoutingCheck() {
     ev2.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
     ev2.enemyEvent.data = 0x1E;       // drop table id
     ev2.enemyEvent.flagMask = 0x04;   // save switch that must NOT reach A
-    Check(b.SendGameMessage(MsgType::EnemyEvent, ev2), "owner B sends EnemyEvent(died) for room 2");
+    Check(b->SendGameMessage(MsgType::EnemyEvent, ev2), "owner B sends EnemyEvent(died) for room 2");
     Check(demo.WaitFor([&] { return hostEvents >= 1; }, 10000),
         "host consumed B's EnemyEvent");
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
     Check(aEvents == 0, "room-2 died event NOT relayed to the room-1 peer A (room scoping)");
     Check(bEvents == 0, "died event not echoed back to the owner B");
+
+    // -- 2c) M4.6 (capstone MINOR K): the RoomClear receive-gate rows + the
+    //    explicit CROSS-STAGE EnemyEvent row. RoomClear carries the BARE room
+    //    number; the relay is room-scoped like Died (stage+room), and the
+    //    receive side (coop_enemy.cpp) further gates on the local room. These
+    //    lock the M4.5 MAJOR-2 fix exactly.
+    //    (a) Owner B clears room 2 while A is in room 1: the bit must NOT
+    //    reach A (a room-1 peer no-ops).
+    PayloadUnion roomClear = {};
+    roomClear.enemyEvent.enemyId = 2;  // bare room number
+    roomClear.enemyEvent.eventId = static_cast<u8>(EnemyEventId::RoomClear);
+    Check(b->SendGameMessage(MsgType::EnemyEvent, roomClear),
+        "owner B sends EnemyEvent(RoomClear) for room 2");
+    Check(demo.WaitFor([&] { return hostEvents >= 2; }, 10000),
+        "host consumed B's RoomClear");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(aEvents == 0, "RoomClear room 2 NOT relayed to the room-1 peer A (receive gate no-op)");
+    Check(bEvents == 0, "RoomClear not echoed back to the owner B");
+
+    //    (b) CROSS-STAGE row: A moves to (F_SP104, 2) — a stage whose room
+    //    number COINCIDES with B's room 2 in F_SP108. B's died event for a
+    //    F_SP108 room-2 enemy must NOT reach A: the STAGE half of the
+    //    (stage, room) relay key blocks it (the pre-M4.5 star-relay would
+    //    have mis-killed A's coincident (2<<8)|setID local enemy, spawned the
+    //    wrong drop and granted the wrong switch).
+    PayloadUnion xRoom = {};
+    xRoom.playerState.playerId = a->selfId();
+    std::strncpy(xRoom.playerState.stage, "F_SP104", sizeof(xRoom.playerState.stage) - 1);
+    xRoom.playerState.roomNo = 2;
+    Check(a->SendGameMessage(MsgType::PlayerState, xRoom), "A moves to (F_SP104, 2)");
+    PayloadUnion xScene = {};
+    xScene.playerEvent.playerId = a->selfId();
+    xScene.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    xScene.playerEvent.data = 2;
+    xScene.playerEvent.scene = 0;  // cross-stage move
+    Check(a->SendGameMessage(MsgType::PlayerEvent, xScene), "A announces the cross-stage move");
+    Check(demo.WaitFor(
+            [&] {
+                return std::strcmp(host->playerRoom(a->selfId()).stage, "F_SP104") == 0 &&
+                       host->playerRoom(a->selfId()).room == 2;
+            },
+            10000),
+        "host sees A in (F_SP104, 2)");
+    Check(demo.WaitFor([&] { return host->roomOwner("F_SP104", 2) == a->selfId(); }, 10000),
+        "A owns (F_SP104, 2) (first in)");
+    PayloadUnion xDied = {};
+    xDied.enemyEvent.enemyId = 0x0203;  // stage-placed room-2 enemy in F_SP108
+    xDied.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
+    xDied.enemyEvent.data = 0x1E;       // drop table id that must NOT spawn on A
+    xDied.enemyEvent.flagMask = 0x06;   // save switch that must NOT reach A
+    Check(b->SendGameMessage(MsgType::EnemyEvent, xDied),
+        "owner B sends died for a F_SP108 room-2 enemy");
+    Check(demo.WaitFor([&] { return hostEvents >= 3; }, 10000),
+        "host consumed the cross-stage died event");
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    Check(aEvents == 0,
+        "cross-stage died (coincident room 2, different stage) NOT relayed to A");
+    Check(bEvents == 0, "cross-stage died not echoed back to the owner B");
+
+    //    (c) A returns to room 1 (F_SP108) so the section-3 snapshot-scoping
+    //    checks below still see a room-1 peer.
+    PayloadUnion aRoom1b = {};
+    aRoom1b.playerState.playerId = a->selfId();
+    std::strncpy(aRoom1b.playerState.stage, "F_SP108", sizeof(aRoom1b.playerState.stage) - 1);
+    aRoom1b.playerState.roomNo = 1;
+    Check(a->SendGameMessage(MsgType::PlayerState, aRoom1b), "A returns to room 1");
+    PayloadUnion aScene1b = {};
+    aScene1b.playerEvent.playerId = a->selfId();
+    aScene1b.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
+    aScene1b.playerEvent.data = 1;
+    aScene1b.playerEvent.scene = 1;  // same-stage move
+    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene1b), "A announces room 1 (reliable)");
+    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 1; }, 10000),
+        "host sees A back in room 1");
 
     // -- 3) EnemySnapshot from owner B (room 2) reaches only room-2 peers.
     //    A is now in room 1, so B's room-2 snapshot must NOT reach A (and
@@ -2234,7 +2308,7 @@ void RunM4RoomRoutingCheck() {
     snap.enemySnapshot.type = 0x01AF;
     snap.enemySnapshot.hp = 42;
     snap.enemySnapshot.maxHp = 100;
-    Check(b.SendGameMessage(MsgType::EnemySnapshot, snap), "owner B sends EnemySnapshot");
+    Check(b->SendGameMessage(MsgType::EnemySnapshot, snap), "owner B sends EnemySnapshot");
     Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
         "host consumed B's EnemySnapshot");
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -2243,21 +2317,21 @@ void RunM4RoomRoutingCheck() {
     Check(bSnapshots == 0, "snapshot not echoed back to the owner");
 
     // -- 4) A moves back to room 2: now B's snapshot reaches A.
-    Check(a.SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
+    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
     PayloadUnion aScene2 = {};
-    aScene2.playerEvent.playerId = a.selfId();
+    aScene2.playerEvent.playerId = a->selfId();
     aScene2.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
     aScene2.playerEvent.data = 2;
     aScene2.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
-    Check(a.SendGameMessage(MsgType::PlayerEvent, aScene2), "A announces room 2 (reliable)");
-    Check(demo.WaitFor([&] { return host.playerRoom(a.selfId()).room == 2; }, 10000),
+    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene2), "A announces room 2 (reliable)");
+    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
         "host sees A back in room 2");
-    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == b.selfId(); }, 10000),
+    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
         "B still owns room 2 (sticky across A's moves)");
     PayloadUnion snap2 = {};
     snap2.enemySnapshot.enemyId = 0x0207;
     snap2.enemySnapshot.type = 0x01AF;
-    Check(b.SendGameMessage(MsgType::EnemySnapshot, snap2), "owner B sends another EnemySnapshot");
+    Check(b->SendGameMessage(MsgType::EnemySnapshot, snap2), "owner B sends another EnemySnapshot");
     Check(demo.WaitFor([&] { return aSnapshots >= 1; }, 10000),
         "room-2 snapshot relayed to the room-2 peer A");
     // ... and now B's room-2 died event DOES reach A (both in room 2).
@@ -2266,9 +2340,16 @@ void RunM4RoomRoutingCheck() {
     ev3.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
     ev3.enemyEvent.data = 0x1F;
     ev3.enemyEvent.flagMask = 0x05;
-    Check(b.SendGameMessage(MsgType::EnemyEvent, ev3), "owner B sends another EnemyEvent(died)");
+    Check(b->SendGameMessage(MsgType::EnemyEvent, ev3), "owner B sends another EnemyEvent(died)");
     Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000),
         "room-2 died event relayed to the room-2 peer A");
+
+    // Capstone MINOR K (M4.6): the RoomClear receive gate LANDS once A is a
+    // room-2 peer — the same bit that no-oped from room 1 in 2c(a).
+    Check(b->SendGameMessage(MsgType::EnemyEvent, roomClear),
+        "owner B sends RoomClear for room 2 again");
+    Check(demo.WaitFor([&] { return aEvents >= 2; }, 10000),
+        "room-2 RoomClear relayed to the room-2 peer A (receive gate lands)");
 
     // -- 5) CombatResult from owner B reaches everyone except the origin
     //    (star relay; the host relays to the other joined peer A).
@@ -2277,9 +2358,9 @@ void RunM4RoomRoutingCheck() {
     result.combatResult.damage = 4;
     result.combatResult.newHp = 38;
     result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
-    result.combatResult.attackerId = a.selfId();
+    result.combatResult.attackerId = a->selfId();
     result.combatResult.seq = 1;
-    Check(b.SendGameMessage(MsgType::CombatResult, result), "owner B sends CombatResult");
+    Check(b->SendGameMessage(MsgType::CombatResult, result), "owner B sends CombatResult");
     Check(demo.WaitFor([&] { return aResults >= 1 && cResults >= 1; }, 10000),
         "CombatResult from a client owner reaches the other peer + host (star relay)");
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -2288,16 +2369,16 @@ void RunM4RoomRoutingCheck() {
     // -- 6) Ownership transfer on leave: B (owner of room 2) leaves; A is
     //    still in room 2 and must take over.
     PayloadUnion leave = {};
-    leave.playerLeave.playerId = b.selfId();
-    Check(b.SendGameMessage(MsgType::PlayerLeave, leave), "B sends PlayerLeave");
-    Check(demo.WaitFor([&] { return host.roomOwner("F_SP108", 2) == a.selfId(); }, 10000),
+    leave.playerLeave.playerId = b->selfId();
+    Check(b->SendGameMessage(MsgType::PlayerLeave, leave), "B sends PlayerLeave");
+    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == a->selfId(); }, 10000),
         "room 2 ownership transferred to A after the owner left");
 
     for (Session* s : demo.live) {
         s->Stop();
     }
     demo.live.clear();
-    host.Stop();
+    host->Stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -2320,42 +2401,42 @@ void RunM4WorldStageCheck() {
     // join-warp decision table itself was removed with the feature.)
     {
         Demo demo;
-        Session host;
+        auto host = std::make_unique<Session>();
         SessionConfig hostCfg;
         hostCfg.port = 0;
         hostCfg.name = "Warp Host";
         hostCfg.maxPlayers = 2;
-        Check(host.StartHost(hostCfg), "host starts and will publish worldStage");
-        demo.live.push_back(&host);
-        const u16 port = host.boundPort();
+        Check(host->StartHost(hostCfg), "host starts and will publish worldStage");
+        demo.live.push_back(host.get());
+        const u16 port = host->boundPort();
 
         StageInfo hostStage;
         std::strncpy(hostStage.stage, "F_SP103", sizeof(hostStage.stage) - 1);
         hostStage.room = 4;
         hostStage.layer = -1;
         hostStage.point = 3;
-        host.setWorldStage(hostStage);
+        host->setWorldStage(hostStage);
 
-        Session c;
+        auto c = std::make_unique<Session>();
         SessionConfig cCfg;
         cCfg.joinHost = "127.0.0.1";
         cCfg.port = port;
         cCfg.name = "Warp Client";
         cCfg.version = kProtocolVersion;
-        Check(c.StartClient(cCfg), "client starts");
-        demo.live.push_back(&c);
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+        Check(c->StartClient(cCfg), "client starts");
+        demo.live.push_back(c.get());
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Joined; }, 10000),
             "client joined");
-        Check(std::strcmp(c.worldStage().stage, "F_SP103") == 0 && c.worldStage().room == 4,
+        Check(std::strcmp(c->worldStage().stage, "F_SP103") == 0 && c->worldStage().room == 4,
             "client received the host's filled worldStage (stage+room)");
-        Check(std::strcmp(host.worldStage().stage, "F_SP103") == 0,
+        Check(std::strcmp(host->worldStage().stage, "F_SP103") == 0,
             "host retains its published worldStage");
 
         for (Session* s : demo.live) {
             s->Stop();
         }
         demo.live.clear();
-        host.Stop();
+        host->Stop();
     }
 }
 
@@ -2411,66 +2492,66 @@ void RunM46SessionRestartCheck() {
 
     // -- leg A: graceful host leave (SessionEnd) ---------------------------
     {
-        Session hostA;
+        auto hostA = std::make_unique<Session>();
         SessionConfig hcfg;
         hcfg.port = 0;
         hcfg.name = "M46 Host A";
         hcfg.maxPlayers = 2;
-        Check(hostA.StartHost(hcfg), "host A starts (Listening)");
-        demo.live.push_back(&hostA);
-        const u16 portA = hostA.boundPort();
+        Check(hostA->StartHost(hcfg), "host A starts (Listening)");
+        demo.live.push_back(hostA.get());
+        const u16 portA = hostA->boundPort();
 
-        Session c;
+        auto c = std::make_unique<Session>();
         SessionConfig ccfg;
         ccfg.joinHost = "127.0.0.1";
         ccfg.port = portA;
         ccfg.name = "M46 Client";
         ccfg.version = kProtocolVersion;
-        Check(c.StartClient(ccfg), "client starts (Connecting)");
-        demo.live.push_back(&c);
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+        Check(c->StartClient(ccfg), "client starts (Connecting)");
+        demo.live.push_back(c.get());
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Joined; }, 10000),
             "client joined host A");
-        Check(c.transportRunning(), "client transport running while joined");
+        Check(c->transportRunning(), "client transport running while joined");
 
         // The host ends the session from ITS side: the client goes Ended with
         // NO transport teardown (the pre-fix dead-end — the host's SessionEnd
         // arrives via OnSessionEnd; a hard kill arrives via HandleDisconnect;
         // both leave state_ = Ended with the transport running).
-        hostA.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostA),
+        hostA->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), hostA.get()),
             demo.live.end());
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Ended; }, 10000),
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Ended; }, 10000),
             "client session Ended (host-side end)");
-        Check(c.transportRunning(),
+        Check(c->transportRunning(),
             "client transport STILL running after the remote-side end (pre-teardown)");
 
         // Stop() must tear the transport down even though state_ == Ended.
-        c.Stop();
-        Check(!c.transportRunning(), "Stop() stopped the transport after a remote-side end");
-        Check(c.state() == SessionState::Ended, "session state stays Ended after Stop");
+        c->Stop();
+        Check(!c->transportRunning(), "Stop() stopped the transport after a remote-side end");
+        Check(c->state() == SessionState::Ended, "session state stays Ended after Stop");
 
         // A second session on the same Session object in the same process.
-        Session hostB;
+        auto hostB = std::make_unique<Session>();
         SessionConfig h2;
         h2.port = 0;
         h2.name = "M46 Host B";
         h2.maxPlayers = 2;
-        Check(hostB.StartHost(h2), "host B starts (Listening)");
-        demo.live.push_back(&hostB);
-        const u16 portB = hostB.boundPort();
+        Check(hostB->StartHost(h2), "host B starts (Listening)");
+        demo.live.push_back(hostB.get());
+        const u16 portB = hostB->boundPort();
 
         ccfg.port = portB;  // point the client at host B, not the dead host A
-        Check(c.StartClient(ccfg),
+        Check(c->StartClient(ccfg),
             "client restarts against host B (second session, same process)");
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Joined; }, 10000),
             "client reached Joined in the second session");
-        Check(c.selfId() == 1, "client re-assigned a PlayerId in the second session");
-        Check(c.transportRunning(), "second-session transport running");
+        Check(c->selfId() == 1, "client re-assigned a PlayerId in the second session");
+        Check(c->transportRunning(), "second-session transport running");
 
-        c.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &c), demo.live.end());
-        hostB.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostB),
+        c->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), c.get()), demo.live.end());
+        hostB->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), hostB.get()),
             demo.live.end());
     }
 
@@ -2482,24 +2563,24 @@ void RunM46SessionRestartCheck() {
         // a SessionEnd (as in a crash). The client detects the dead peer via
         // the ENet peer timeout (~5 s) and HandleDisconnect flips it to Ended
         // with endReason ConnectionLost.
-        Transport fakeHost;
-        Check(fakeHost.StartHost(0), "fake host transport up (crash victim)");
-        const u16 port = fakeHost.BoundPort();
+        auto fakeHost = std::make_unique<Transport>();
+        Check(fakeHost->StartHost(0), "fake host transport up (crash victim)");
+        const u16 port = fakeHost->BoundPort();
         InboundPacket pkt;
 
-        Session c;
+        auto c = std::make_unique<Session>();
         SessionConfig ccfg;
         ccfg.joinHost = "127.0.0.1";
         ccfg.port = port;
         ccfg.name = "M46 Crash Victim";
         ccfg.version = kProtocolVersion;
-        Check(c.StartClient(ccfg), "crash-victim client starts (Connecting)");
-        demo.live.push_back(&c);
-        Check(WaitPoll(fakeHost,
+        Check(c->StartClient(ccfg), "crash-victim client starts (Connecting)");
+        demo.live.push_back(c.get());
+        Check(WaitPoll(*fakeHost,
                    [](const InboundPacket& p) { return p.type == NetEventType::Connected; },
                    10000, pkt),
             "fake host sees the client connect");
-        c.Update();  // client processes Connected and sends JoinRequest
+        c->Update();  // client processes Connected and sends JoinRequest
 
         // Fake host replies with a valid JoinAccept (id 1 backed by roster).
         Message accept = MakeMessage(MsgType::JoinAccept);
@@ -2516,43 +2597,43 @@ void RunM46SessionRestartCheck() {
         u8 buf[kMaxMessageSize];
         ByteWriter w(buf, sizeof(buf));
         Check(SerializeMessage(accept, w), "fake JoinAccept serializes");
-        Check(fakeHost.Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
+        Check(fakeHost->Send(pkt.peerIndex, kChannelReliable, buf, w.size()),
             "fake host sends the valid JoinAccept");
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Joined; }, 10000),
             "crash-victim client reached Joined (JoinAccept accepted)");
 
         // The host transport dies with no SessionEnd; the client's ENet peer
         // times out and HandleDisconnect fires -> Ended (ConnectionLost).
-        fakeHost.Stop();
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Ended; }, 15000),
+        fakeHost->Stop();
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Ended; }, 15000),
             "crash-victim client Ended via connection loss (peer timeout)");
-        Check(c.endReason() == SessionEndReason::ConnectionLost,
+        Check(c->endReason() == SessionEndReason::ConnectionLost,
             "end reason is ConnectionLost (HandleDisconnect path)");
-        Check(c.transportRunning(),
+        Check(c->transportRunning(),
             "crash-victim transport STILL running after the connection loss (pre-teardown)");
 
         // Stop() tears it down; a third session in the same process works.
-        c.Stop();
-        Check(!c.transportRunning(),
+        c->Stop();
+        Check(!c->transportRunning(),
             "Stop() stopped the crash-victim transport after ConnectionLost");
 
-        Session hostC;
+        auto hostC = std::make_unique<Session>();
         SessionConfig h3;
         h3.port = 0;
         h3.name = "M46 Host C";
         h3.maxPlayers = 2;
-        Check(hostC.StartHost(h3), "host C starts (Listening)");
-        demo.live.push_back(&hostC);
-        const u16 portC = hostC.boundPort();
+        Check(hostC->StartHost(h3), "host C starts (Listening)");
+        demo.live.push_back(hostC.get());
+        const u16 portC = hostC->boundPort();
         ccfg.port = portC;  // point the crash victim at host C
-        Check(c.StartClient(ccfg),
+        Check(c->StartClient(ccfg),
             "crash-victim client restarts (third session, same process)");
-        Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
+        Check(demo.WaitFor([&] { return c->state() == SessionState::Joined; }, 10000),
             "crash-victim client joined host C after a connection-loss end");
-        c.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &c), demo.live.end());
-        hostC.Stop();
-        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), &hostC),
+        c->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), c.get()), demo.live.end());
+        hostC->Stop();
+        demo.live.erase(std::remove(demo.live.begin(), demo.live.end(), hostC.get()),
             demo.live.end());
     }
 }
@@ -2605,7 +2686,7 @@ void RunM4DiscoveryCheck() {
 }  // namespace
 
 int main() {
-    std::printf("dusk_net_selftest: M0.5 network layer (ENet %d.%d.%d)\n", ENET_VERSION_MAJOR,
+    std::printf("dusk_net_selftest: M0.5 network layer (ENet %d->%d->%d)\n", ENET_VERSION_MAJOR,
         ENET_VERSION_MINOR, ENET_VERSION_PATCH);
 
     // Same ENet init path the game uses (src/dusk/net/module.cpp).

@@ -171,7 +171,11 @@ void Announcer::Start(const std::string& name, u16 sessionPort, u8 maxPlayers) {
     maxPlayers_ = maxPlayers;
     stop_.store(false, std::memory_order_relaxed);
     thread_ = std::thread(&Announcer::ThreadMain, this);
-    DiscoveryLog.info("discovery: announcing '{}' on port {} (players 1/{})", name, sessionPort,
+    // Capstone MINOR J (review-full-deepseek-v4-flash-0731.md MINOR J): read
+    // the LIVE player count — the glue seeds SetPlayers BEFORE Start (M4.5),
+    // so a hardcoded "1" was stale the moment the announcer started.
+    DiscoveryLog.info("discovery: announcing '{}' on port {} (players {}/{})", name, sessionPort,
+        static_cast<u32>(players_.load(std::memory_order_relaxed)),
         static_cast<u32>(maxPlayers));
 }
 
