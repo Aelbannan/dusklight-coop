@@ -4,14 +4,12 @@
 
 #include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_enemy.h"
-#include "dusk/coop/coop_join_logic.h"
 #include "dusk/coop/coop_time.h"
 #include "dusk/net/discovery.h"
 #include "dusk/ui/ui.hpp"
 
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
-#include "d/d_meter2_info.h"
 #include "dusk/net/config.h"
 #include "dusk/net/session.h"
 #include "f_op/f_op_actor_mng.h"
@@ -164,23 +162,14 @@ u32 g_postChangeSendWindow = 0;
 u32 g_frameCount = 0;
 
 // ---------------------------------------------------------------------------
-// M4 state — join-warp (D6), host-leave UX (D8), LAN discovery
+// M4 state — host-leave UX (D8), LAN discovery
 // ---------------------------------------------------------------------------
-
-// Stages this save has provably reached (entered during this play session,
-// plus the stage the save loaded from). Seeds the join-warp unlock gate.
-SafeStageSet g_reachedStages;
-bool g_warpPending = false;         // warp decided, waiting for a warp window
-u32 g_warpPendingFrame = 0;
-bool g_warpRefusedNotified = false; // one refusal notice per join
-bool g_saveStageSeeded = false;     // dMeter2Info_getSaveStageName seeded once per session
 
 // LAN discovery lifecycle (host announces, clients listen).
 dusk::net::discovery::Announcer g_discoveryAnnouncer;
 dusk::net::discovery::Listener g_discoveryListener;
 bool g_announcerActive = false;
 bool g_listenerActive = false;
-u64 g_lastDiscoveryLogMs = 0;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -526,10 +515,11 @@ void ApplyPuppetState(daAlink_c* link) {
     }
     const net::PlayerStateMsg& st = slot.state;
 
-    // Hidden state: the remote player is in another stage or room (v1: a
-    // stage we are not on — join-warp lands in M4). Skip pose work; draw()
-    // returns early for hidden puppets (Anchor's off-scene -9999, done via a
-    // draw gate so the framework never sees a far-away actor).
+    // Hidden state: the remote player is in another stage or room (M4.5
+    // stay-put join — players meet by traveling, so a remote on another stage
+    // stays hidden until both share a stage). Skip pose work; draw() returns
+    // early for hidden puppets (Anchor's off-scene -9999, done via a draw
+    // gate so the framework never sees a far-away actor).
     //
     // Stage is compared via the wire (st.stage), not the session worldStage
     // heuristic: room numbers are not unique across stages — a remote who
@@ -871,7 +861,7 @@ void EnsureSession() {
 }
 
 // ---------------------------------------------------------------------------
-// M4 helpers — toasts, join-warp, host-leave UX, discovery
+// M4 helpers — toasts, host-leave UX, discovery
 // ---------------------------------------------------------------------------
 
 /// Pushes a HUD toast via the project's toast mechanism (dusk::ui, the
@@ -883,113 +873,6 @@ void NotifyCoop(const char* title, const char* content) {
         .content = content,
         .duration = std::chrono::milliseconds(5000),
     });
-}
-
-/// The client's join-warp driver (D6): unlock-gated warp to the host's
-/// stage, or a refused safe anchor. Runs every frame while a client session
-/// is live; host/offline no-ops.
-void PerformJoinWarp(const net::PlayerStateMsg& hostState);  // defined below
-
-void DriveJoinWarp() {
-    if (!SessionLive() || hostRole()) {
-        g_warpPending = false;
-        g_warpRefusedNotified = false;
-        return;
-    }
-    // Learn reached stages from the real Link (this save has been here): the
-    // current stage plus every stage transitioned through this session. Also
-    // seed the stage the save loaded from, so a mid-game joiner who saved in
-    // the host's stage can warp back to it.
-    const char* myStage = LocalStageName();
-    if (myStage != nullptr && myStage[0] != '\0') {
-        g_reachedStages.Add(myStage);
-    } else {
-        // Not in a stage yet (boot/logo/save-select). The decision is
-        // meaningless here — the gate re-runs every frame once the play scene
-        // loads and the real Link's stage is known. Refusing now would be a
-        // false negative (the save HAS reached the stage; we just haven't
-        // loaded it yet).
-        return;
-    }
-    static bool sSaveStageSeeded = g_saveStageSeeded;
-    if (!sSaveStageSeeded) {
-        sSaveStageSeeded = true;
-        g_saveStageSeeded = true;
-        const char* saveStage = dMeter2Info_getSaveStageName();
-        if (saveStage != nullptr && saveStage[0] != '\0') {
-            g_reachedStages.Add(saveStage);
-        }
-    }
-
-    const net::StageInfo& target = g_session.worldStage();
-    const JoinWarpDecision decision = DecideJoinWarp(target.stage, myStage, g_reachedStages);
-    switch (decision) {
-    case JoinWarpDecision::NoWarp:
-        return;  // same stage (or the host never published a stage yet)
-    case JoinWarpDecision::RefuseAnchor:
-        // The host is in a stage this save has not reached: refuse the warp
-        // and stay at our current position (the safe anchor). The session
-        // continues; the stage-scoped sender gate hides the players from each
-        // other until they are in a shared stage.
-        if (!g_warpRefusedNotified) {
-            g_warpRefusedNotified = true;
-            CoopLog.warn(
-                "coop: join-warp refused: host is in '{}' which this save has not reached; "
-                "staying at the safe anchor (play until you reach it, or join from a save there)",
-                target.stage);
-            NotifyCoop("Host in a far-away stage",
-                "The host is in a stage your save hasn't reached, so you weren't moved there. "
-                "Find them in your world, or join again later.");
-        }
-        return;
-    case JoinWarpDecision::Warp:
-        if (!g_warpPending) {
-            g_warpPending = true;
-            g_warpPendingFrame = g_frameCount;
-            CoopLog.info("coop: join-warp decided: host stage '{}' room {} (this save has been there)",
-                target.stage, static_cast<s32>(target.room));
-        }
-        break;
-    }
-
-    // Wait for a stable engine window: never warp mid-demo/event (the scene
-    // change would corrupt it). Then need the host's position (first
-    // PlayerState — the host streams it immediately after the join).
-    if (dComIfGp_event_runCheck() != FALSE) {
-        return;
-    }
-    if (!g_receive[0].hasState) {
-        if (g_frameCount - g_warpPendingFrame >= 600) {
-            CoopLog.warn("coop: join-warp timed out waiting for the host's position; anchoring");
-            g_warpPending = false;
-            g_warpRefusedNotified = true;
-        }
-        return;
-    }
-    PerformJoinWarp(g_receive[0].state);
-    g_warpPending = false;
-}
-
-/// The warp itself, via the vanilla restart-room path (D6).
-void PerformJoinWarp(const net::PlayerStateMsg& hostState) {
-    const net::StageInfo& target = g_session.worldStage();
-    // dStage_playerInit (d_stage.cpp:1643) start-point handling: points >= 0
-    // are looked up in the target stage's PLYR list and MISSES assert
-    // (JUT_ASSERT(1636, i != num) — "failed to find player start point"). The
-    // point -1 path reads dComIfGs_getRestartRoomPos/AngleY directly and
-    // never touches the PLYR list, so the assert cannot fire no matter which
-    // stage/save the client has. We set the restart room to the host's live
-    // position (from the first host PlayerState), so the client lands beside
-    // the host. The layer is passed EXPLICITLY (the host's), bypassing the
-    // time-derived dComIfG_get_timelayer() resolution; the client also seeded
-    // the host's time from WorldInit before this, so any engine re-resolution
-    // (stage room init reading save time) matches the host's layer too.
-    cXyz pos(hostState.pos.x, hostState.pos.y, hostState.pos.z);
-    dComIfGs_setRestartRoom(pos, hostState.yaw, target.room);
-    dComIfGp_setNextStage(target.stage, -1, target.room, target.layer, 0.0f, 0, 0, 0, 0, 0, 0);
-    CoopLog.info("coop: warping to host stage '{}' room {} at the host's position ({:.0f},{:.0f},{:.0f})",
-        target.stage, static_cast<s32>(target.room), hostState.pos.x, hostState.pos.y,
-        hostState.pos.z);
 }
 
 /// Host-leave UX (D8): the frame the session drops, freeze+despawn the
@@ -1027,6 +910,12 @@ void DriveDiscovery() {
                         g_session.state() == net::SessionState::Listening;
     if (hostUp && !g_announcerActive) {
         g_announcerActive = true;
+        // M4.5 (review MINOR 6): seed the player count BEFORE the thread
+        // starts — ThreadMain's very first datagram already reads players_, so
+        // SetPlayers-after-Start advertised 0 players for up to one announce
+        // interval. (Everything sequenced before the thread is created
+        // happens-before the thread's first read.)
+        g_discoveryAnnouncer.SetPlayers(static_cast<u8>(remoteCount() + 1));
         g_discoveryAnnouncer.Start(net::config::sessionName.getValue(), g_session.boundPort(),
             net::kMaxLocalPlayers);
     }
@@ -1284,10 +1173,15 @@ void onGameFrame() {
         g_session.Update();
     }
     PumpSessionAndSpawns();
-    // M4 (D6): the host fills worldStage_ from the real Link every frame — the
-    // M1 TODO ('cfg.stage was inert with stage[0]=0') — so a mid-game joiner
-    // is told where the world is and can run the unlock-gated join warp. The
-    // host's own room feeds the room-ownership table (host-default-owns).
+    // M4 (D6 revised — M4.5): the host fills worldStage_ from the real Link
+    // every frame — the M1 TODO ('cfg.stage was inert with stage[0]=0') — so a
+    // mid-game joiner is told where the host's world is (JoinAccept/WorldInit
+    // stage carry). Join-warp is REMOVED (stay-put): the client boots into its
+    // own save stage and players meet by traveling; the carry behind the
+    // cross-stage `stageOk` puppet-visibility gate (a puppet's visibility keys
+    // on the remote's REAL stage from PlayerState, so it stays hidden until
+    // both players share a stage). The host's own room feeds the
+    // room-ownership table (host-default-owns).
     if (g_sessionStarted && hostRole() && g_realLinkReady && g_realLink != nullptr) {
         net::StageInfo st = {};
         std::snprintf(st.stage, sizeof(st.stage), "%s", LocalStageName());
@@ -1297,8 +1191,7 @@ void onGameFrame() {
         g_session.setWorldStage(st);
         g_session.setLocalRoom(LocalStageName(), fopAcM_GetRoomNo(g_realLink));
     }
-    // M4: client-side join-warp driver + host-leave UX + LAN discovery.
-    DriveJoinWarp();
+    // M4: host-leave UX + LAN discovery.
     NoticeSessionEnd(wasLive && !SessionLive());
     DriveDiscovery();
     // M2: enemy authority — host registration/snapshots/deaths, client
@@ -1333,12 +1226,6 @@ void shutdown() {
         g_listenerActive = false;
         g_discoveryListener.Stop();
     }
-    // M4: reset join-warp state so a later session re-decides from scratch.
-    g_reachedStages = SafeStageSet{};
-    g_warpPending = false;
-    g_warpRefusedNotified = false;
-    g_saveStageSeeded = false;
-    g_lastDiscoveryLogMs = 0;
     // M2: clear per-stage enemy state (registry, receive slots, room-clear).
     dusk::coop::enemy::shutdown();
     // M3: clear host/clients time-weather module state.

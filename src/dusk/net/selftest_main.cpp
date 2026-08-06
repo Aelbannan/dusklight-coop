@@ -54,7 +54,6 @@
  */
 
 #include "dusk/coop/coop_entity_logic.h"
-#include "dusk/coop/coop_join_logic.h"
 #include "dusk/coop/coop_time_logic.h"
 #include "dusk/net/clock.h"
 #include "dusk/net/discovery.h"
@@ -2189,38 +2188,23 @@ void RunM4RoomRoutingCheck() {
 }
 
 // ---------------------------------------------------------------------------
-// M4 — join-warp (D6) + entity stability
+// M4/M4.5 — worldStage carry (stay-put join) + entity stability
 // ---------------------------------------------------------------------------
 
-/// Pure join-warp decision + the session-level worldStage carry (the host's
-/// stage must reach the client for the gate to decide anything).
+/// M4.5 (MAJOR 1 — user decision): the join-warp machinery was REMOVED; a
+/// joining client boots into its own save stage and stays put (players meet
+/// by traveling). What remains from the join-warp work is the session-level
+/// worldStage carry — the host fills worldStage_ from the real Link every
+/// frame and JoinAccept/WorldInit carry it to the client (the joiner's
+/// "where is the host" reference; the cross-stage `stageOk` puppet gate keys
+/// on the remote's REAL stage from PlayerState, so puppets stay hidden until
+/// both players share a stage).
 void RunM4JoinWarpCheck() {
-    std::printf("m4: join-warp unlock gate (D6)\n");
-    using dusk::coop::DecideJoinWarp;
-    using dusk::coop::JoinWarpDecision;
-    using dusk::coop::SafeStageSet;
+    std::printf("m4: worldStage carry (stay-put join policy, D6 revised)\n");
 
-    // 1) Pure decision table.
-    {
-        SafeStageSet reached;
-        reached.Add("F_SP102");
-        reached.Add("F_SP103");
-        Check(DecideJoinWarp("F_SP103", "F_SP102", reached) == JoinWarpDecision::Warp,
-            "reached stage -> warp");
-        Check(DecideJoinWarp("F_SP108", "F_SP102", reached) == JoinWarpDecision::RefuseAnchor,
-            "un-reached stage -> refuse + safe anchor");
-        Check(DecideJoinWarp("F_SP102", "F_SP102", reached) == JoinWarpDecision::NoWarp,
-            "same stage -> no warp");
-        Check(DecideJoinWarp("", "F_SP102", reached) == JoinWarpDecision::NoWarp,
-            "empty target (host never filled worldStage) -> no warp");
-        reached.Add("F_SP108");
-        Check(DecideJoinWarp("F_SP108", "F_SP102", reached) == JoinWarpDecision::Warp,
-            "stage learned later -> warp");
-        Check(!reached.Contains("F_SP999"), "unknown stage never in the safe set");
-    }
-
-    // 2) Session-level: the host fills worldStage_ (the M1 TODO — cfg.stage
-    //    was inert) and JoinAccept/WorldInit carry it to the client.
+    // Session-level: the host fills worldStage_ (the M1 TODO — cfg.stage
+    // was inert) and JoinAccept/WorldInit carry it to the client. (The
+    // join-warp decision table itself was removed with the feature.)
     {
         Demo demo;
         Session host;
@@ -2228,7 +2212,7 @@ void RunM4JoinWarpCheck() {
         hostCfg.port = 0;
         hostCfg.name = "Warp Host";
         hostCfg.maxPlayers = 2;
-        Check(host.StartHost(hostCfg), "warp host starts");
+        Check(host.StartHost(hostCfg), "host starts and will publish worldStage");
         demo.live.push_back(&host);
         const u16 port = host.boundPort();
 
@@ -2245,10 +2229,10 @@ void RunM4JoinWarpCheck() {
         cCfg.port = port;
         cCfg.name = "Warp Client";
         cCfg.version = kProtocolVersion;
-        Check(c.StartClient(cCfg), "warp client starts");
+        Check(c.StartClient(cCfg), "client starts");
         demo.live.push_back(&c);
         Check(demo.WaitFor([&] { return c.state() == SessionState::Joined; }, 10000),
-            "warp client joined");
+            "client joined");
         Check(std::strcmp(c.worldStage().stage, "F_SP103") == 0 && c.worldStage().room == 4,
             "client received the host's filled worldStage (stage+room)");
         Check(std::strcmp(host.worldStage().stage, "F_SP103") == 0,
@@ -2304,8 +2288,12 @@ void RunM4DiscoveryCheck() {
     listener.Start();
     const u64 before = AnnouncesReceived();
     Announcer announcer;
-    announcer.Start("Dusklight Test Session", 44770, 4);
+    // M4.5 (review MINOR 6): seed the player count before Start so the very
+    // first datagram never advertises 0 (ThreadMain's first send already
+    // reads the atomic). This also makes the players==2 check below free of
+    // the old SetPlayers-after-Start race.
     announcer.SetPlayers(2);
+    announcer.Start("Dusklight Test Session", 44770, 4);
 
     // The announcer broadcasts every 2 s (LAN + loopback targets); the
     // loopback send is deterministic on one machine, so a few seconds of

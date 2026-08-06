@@ -107,10 +107,12 @@ s8 localRoomNo();
 
 /// Host publishes its clock/sky/stage into the session every frame so a
 /// mid-game joiner receives current values in JoinAccept/WorldInit (M3 task 6;
-/// M4: the stage fill makes the join-warp gate live).
+/// M4: the stage fill carries the host's world to joiners — with join-warp
+/// REMOVED (M4.5 stay-put) the client stays in its own stage, but the carry
+/// feeds the cross-stage `stageOk` puppet gate which keys on the remote's
+/// REAL stage from PlayerState).
 void setWorldTime(const net::TimeStateInfo& time);
 void setWorldWeather(const net::WeatherStateInfo& weather);
-void setWorldStage(const net::StageInfo& stage);
 /// Latest world time/weather the session carries (host: last publish; client:
 /// JoinAccept/WorldInit receipt) — the M3 replica seeds from these.
 const net::TimeStateInfo& worldTime();

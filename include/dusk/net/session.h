@@ -178,11 +178,12 @@ public:
     [[nodiscard]] const WeatherStateInfo& worldWeather() const { return worldWeather_; }
 
     /// Host-side: publish the current world stage so a mid-game joiner is
-    /// told where the world is (JoinAccept/WorldInit, M4 join-warp) and the
-    /// client-side join-warp gate can decide refuse-vs-warp. The coop tick
+    /// told where the host's world is (JoinAccept/WorldInit carry; M4.5:
+    /// join-warp is REMOVED — stay-put join — so the carry is the joiner's
+    /// "where is the host" reference and feeds the cross-stage `stageOk`
+    /// puppet gate; it no longer drives a warp decision). The coop tick
     /// calls these every frame from the real Link; the session snapshots the
-    /// latest value into the join handshake. M4: the host also fills
-    /// worldStage_ from the real Link (the M1 TODO — cfg.stage was inert).
+    /// latest value into the join handshake.
     void setWorldStage(const StageInfo& s) { worldStage_ = s; }
     void setWorldTime(const TimeStateInfo& t) { worldTime_ = t; }
     void setWorldWeather(const WeatherStateInfo& w) { worldWeather_ = w; }
