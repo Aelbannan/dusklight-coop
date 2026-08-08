@@ -158,6 +158,22 @@ struct EnemyEventMsg {             // reliable (channel 0), trimmed to Died only
   that a sender hidden as a puppet (different stage) spawns no ghosts —
   **ghost×puppet coexistence stays consistent because both key on the
   same `g_receive[sender].state`** (gF17).
+- **Local-copy suppression (user refinement 2025):** a ghost for a
+  STAGE-PLACED entity is hidden while the receiver's OWN copy of that
+  entity is alive. Suppression set = the receiver's own sender-side
+  enumeration (`StageEntityId` → alive local actor), which every machine
+  already builds to broadcast its own room — so the check is a
+  **map-membership test, zero extra wire**. The ghost actor stays alive
+  in the registry but its **draw is skipped** while suppressed (no
+  spawn/despawn thrash when both copies die within a frame of each
+  other); on the local copy's death (actor gone or `isDead` per the
+  sender-side table) the setID leaves the map → the ghost appears so you
+  watch the remote's surviving copy. Dynamic spawns and projectiles
+  (owner-major dynamic ids, no setID overlap) are **never suppressed** —
+  their spatial overlap at the same scripted point is the watchable
+  thing. Accepted asymmetry: while both copies live you see only YOUR
+  fight in a shared room (double-vision now occurs only after your copy
+  dies, or across rooms).
 - **Spawn path:** `fopAcM_create` per ghost (bought: free drawlist + cull
   integration; costs: heap + cPhs phases per actor). **Spawn storm
   pacing**: ≤ 8 ghost creates/frame (a 24-ghost first sight spreads over
@@ -282,7 +298,9 @@ frames of headroom; ring overflow is a ≥5-player projectile issue.)
   - **M5.3a** registry + spawn/apply/despawn/TTL/cap + receive gate (§4.3)
     with a placeholder box model: proves lifecycle, the ALLDIE-group check
     (a ghost in a room does NOT block ACT_TIMER), the attention exclusion,
-    and the stage/room gate. Selftest-driven.
+    the stage/room gate, and **local-copy suppression** (local alive →
+    ghost draw skipped; local dies → ghost appears; no thrash; dynamic/
+    projectile ids never suppressed). Selftest-driven.
   - **M5.3b** the render table + morf construction + cloned-material alpha:
     proves the std-code claims (B2/B3). Per-type visual acceptance
     (ghost + real enemy co-render, real stays opaque; B_TN two arcs; E_YC
@@ -300,8 +318,12 @@ frames of headroom; ring overflow is a ≥5-player projectile issue.)
 
 1. **No shared combat** — your friend's copies cannot die to your sword;
    co-op is parallel-play + spectate. (User decision; assist is M6.)
-2. **Double vision** in shared rooms — same-type copies overlap (yours
-   solid, theirs ghosted). (User decision.)
+2. **Double vision, suppressed while your copy lives (user refinement
+   2025)** — in a shared room the remote ghost of a stage-placed entity
+   renders only when YOUR copy is dead or missing (§4.3 suppression);
+   while both live you see only your own fight. Cross-room ghosts always
+   render. Residual overlap: same-type dynamic spawns at the same
+   scripted point (never suppressed, v1).
 3. **Anim-fidelity collapse** — every ghost of a type plays its ONE bck,
    frame-synced; fast-enemy ghosts can stutter (frame clamp; 15 Hz with no
    lerp). This is the single most visible artifact of the pivot. Mitigant:
@@ -328,8 +350,12 @@ frames of headroom; ring overflow is a ≥5-player projectile issue.)
 
 ## 7. What the live playtest now probes (replaces the old list)
 
-Same-room double vision + doors-per-player; **cross-room (same stage)
+Same-room **suppression** + doors-per-player; **cross-room (same stage)
 ghost visibility** — NOT cross-stage (gate drops those, gF1/d-M1);
+**suppression dynamics**: with both copies alive the ghost is hidden, kill
+YOUR copy → the remote's ghost appears (their copy survives), kill THEIR
+copy first → Died despawns the ghost; late-join room entry (ghost visible
+before your copy spawns) then your copy spawns → suppression engages;
 ghost spawn/despawn on the sender's room change and kills (including the
 ~1 s pop on sender load); boss ghost presence (frame-only, crude limbs —
 expected); **fast-enemy ghost smoothness** in a shared room (kargorok/
