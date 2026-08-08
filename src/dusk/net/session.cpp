@@ -24,57 +24,27 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
 }
 
 // -------------------------------------------------------------------------
-// Star-relay policy (MINOR d, extended M4): how the host should route a game
-// message it received from a peer. M1 relays player state/events to every
-// other joined peer. M2 kept enemy/combat traffic OFF the fallthrough (the
-// sim owner routes it explicitly). M4 (room ownership) widens the seam:
-//   - CombatIntent (client -> ROOM owner): the host routes it to the room's
-//     owner peer (RouteCombatIntent) — never relayed to other clients.
-//   - EnemySnapshot (room owner -> the room): inbound copies from a client
-//     owner are relayed to peers in the SENDER's room only (RoomScoped); the
-//     host's own snapshots fan out the same way via SendGameMessage.
-//   - CombatResult (owner -> all): the room owner may be a CLIENT now, so an
-//     inbound copy IS re-broadcast to every other joined peer (a result ack
-//     carries no grant/state change — harmless out of room).
-//   - EnemyEvent (owner -> THE ROOM): M4.5 (MAJOR 2) — room-scoped like
-//     EnemySnapshot. A died/room-clear event concerns the sender's room's
-//     enemy instance; stage-placed ids are (roomNo<<8)|setID, so a cross-stage
-//     peer with a coincident id would otherwise mis-kill a local enemy, spawn
-//     the wrong drop, grant a wrong save switch and corrupt its ALLDIE scan.
-//     The receive side (coop_enemy.cpp) also gates on the local room.
-//   - TimeSync / TimeEvent / WeatherChange: host-generated host->all, never
-//     relayed (unchanged).
+// Star-relay policy (MINOR d): how the host should route a game message it
+// received from a peer. Every game message is star-relayed to every other
+// joined peer (PlayerState/PlayerEvent, and v7's GhostSnapshot/EnemyEvent)
+// or is host-generated host->all and NEVER relayed (time/weather). v7
+// (M5.1) removes the M4 room-scoped branches and the explicit combat
+// routing — parallel-worlds co-op has no shared enemy/combat state and no
+// room-authority map, so there is nothing to scope or route; ghost room
+// filtering is a receive-side gate in M5.3 (05-ghosts.md §2/§4.3).
 // -------------------------------------------------------------------------
 enum class RelayPolicy : u8 {
-    None,       // not star-relayed (handshake, time/weather; CombatIntent is
-                //   routed explicitly, see RouteCombatIntent)
-    Star,       // relay to every joined peer except the origin (PlayerState /
-                //   PlayerEvent; owner events CombatResult/EnemyEvent)
-    RoomScoped, // relay to joined peers in the ORIGIN's room except the
-                //   origin (EnemySnapshot, M4)
+    None, // not star-relayed (handshake, time/weather)
+    Star, // relay to every joined peer except the origin
 };
 
 RelayPolicy PolicyFor(MsgType type) {
     switch (type) {
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
-    case MsgType::CombatResult:
-        return RelayPolicy::Star;
-    case MsgType::EnemySnapshot:
+    case MsgType::GhostSnapshot:
     case MsgType::EnemyEvent:
-        // M4: room-owner snapshots reach the room's other players only; a
-        // client in another room has no local instance to apply them to
-        // (per-room actors) and the sender gate already skips them. The host
-        // relays to peers whose last-known room matches the SENDER's.
-        // M4.5 (MAJOR 2): EnemyEvent (died / room-clear) is room-scoped the
-        // same way — it concerns the sender's room's enemy instance, and a
-        // cross-stage peer with a coincident (roomNo<<8)|setID would mis-kill
-        // its local enemy / spawn a wrong drop / grant a wrong save switch.
-        return RelayPolicy::RoomScoped;
-    case MsgType::CombatIntent:
-        // M4: routed explicitly to the room's owner (RouteCombatIntent);
-        // never star-relayed.
-        return RelayPolicy::None;
+        return RelayPolicy::Star;
     case MsgType::TimeSync:
     case MsgType::TimeEvent:
     case MsgType::WeatherChange:
@@ -83,8 +53,8 @@ RelayPolicy PolicyFor(MsgType type) {
         // not echoed to anyone else.
         return RelayPolicy::None;
     default:
-        // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd/RoomOwnership) is
-        // handled directly by the session, never via ForwardGameMessage.
+        // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd) is handled
+        // directly by the session, never via ForwardGameMessage.
         return RelayPolicy::None;
     }
 }
@@ -95,215 +65,7 @@ Session::~Session() {
     Stop();
 }
 
-RoomOwnershipTable::RoomState* RoomOwnershipTable::Find(const RoomKey& key) {
-    for (auto& rs : rooms_) {
-        if (rs.key == key) {
-            return &rs;
-        }
-    }
-    return nullptr;
-}
 
-const RoomOwnershipTable::RoomState* RoomOwnershipTable::Find(const RoomKey& key) const {
-    for (const auto& rs : rooms_) {
-        if (rs.key == key) {
-            return &rs;
-        }
-    }
-    return nullptr;
-}
-
-void RoomOwnershipTable::RecomputeOwner(RoomState& rs, bool isHost,
-                                        std::vector<RoomKey>* changed) {
-    const u8 before = rs.owner;
-    // The world host defaults to owning its own room (network.md §6); the
-    // order array keeps the host's arrival, but the host's presence wins.
-    rs.owner = kInvalidPlayerId;
-    if (isHost) {
-        for (u8 i = 0; i < rs.orderLen; ++i) {
-            if (rs.order[i] == 0) {
-                rs.owner = 0;
-                break;
-            }
-        }
-    }
-    if (rs.owner == kInvalidPlayerId && rs.orderLen > 0) {
-        rs.owner = rs.order[0];  // first arrival
-    }
-    if (rs.owner != before && changed != nullptr) {
-        changed->push_back(rs.key);
-    }
-}
-
-static void FillRoomKey(RoomKey& key, const char* stage, s8 room) {
-    std::strncpy(key.stage, stage ? stage : "", kMaxStageNameLength - 1);
-    key.stage[kMaxStageNameLength - 1] = '\0';
-    key.room = room;
-}
-
-u8 RoomOwnershipTable::OnPlayerEnter(const char* stage, s8 room, u8 pid, bool isHost,
-                                     std::vector<RoomKey>* changed) {
-    if (room < 0 || pid >= kMaxLocalPlayers) {
-        return kInvalidPlayerId;
-    }
-    RoomKey key;
-    FillRoomKey(key, stage, room);
-    RoomState* rs = Find(key);
-    if (rs == nullptr) {
-        rooms_.push_back({});
-        rs = &rooms_.back();
-        rs->key = key;
-    }
-    // Idempotent: the same pid re-announcing its room is a no-op.
-    for (u8 i = 0; i < rs->orderLen; ++i) {
-        if (rs->order[i] == pid) {
-            RecomputeOwner(*rs, isHost, changed);
-            return rs->owner;
-        }
-    }
-    if (rs->orderLen < kMaxLocalPlayers) {
-        rs->order[rs->orderLen++] = pid;
-    }
-    // Sticky rule: arrival never takes ownership from a current owner.
-    // RecomputeOwner keeps the current owner unless the HOST just entered the
-    // room (host-defaults-own-its-room) or the room was ownerless — no
-    // ping-pong (network.md §6).
-    RecomputeOwner(*rs, isHost, changed);
-    return rs->owner;
-}
-
-void RoomOwnershipTable::OnPlayerLeave(const char* stage, s8 room, u8 pid, bool isHost,
-                                       std::vector<RoomKey>* changed) {
-    if (room < 0) {
-        return;
-    }
-    RoomKey key;
-    FillRoomKey(key, stage, room);
-    RoomState* rs = Find(key);
-    if (rs == nullptr) {
-        return;
-    }
-    bool removed = false;
-    for (u8 i = 0; i < rs->orderLen; ++i) {
-        if (rs->order[i] == pid) {
-            for (u8 j = i; j + 1 < rs->orderLen; ++j) {
-                rs->order[j] = rs->order[j + 1];
-            }
-            --rs->orderLen;
-            removed = true;
-            break;
-        }
-    }
-    if (!removed) {
-        return;
-    }
-    RecomputeOwner(*rs, isHost, changed);  // transfer to next arrival / ownerless
-    if (rs->orderLen == 0 && rs->owner == kInvalidPlayerId) {
-        for (auto it = rooms_.begin(); it != rooms_.end(); ++it) {
-            if (it->key == key) {
-                rooms_.erase(it);
-                break;
-            }
-        }
-    }
-}
-
-void RoomOwnershipTable::OnPlayerDisconnect(u8 pid, bool isHost,
-                                            std::vector<RoomKey>* changed) {
-    if (pid >= kMaxLocalPlayers) {
-        return;
-    }
-    std::vector<RoomKey> present;
-    for (const auto& rs : rooms_) {
-        for (u8 i = 0; i < rs.orderLen; ++i) {
-            if (rs.order[i] == pid) {
-                present.push_back(rs.key);
-                break;
-            }
-        }
-    }
-    for (const auto& key : present) {
-        OnPlayerLeave(key.stage, key.room, pid, isHost, changed);
-    }
-}
-
-u8 RoomOwnershipTable::OwnerOf(const char* stage, s8 room) const {
-    if (room < 0) {
-        return kInvalidPlayerId;
-    }
-    RoomKey key;
-    FillRoomKey(key, stage, room);
-    const RoomState* rs = Find(key);
-    return rs != nullptr ? rs->owner : kInvalidPlayerId;
-}
-
-void RoomOwnershipTable::OwnedRooms(std::vector<RoomKey>& out) const {
-    for (const auto& rs : rooms_) {
-        if (rs.owner != kInvalidPlayerId) {
-            out.push_back(rs.key);
-        }
-    }
-}
-
-void RoomOwnershipTable::SweepStaleHostEntries() {
-    // Capstone MINOR 5 (review-full-glm-5.2.md MINOR 5): drop entries the
-    // host cannot legitimately own. On the host, a persistent host-owned
-    // entry the host is NOT in is bogus by construction — the host-default
-    // rule requires the host's presence (RecomputeOwner sets owner=0 only
-    // when the host is in the order), and when the host leaves a room the
-    // ownership transfers to the next player or the room becomes ownerless
-    // (orderLen==0 entries are erased there too). A stale (staleStage,
-    // newRoom) entry created by a stage-transition race would otherwise
-    // linger in rooms_ until the session ends.
-    for (auto it = rooms_.begin(); it != rooms_.end();) {
-        const RoomState& rs = *it;
-        bool hostInOrder = false;
-        for (u8 i = 0; i < rs.orderLen; ++i) {
-            if (rs.order[i] == 0) {
-                hostInOrder = true;
-                break;
-            }
-        }
-        const bool stale = (rs.orderLen == 0) || (rs.owner == 0 && !hostInOrder);
-        if (stale) {
-            it = rooms_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-void RoomOwnershipTable::SetOwner(const char* stage, s8 room, u8 owner) {
-    if (room < 0) {
-        return;
-    }
-    RoomKey key;
-    FillRoomKey(key, stage, room);
-    RoomState* rs = Find(key);
-    if (owner == kInvalidPlayerId) {
-        if (rs != nullptr) {
-            for (auto it = rooms_.begin(); it != rooms_.end(); ++it) {
-                if (it->key == key) {
-                    rooms_.erase(it);
-                    break;
-                }
-            }
-        }
-        return;
-    }
-    if (rs == nullptr) {
-        rooms_.push_back({});
-        rs = &rooms_.back();
-        rs->key = key;
-    }
-    rs->owner = owner;
-    // Minimal membership view: the client does not track arrival order for
-    // other players' rooms — OwnerOf is the only read it needs.
-    rs->orderLen = 0;
-    if (owner < kMaxLocalPlayers) {
-        rs->order[rs->orderLen++] = owner;
-    }
-}
 
 bool Session::StartHost(const SessionConfig& config) {
     Stop();
@@ -321,8 +83,6 @@ bool Session::StartHost(const SessionConfig& config) {
     connectedAtMs_ = 0;
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
-    playerRoom_.fill(RoomKey{});
-    ownership_.Clear();
     worldStage_ = StageInfo{};
     worldTime_ = TimeStateInfo{};
     worldWeather_ = WeatherStateInfo{};
@@ -368,8 +128,6 @@ bool Session::StartClient(const SessionConfig& config) {
     connectedAtMs_ = 0;
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
-    playerRoom_.fill(RoomKey{});
-    ownership_.Clear();
     worldStage_ = StageInfo{};
     worldTime_ = TimeStateInfo{};
     worldWeather_ = WeatherStateInfo{};
@@ -557,77 +315,18 @@ void Session::HandleData(const InboundPacket& pkt) {
         break;
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
-        // M1 game traffic: the session owns transport/roster only. The game
-        // side consumes the message; on the host the message is then relayed
-        // (M4: per-type policy — PlayerState/PlayerEvent star, M2/M4 enemy
-        // traffic per PolicyFor). M4: the host also sniffs the sender's room
-        // from the stream to drive the room-ownership table.
-        if (role_ == SessionRole::Host) {
-            if (msg.type == MsgType::PlayerState) {
-                const auto& st = msg.payload.playerState;
-                if (st.playerId < kMaxLocalPlayers && roster_[st.playerId].present) {
-                    UpdatePlayerRoom(st.playerId, st.stage, st.roomNo, /*isHost=*/false);
-                }
-            } else if (msg.type == MsgType::PlayerEvent) {
-                const auto& ev = msg.payload.playerEvent;
-                if (ev.playerId < kMaxLocalPlayers && roster_[ev.playerId].present &&
-                    static_cast<PlayerEventId>(ev.eventId) == PlayerEventId::SceneChange &&
-                    ev.scene == 1)
-                {
-                    // The reliable SceneChange is the room-change authority
-                    // for SAME-STAGE moves (a dropped PlayerState can't lose
-                    // the new room). The stage key comes from the player's
-                    // last-known room — valid only when the sender marked the
-                    // move as within the current stage (scene==1, M4.5 review
-                    // MINOR 1). A cross-stage SceneChange (scene==0) must NOT
-                    // key (oldStage, newRoom) — that would create a bogus
-                    // ownership entry and mis-route intents for a frame or two;
-                    // the first new-stage PlayerState (channel 1, inside the
-                    // sender's post-change send window) establishes the entry.
-                    // Also skip until the first PlayerState established a
-                    // stage (an empty stage would key a bogus ("", room) entry).
-                    if (playerRoom_[ev.playerId].stage[0] != '\0') {
-                        UpdatePlayerRoom(ev.playerId, playerRoom_[ev.playerId].stage,
-                            static_cast<s8>(ev.data & 0xFF), /*isHost=*/false);
-                    }
-                }
-            }
-        }
-        if (gameHandler_) {
-            gameHandler_(msg.type, msg.payload);
-        }
-        if (role_ == SessionRole::Host) {
-            ForwardGameMessage(pkt.peerIndex, msg.type, msg.payload);
-        }
-        break;
-    case MsgType::EnemySnapshot:
+    case MsgType::GhostSnapshot:
     case MsgType::EnemyEvent:
-    case MsgType::CombatResult:
-        // M2/M4 enemy/combat traffic. The game handler consumes it; the host
-        // relays per PolicyFor (M4/M4.5: a client room owner's EnemySnapshot
-        // AND EnemyEvent are room-scoped; CombatResult is star-relayed). A
-        // buggy/forged client's copies are never echoed to other clients.
+        // M1 game traffic + v7 ghost wire: the session owns transport/roster
+        // only. The game side consumes the message; on the host the message
+        // is then star-relayed (v7: uniform — no room-scoped branches;
+        // ghost receive filtering is a game-side gate in M5.3). The host no
+        // longer sniffs rooms from the stream (the ownership table is gone).
         if (gameHandler_) {
             gameHandler_(msg.type, msg.payload);
         }
         if (role_ == SessionRole::Host) {
             ForwardGameMessage(pkt.peerIndex, msg.type, msg.payload);
-        }
-        break;
-    case MsgType::CombatIntent:
-        // M4 room ownership: intents are validated by the ROOM's owner, which
-        // may be a client. The host routes to the owner peer; when the host
-        // owns the room it consumes the intent itself (gameHandler). The
-        // intent is never star-relayed (PolicyFor None).
-        if (role_ == SessionRole::Host) {
-            RouteCombatIntent(pkt.peerIndex, msg.payload);
-        } else if (gameHandler_) {
-            gameHandler_(msg.type, msg.payload);
-        }
-        break;
-    case MsgType::RoomOwnership:
-        if (role_ == SessionRole::Client) {
-            OnRoomOwnership(msg);
         }
         break;
     case MsgType::TimeSync:
@@ -721,12 +420,6 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     init.worldInit.weather = worldWeather_;
     FillWireRoster(init.worldInit.roster);
     SendToPeer(peerIndex, MsgType::WorldInit, init);
-
-    // M4: the joining peer must know who owns which room (network.md §6) —
-    // one RoomOwnershipMsg per owned room, right after WorldInit (reliable,
-    // ordered). Without it a client would think it owns its own room when a
-    // host or earlier player already does.
-    SendOwnershipMap(peerIndex);
 
     // Roster-refresh broadcast (MAJOR M1): every already-joined peer must
     // learn about the new player, or it will never spawn a puppet for them
@@ -833,16 +526,6 @@ void Session::OnWorldInit(const Message& msg) {
         static_cast<s32>(init.stage.room), init.roster.size());
 }
 
-void Session::OnRoomOwnership(const Message& msg) {
-    const auto& om = msg.payload.roomOwnership;
-    // Client-side view: the host's assignment is authoritative (the sticky
-    // first-in-room table lives on the host; the client only needs OwnerOf
-    // to know whether IT owns its room).
-    ownership_.SetOwner(om.stage, om.room, om.owner);
-    NetLog.debug("net: room {}:{} owned by player {}", om.stage, static_cast<s32>(om.room),
-        om.owner);
-}
-
 // ---------------------------------------------------------------------------
 // Game-message routing (star topology)
 // ---------------------------------------------------------------------------
@@ -852,18 +535,9 @@ bool Session::SendGameMessage(MsgType type, const PayloadUnion& payload) {
         return false;
     }
     if (role_ == SessionRole::Host) {
-        // M4 per-type fan-out: EnemySnapshot reaches the room's players only
-        // (the host's own room); everything else goes to every joined peer.
-        if (PolicyFor(type) == RelayPolicy::RoomScoped) {
-            const RoomKey& room = playerRoom_[0];
-            if (room.room >= 0) {
-                SendToAllInRoom(room, type, payload, /*exceptPlayer=*/0);
-            } else {
-                SendToAll(type, payload, /*exceptPlayer=*/0);
-            }
-        } else {
-            SendToAll(type, payload);
-        }
+        // v7: uniform host->all fan-out (no room-scoped branches — the room
+        // filter is the M5.3 receive gate, not the session).
+        SendToAll(type, payload);
     } else {
         // Client: everything flows to the host, which relays to the others.
         SendToPeer(0, type, payload);
@@ -872,27 +546,11 @@ bool Session::SendGameMessage(MsgType type, const PayloadUnion& payload) {
 }
 
 void Session::ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion& payload) {
-    // Star-relay policy seam (MINOR d, extended M4): see PolicyFor.
-    const RelayPolicy policy = PolicyFor(type);
-    if (policy == RelayPolicy::None) {
+    // Star-relay policy seam (MINOR d): see PolicyFor. v7: Star only — relay
+    // to every joined peer except the origin.
+    if (PolicyFor(type) != RelayPolicy::Star) {
         return;
     }
-    if (policy == RelayPolicy::RoomScoped) {
-        // M4: relay a client room owner's EnemySnapshot to peers in the
-        // SENDER's room (its snapshots are about the room it owns = the room
-        // it is in). Peers in other rooms have no local instances for them.
-        const u8 originPid = peerToPlayer_[originPeer];
-        if (originPid == kInvalidPlayerId) {
-            return;
-        }
-        const RoomKey& room = playerRoom_[originPid];
-        if (room.room < 0) {
-            return;
-        }
-        SendToAllInRoom(room, type, payload, originPid);
-        return;
-    }
-    // Star: relay to every joined peer except the origin.
     for (u8 peer = 0; peer < Transport::kMaxPeers; ++peer) {
         if (peer == originPeer) {
             continue;
@@ -904,116 +562,6 @@ void Session::ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion
             SendToPeer(peer, type, payload);
         }
     }
-}
-
-void Session::RouteCombatIntent(u8 originPeer, const PayloadUnion& payload) {
-    // M4 room ownership (network.md §6): CombatIntent is validated by the
-    // room's OWNER. The attacker can only hit enemies in its own room, so the
-    // target room is the attacker's current room. Route to the owner peer;
-    // when the host is the owner (its own room default) consume locally.
-    const u8 attacker = payload.combatIntent.attackerId;
-    if (attacker >= kMaxLocalPlayers || !roster_[attacker].present) {
-        NetLog.warn("net: CombatIntent from unknown attacker {}; dropping", attacker);
-        return;
-    }
-    const u8 owner = ownership_.OwnerOf(playerRoom_[attacker].stage, playerRoom_[attacker].room);
-    if (owner == kInvalidPlayerId) {
-        // No owner for the attacker's room (ownerless room / room unknown):
-        // consume locally so the host's validation rejects it visibly rather
-        // than silently dropping a client's hit.
-        NetLog.debug("net: CombatIntent for ownerless room -> host consumes");
-        if (gameHandler_) {
-            gameHandler_(MsgType::CombatIntent, payload);
-        }
-        return;
-    }
-    if (owner == 0) {
-        // The host owns the room: consume locally (validation + injection).
-        if (gameHandler_) {
-            gameHandler_(MsgType::CombatIntent, payload);
-        }
-        return;
-    }
-    const u8 ownerPeer = PlayerPeer(owner);
-    if (ownerPeer == kInvalidPlayerId) {
-        NetLog.warn("net: CombatIntent owner player {} not connected; dropping", owner);
-        return;
-    }
-    NetLog.debug("net: routing CombatIntent from player {} to room owner {} (peer {})",
-        attacker, owner, ownerPeer);
-    SendToPeer(ownerPeer, MsgType::CombatIntent, payload);
-}
-
-void Session::BroadcastOwnership(const std::vector<RoomKey>& changed, u8 exceptPlayer) {
-    for (const auto& key : changed) {
-        PayloadUnion payload = {};
-        std::strncpy(payload.roomOwnership.stage, key.stage, kMaxStageNameLength - 1);
-        payload.roomOwnership.stage[kMaxStageNameLength - 1] = '\0';
-        payload.roomOwnership.room = key.room;
-        payload.roomOwnership.owner = ownership_.OwnerOf(key.stage, key.room);
-        SendToAll(MsgType::RoomOwnership, payload, exceptPlayer);
-        NetLog.info("net: room {}:{} owner -> {}", key.stage, static_cast<s32>(key.room),
-            payload.roomOwnership.owner);
-    }
-}
-
-void Session::SendOwnershipMap(u8 peerIndex) {
-    std::vector<RoomKey> owned;
-    ownership_.OwnedRooms(owned);
-    for (const auto& key : owned) {
-        PayloadUnion payload = {};
-        std::strncpy(payload.roomOwnership.stage, key.stage, kMaxStageNameLength - 1);
-        payload.roomOwnership.stage[kMaxStageNameLength - 1] = '\0';
-        payload.roomOwnership.room = key.room;
-        payload.roomOwnership.owner = ownership_.OwnerOf(key.stage, key.room);
-        SendToPeer(peerIndex, MsgType::RoomOwnership, payload);
-    }
-}
-
-void Session::UpdatePlayerRoom(u8 pid, const char* stage, s8 roomNo, bool isHost) {
-    if (pid >= kMaxLocalPlayers || roomNo < 0) {
-        return;
-    }
-    // Transient pre-load states (a boot/logo scene, a not-yet-set start stage)
-    // carry an empty stage; they must not create a bogus ("", room) ownership
-    // entry — the first real PlayerState with a stage establishes the room.
-    if (stage == nullptr || stage[0] == '\0') {
-        return;
-    }
-    RoomKey& cur = playerRoom_[pid];
-    const bool sameStage = std::strcmp(cur.stage, stage ? stage : "") == 0;
-    if (sameStage && cur.room == roomNo) {
-        return;  // no move
-    }
-    std::vector<RoomKey> changed;
-    if (cur.room >= 0) {
-        ownership_.OnPlayerLeave(cur.stage, cur.room, pid, isHost, &changed);
-    }
-    std::strncpy(cur.stage, stage ? stage : "", kMaxStageNameLength - 1);
-    cur.stage[kMaxStageNameLength - 1] = '\0';
-    cur.room = roomNo;
-    ownership_.OnPlayerEnter(cur.stage, cur.room, pid, isHost, &changed);
-    if (role_ == SessionRole::Host) {
-        BroadcastOwnership(changed);
-    }
-}
-
-void Session::setLocalRoom(const char* stage, s8 roomNo) {
-    if (role_ != SessionRole::Host) {
-        return;
-    }
-    // The host's own room drives ownership (host-defaults-own-its-room) and
-    // the EnemySnapshot fan-out scope. Sticky: entering a room never steals
-    // ownership from an existing owner UNLESS the host is entering — the
-    // host-default rule wins by design.
-    UpdatePlayerRoom(0, stage, roomNo, /*isHost=*/true);
-    // Capstone MINOR 5 (review-full-glm-5.2.md MINOR 5): a stage-transition
-    // race (LocalStageName() vs the real Link's room disagreeing for a frame)
-    // can leave a bogus host-owned (staleStage, newRoom) entry that is never
-    // OnPlayerLeave'd (leave only fires for the player's CURRENT room). Sweep
-    // host-owned entries the host is not actually in on every host room
-    // publish — see SweepStaleHostEntries.
-    ownership_.SweepStaleHostEntries();
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,24 +592,6 @@ void Session::SendToAll(MsgType type, const PayloadUnion& payload, u8 exceptPlay
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         if (i == exceptPlayer || !roster_[i].present) {
             continue;
-        }
-        const u8 peer = PlayerPeer(i);
-        if (peer != kInvalidPlayerId) {
-            SendToPeer(peer, type, payload);
-        }
-    }
-}
-
-void Session::SendToAllInRoom(const RoomKey& room, MsgType type, const PayloadUnion& payload,
-                              u8 exceptPlayer) {
-    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
-        if (i == exceptPlayer || !roster_[i].present) {
-            continue;
-        }
-        if (playerRoom_[i].room != room.room ||
-            std::strcmp(playerRoom_[i].stage, room.stage) != 0)
-        {
-            continue;  // M4 same-room scoping: only the room's players get it
         }
         const u8 peer = PlayerPeer(i);
         if (peer != kInvalidPlayerId) {
@@ -1109,14 +639,6 @@ void Session::RemovePlayer(u8 playerId, bool broadcastLeave) {
     if (playerId >= kMaxLocalPlayers || !roster_[playerId].present) {
         return;
     }
-    // M4: the leaving player's rooms must transfer ownership (sticky rule —
-    // next player in the room, else the host) BEFORE the roster slot closes.
-    if (role_ == SessionRole::Host) {
-        std::vector<RoomKey> changed;
-        ownership_.OnPlayerDisconnect(playerId, /*isHost=*/false, &changed);
-        BroadcastOwnership(changed);
-    }
-    playerRoom_[playerId] = RoomKey{};
     roster_[playerId].present = false;
     roster_[playerId].playerId = kInvalidPlayerId;
     roster_[playerId].name[0] = '\0';
