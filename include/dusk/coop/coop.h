@@ -49,10 +49,6 @@ int remoteCount();
 bool isPuppet(const daAlink_c* link);
 /// The session PlayerId of the puppet owning pid, or kInvalidPlayerId.
 net::PlayerId puppetPlayerId(fpc_ProcID pid);
-/// The remote-player puppet actor for a session PlayerId (registered and
-/// currently alive), or nullptr. M2: used as the synthetic attacker for
-/// owner-side combat validation (m2-design-notes.md §1).
-fopAc_ac_c* puppetActorFor(net::PlayerId playerId);
 
 /// Called at the end of daAlink_c::create() (cPhs_COMPLEATE_e): registers the
 /// real Link, or flips the matching puppet entry to active.
@@ -90,20 +86,21 @@ void onGameFrame();
 void shutdown();
 
 // ---------------------------------------------------------------------------
-// M2 session accessors (enemy registry / combat / room-clear)
+// Session accessors
 // ---------------------------------------------------------------------------
 
-/// Sends a game message into the session (host: simulcast to all clients;
-/// client: to the host). M2 enemy/combat + M3 time/weather traffic use this.
+/// Sends a game message into the session (host: host->all simulcast; client:
+/// to the host, which star-relays). M3 time/weather traffic uses this today;
+/// the M5.2 ghost sender will too.
 bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload);
 /// True when a remote roster slot is present in the session.
 bool rosterPresent(net::PlayerId pid);
 /// The real Link's current room (s8), or -1 when no real Link.
 s8 localRoomNo();
 /// The local player's CURRENT stage name (dComIfGp_getStartStageName — the
-/// play's start-stage object, re-pointed on every stage change). Capstone
-/// MINOR D: the enemy per-stage reset keys on (stage, room) because room
-/// numbers are not unique across stages.
+/// play's start-stage object, re-pointed on every stage change). The M5.1
+/// enemy-stub per-stage reset keys on (stage, room) because room numbers are
+/// not unique across stages.
 const char* localStageName();
 
 // --------------------------------------------------------------------------
@@ -122,19 +119,5 @@ void setWorldWeather(const net::WeatherStateInfo& weather);
 /// JoinAccept/WorldInit receipt) — the M3 replica seeds from these.
 const net::TimeStateInfo& worldTime();
 const net::WeatherStateInfo& worldWeather();
-
-// --------------------------------------------------------------------------
-// M4 room ownership / scoping accessors (enemy module, sender gates)
-// --------------------------------------------------------------------------
-
-/// True when THIS machine is the room owner of (my stage, roomNo) per the
-/// session ownership table (network.md §6) — the owner sims that room's
-/// enemies natively and validates combat for it.
-bool amIRoomOwner(s8 roomNo);
-/// True when at least one remote player is currently in (my stage, roomNo) —
-/// or its room is unknown (the Anchor sender-gate rule: don't hold state
-/// hostage to a stale room). Drives the EnemySnapshot sender gate (M2 review
-/// MINOR-6: scope by the remote's ACTUAL room, not any present player).
-bool remoteInRoom(s8 roomNo);
 
 }  // namespace dusk::coop

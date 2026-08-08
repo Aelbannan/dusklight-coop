@@ -2,7 +2,6 @@
 
 #include "dusk/frame_interpolation.h"
 
-#include "dusk/coop/coop_combat.h"
 #include "dusk/coop/coop_enemy.h"
 #include "dusk/coop/coop_time.h"
 #include "dusk/net/discovery.h"
@@ -301,19 +300,6 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
                 slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
             }
         }
-    } else if (type == net::MsgType::EnemySnapshot || type == net::MsgType::EnemyEvent) {
-        // M2: enemy authority traffic (freeze/apply + drops/room-clear).
-        dusk::coop::enemy::onGameMessage(type, payload);
-    } else if (type == net::MsgType::CombatIntent) {
-        // M2: combat intents are validated by the sim owner (host role).
-        dusk::coop::combat::onGameMessage(type, payload);
-    } else if (type == net::MsgType::CombatResult) {
-        // M2: result ack — the authoritative HP always rides the next
-        // EnemySnapshot; nothing to apply client-side in v1. Capstone MINOR 2
-        // (review-full-glm-5.2.md MINOR 2): this receive side is INTENTIONALLY
-        // unconsumed in v1 — no consumer exists anywhere (the ack is
-        // star-relayed dead traffic today). M5 decides wire-vs-drop; do NOT
-        // change behavior here.
     } else if (type == net::MsgType::TimeSync || type == net::MsgType::TimeEvent ||
                type == net::MsgType::WeatherChange)
     {
@@ -323,6 +309,8 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         // ignored here.
         dusk::coop::timeweather::onGameMessage(type, payload);
     }
+    // v7 (M5.1): GhostSnapshot/EnemyEvent are wire-only until M5.2 lands —
+    // no receive branch exists, so an inbound ghost message is ignored.
 }
 
 // ---------------------------------------------------------------------------
@@ -401,11 +389,9 @@ void SendEventsOnChange(const daAlink_c* link) {
 /// its own stage+room, so same-scene peers are the only ones that can see us.
 ///
 /// Capstone MINOR L (review-full-deepseek-v4-flash-0731.md MINOR L): this is
-/// THE sender gate — ONE implementation shared by the player sender
-/// (sendPlayerState) and the enemy snapshot sender (coop_enemy.cpp
-/// RemoteInRoom -> dusk::coop::remoteInRoom). The two previously duplicated
-/// the same rule with slightly different structure; a single implementation
-/// cannot drift as M5 adds more senders (waves, horses).
+/// THE player sender gate. (The enemy snapshot sender that once shared it is
+/// gone in M5.1; the M5.2 ghost sender gates on the same-room rule via
+/// g_receive[sender].state, 05-ghosts.md §4.3.)
 ///
 /// MAJOR M2 (mutual room-change deadlock): two players entering the same new
 /// room together hold each other's stale room, so `state.roomNo == myRoom`
@@ -1131,17 +1117,6 @@ net::PlayerId puppetPlayerId(fpc_ProcID pid) {
     return kInvalidPlayerId;
 }
 
-fopAc_ac_c* puppetActorFor(net::PlayerId playerId) {
-    if (playerId >= kMaxLocalPlayers) {
-        return nullptr;
-    }
-    const PuppetEntry& e = g_puppets[playerId];
-    if (e.state != SpawnState::Active || e.actor == nullptr) {
-        return nullptr;
-    }
-    return reinterpret_cast<fopAc_ac_c*>(e.actor);
-}
-
 void onLinkCreated(daAlink_c* link) {
     if (isPuppet(link)) {
         const PlayerId pid = puppetPlayerId(fopAcM_GetID(link));
@@ -1215,10 +1190,11 @@ void sendPlayerState(daAlink_c* link) {
     // PlayerState may land. Without the window a dropped state left the
     // remote's slot on the old stage: a puppet frozen at the exit spot.
     // M4.5 (review MINOR 1): the event marks whether the move is WITHIN the
-    // current stage (scene=1) or a stage change (scene=0) — the host's
-    // ownership-table sniff keys (last-known stage, new room) which is only
-    // valid for same-stage moves; a cross-stage SceneChange must be left to
-    // the first new-stage PlayerState (channel 1, inside this send window).
+    // current stage (scene=1) or a stage change (scene=0). v7: the host no
+    // longer sniffs rooms (ownership table gone); the receive-side puppet
+    // gate adopts the event's room for same-stage moves only, and a
+    // cross-stage SceneChange is left to the first new-stage PlayerState
+    // (channel 1, inside this send window).
     const bool stageChanged = std::strcmp(myStage, g_lastSentStage) != 0;
     if (roomNow != g_lastSentRoom || stageChanged) {
         g_lastSentRoom = roomNow;
@@ -1346,8 +1322,8 @@ void onGameFrame() {
     // own save stage and players meet by traveling; the carry behind the
     // cross-stage `stageOk` puppet-visibility gate (a puppet's visibility keys
     // on the remote's REAL stage from PlayerState, so it stays hidden until
-    // both players share a stage). The host's own room feeds the
-    // room-ownership table (host-default-owns).
+    // both players share a stage). v7 (M5.1): setLocalRoom is gone with the
+    // ownership table — the host's own room feeds nothing here anymore.
     if (g_sessionStarted && hostRole() && g_realLinkReady && g_realLink != nullptr) {
         net::StageInfo st = {};
         std::snprintf(st.stage, sizeof(st.stage), "%s", LocalStageName());
@@ -1355,13 +1331,14 @@ void onGameFrame() {
         st.layer = dComIfGp_getStartStageLayer();
         st.point = dComIfGp_getStartStagePoint();
         g_session.setWorldStage(st);
-        g_session.setLocalRoom(LocalStageName(), fopAcM_GetRoomNo(g_realLink));
     }
     // M4: host-leave UX + LAN discovery.
     NoticeSessionEnd(wasLive && !SessionLive());
     DriveDiscovery();
-    // M2: enemy authority — host registration/snapshots/deaths, client
-    // freeze/apply state, room-clear. No-op when the session is not live.
+    // M5.1: enemy subsystem stub — per-stage id-table reset on room change,
+    // no senders, no freeze/apply, no combat (everything local now). No-op
+    // when the session is not live (net-off vanilla guarantee). The M5.2
+    // ghost sender lands on this seam.
     dusk::coop::enemy::onGameFrame();
     // M3: time of day & weather — host publisher (TimeSync 1 Hz / TimeEvent /
     // WeatherChange + world info for joiners), client world-state re-seed.
@@ -1392,7 +1369,7 @@ void shutdown() {
         g_listenerActive = false;
         g_discoveryListener.Stop();
     }
-    // M2: clear per-stage enemy state (registry, receive slots, room-clear).
+    // M5.1: clear the per-stage entity-id tables.
     dusk::coop::enemy::shutdown();
     // M3: clear host/clients time-weather module state.
     dusk::coop::timeweather::shutdown();
@@ -1434,27 +1411,6 @@ const net::TimeStateInfo& worldTime() {
 
 const net::WeatherStateInfo& worldWeather() {
     return g_session.worldWeather();
-}
-
-bool amIRoomOwner(s8 roomNo) {
-    if (!SessionLive() || roomNo < 0) {
-        return false;
-    }
-    // M4 room ownership (network.md §6): the room key is (stage, room) — a
-    // room number alone is not unique across stages. The session holds the
-    // authoritative table (host) or the last RoomOwnershipMsg view (client).
-    return g_session.roomOwner(LocalStageName(), roomNo) == SelfIdChecked();
-}
-
-bool remoteInRoom(s8 roomNo) {
-    if (!SessionLive()) {
-        return false;
-    }
-    // Capstone MINOR L: consolidated sender gate — same implementation as the
-    // player sender's RemoteInOurRoom, keyed on our current stage + room. The
-    // enemy snapshot sender (owner side) streams to remotes actually in the
-    // room it owns; the receive side gates on the local room as well.
-    return RemoteInOurRoom(LocalStageName(), roomNo);
 }
 
 }  // namespace dusk::coop
