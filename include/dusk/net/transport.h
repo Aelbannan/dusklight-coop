@@ -17,9 +17,9 @@
  * thread, and destroys the host there (enet_host_destroy resets all peers,
  * so shutdown never blocks on disconnect acks).
  *
- * Channel-split rings (M0.5): reliable traffic (channel 0 — control, events,
- * combat) and unreliable snapshots (channel 1 — PlayerState/EnemySnapshot/
- * TimeSync) never share a ring. The two classes have opposite overflow
+ * Channel-split rings (M0.5): reliable traffic (channel 0 — control, events)
+ * and unreliable snapshots (channel 1 — PlayerState/GhostSnapshot/TimeSync)
+ * never share a ring. The two classes have opposite overflow
  * policies:
  *   - reliable: a full ring is an EXPLICIT failure — Send() returns false,
  *     a counter bumps, and the session observes it. A reliable event is never

@@ -14,8 +14,9 @@
  * full-state sections), so the hot path never allocates and a received
  * message can be validated against its expected size in one check.
  * DeserializeMessage stays exact-size by design: variable-length messages
- * are rejected. Channel 0 is reliable (control/events/combat), channel 1 is
- * unreliable sequenced (snapshots), per 00-network.md §1.
+ * are rejected. Channel 0 is reliable (control/events), channel 1 is
+ * unreliable sequenced (snapshots — PlayerState / GhostSnapshot / TimeSync),
+ * per 00-network.md §1.
  *
  * The pose fields in PlayerState follow 00-network.md §5's joint-list format.
  * Rev 3 D4 (raw matrix pose) refines the same message in M1; only the
@@ -70,11 +71,22 @@ namespace dusk::net {
 ///
 /// M4.5 (capstone MINOR 4, review-full-glm-5.2.md): also redefined the
 /// EXISTING PlayerEventMsg.scene byte as the same-stage flag (1 = same-stage
-/// move, 0 = cross-stage / not a SceneChange — the host's room-table sniff
-/// keys (last-known stage, new room) on it). Semantic change to an existing
-/// field, NO layout change — hence no bump here; M5 bumps to v7 (it adds wire
-/// fields: spawn params, horse channel).
-constexpr u16 kProtocolVersion = 6;
+/// move, 0 = cross-stage / not a SceneChange). Semantic change to an existing
+/// field, NO layout change — hence no bump there.
+///
+/// v7 (M5.1, the parallel-worlds pivot — 05-ghosts.md §3): BREAKING
+/// DELETION. The M2/M3/M4 authority stack is gone: CombatIntentMsg,
+/// CombatResultMsg and RoomOwnershipMsg are deleted, EnemySnapshotMsg is
+/// renamed GhostSnapshotMsg with the ghost-layer field set (§4.2, 34 B — the
+/// old hp/maxHp/aggro/semantics combat wire and the M4.5 capstone "M5 decides
+/// wire-vs-drop" notes resolve as DROPPED), EnemyEventMsg is trimmed to
+/// {senderId, eventId, entityId} (Died only — Spawned/RoomClear/BossPhase
+/// dropped), and the per-player room-ownership map that rode PlayerState/
+/// PlayerEvent is gone (the session no longer sniffs rooms; puppets are
+/// whole-session star-relayed). Type count 16 -> 13. Ghost traffic is
+/// broadcast to every joined peer; room filtering is a receive-side gate in
+/// M5.3, never the wire. Wire semantics of every surviving message unchanged.
+constexpr u16 kProtocolVersion = 7;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -117,14 +129,11 @@ enum class MsgType : u16 {
     WorldInit = 6,
     PlayerState = 7,
     PlayerEvent = 8,
-    EnemySnapshot = 9,
+    GhostSnapshot = 9,  // was EnemySnapshot (v7 rename; field set replaced, 44 B -> 34 B)
     EnemyEvent = 10,
-    CombatIntent = 11,
-    CombatResult = 12,
-    TimeSync = 13,
-    TimeEvent = 14,
-    WeatherChange = 15,
-    RoomOwnership = 16,
+    TimeSync = 11,
+    TimeEvent = 12,
+    WeatherChange = 13,
 };
 
 enum class JoinRejectReason : u8 {
@@ -161,21 +170,12 @@ enum class PlayerEventId : u8 {
                          //       (kInvalidPlayerId/0xFFFF = none or local-only)
 };
 
+/// Ghost-layer death events (05-ghosts.md §4.2). v7 ships Died ONLY:
+/// Spawned/RoomClear/BossPhase are dropped — spawns are implicit-by-first-
+/// snapshot, despawns are Died-or-TTL, ALLDIE/door-clear is local (gF12/F13,
+/// m2). Spawned returns with the M6 wave seam.
 enum class EnemyEventId : u8 {
-    Spawned = 0,
-    Died = 1,
-    RoomClear = 2,
-    BossPhase = 3,
-};
-
-enum class CombatOutcome : u8 {
-    Hit = 0,
-    Miss = 1,
-    Blocked = 2,
-    Died = 3,
-    /// Sim owner refused the intent (out of range, invalid target, friendly
-    /// fire off — network.md §7).
-    Rejected = 4,
+    Died = 0,
 };
 
 /// Day-clock boundary events (04-time-weather.md §4.2): NEW_DAY fires on the
@@ -304,8 +304,8 @@ struct SessionEndMsg {
 
 /// Sent to a joining client right after JoinAccept (00-network.md §4). Fixed
 /// size by contract: stage + time + weather + roster. M1's snapshot-on-join is
-/// a burst of ordinary per-frame PlayerState / EnemySnapshot messages sent
-/// right after WorldInit — no count-prefixed full-state sections live here.
+/// a burst of ordinary per-frame PlayerState messages sent right after
+/// WorldInit — no count-prefixed full-state sections live here.
 /// M3 (v5): carries the host's current time/weather so a mid-game joiner
 /// starts with the host's sky; the roster-refresh broadcast on later joins
 /// keeps already-joined peers' sky targets current at the same time.
@@ -358,75 +358,44 @@ struct PlayerEventMsg {
     u8 eventId = 0;  // PlayerEventId
     /// PlayerEventId::SceneChange only (M4.5 review MINOR 1): 1 = the move is
     /// WITHIN the current stage (same stage, new room), 0 = the stage itself
-    /// changed (cross-stage) or not a SceneChange. The host's room-ownership
-    /// sniff keys (last-known stage, new room), which is valid for same-stage
-    /// moves only — a cross-stage SceneChange must not create a bogus
-    /// (oldStage, newRoom) entry.
+    /// changed (cross-stage) or not a SceneChange. v7 (M5.1): the host's
+    /// room-ownership sniff is gone with the ownership table — the byte now
+    /// only feeds the receive-side puppet gate in coop.cpp (same-stage room
+    /// adoption), which is valid for same-stage moves only.
     u8 scene = 0;
     u8 reserved = 0;
     u32 data = 0;   // event-specific payload (see PlayerEventId)
     u32 data2 = 0;  // extended event payload (M1: item joints)
 };
 
-struct EnemySnapshotMsg {
-    u16 enemyId = 0xFFFF;  // session-unique per room instance
-    // Capstone MINOR 2 (review-full-glm-5.2.md MINOR 2): `type` (procName) is
-    // populated on the host and serialized but INTENTIONALLY never read by
-    // the client apply path (the client already has the local actor with its
-    // own type). M5 decides wire-vs-drop; do NOT change behavior.
-    u16 type = 0;          // procName / profile id
-    u16 hp = 0;
-    u16 maxHp = 0;
-    // Capstone MINOR 2: `aggro` (the nearest-player hint) is populated on the
-    // host (resolveNearestPlayer) and serialized but has NO consumer on the
-    // receive side in v1 (a frozen puppet doesn't aggro). M5 decides
-    // wire-vs-drop (a consumer would be enemy-attack targeting display).
-    u8 aggro = kInvalidPlayerId;  // target player id; kInvalidPlayerId = none
-    u8 flags = 0;                 // dead / downed / wolf-bitten + boss-phase
-    s16 angle = 0;                // shape_angle.y
-    u32 anim = 0;  // per-type packed: action id (u16) + anim/model frame (u16)
-    Vec3f pos;     // current.pos
-    Vec3f speed;   // current velocty (knockback / anim hints)
-    u8 semantics = 0;          // DamageSemantics from the whitelist adapter
-    u8 reserved[3] = {};
+/// Ghost-layer pose snapshot (05-ghosts.md §4.2), unreliable channel. The
+/// ghost SENDER is M5.2; in M5.1 this message is wire-only — no game code
+/// emits or consumes it yet (the stub ships zero ghost traffic). The layout
+/// IS the v7 design wire (34 B payload): sender-stamped so a receiver keys
+/// its registry on (senderId, entityId) and drops senderId == selfId()
+/// self-echoes on the host (d-B1/gF5). `animFrame` is the morf frame only —
+/// action ids were never transmitted (d-B2); the high 16 bits the old u32
+/// `anim` promised are gone.
+struct GhostSnapshotMsg {
+    u8 senderId = kInvalidPlayerId;  // session PlayerId — receiver registry key
+    u8 flags = 0;                    // bit0 boss; bit1 projectile; v1: rest 0
+    u16 entityId = 0xFFFF;           // (room<<8)|setID, or owner-major dynamic id
+    u16 type = 0;                    // procName (profile id)
+    s16 angle = 0;                   // shape_angle.y
+    u16 animFrame = 0;               // morf frame only (v1 fidelity)
+    Vec3f pos;
+    Vec3f speed;                     // knockback / projectiles (M5.4 speed-lerp)
 };
 
+/// Ghost death event (05-ghosts.md §4.2), reliable channel. Trimmed to Died
+/// only (gF12/F13): the receiver despawns the ghost on Died or a 1 s silence
+/// TTL. `data`/`flags`/`flagMask` (drop table id + save switch grant) and the
+/// Spawned/RoomClear/BossPhase events are DROPPED — drops and save switches
+/// are fully local per player's own kills in the parallel-worlds model.
 struct EnemyEventMsg {
-    u16 enemyId = 0xFFFF;
-    u16 data = 0;    // event-specific: drop table id (Died)
-    u8 eventId = 0;  // EnemyEventId
-    u8 flags = 0;    // kEnemyEventFlag_* bits
-    /// Per-player save switch to grant on death (dComIfGs_onSwitch), 0xFF =
-    /// none. Carried for every died event: bosses grant their story switch
-    /// (D9), regular enemies grant their room switch (enemy-caused world
-    /// changes ride the enemy channel — network.md §5).
-    u8 flagMask = 0xFF;
-    u8 reserved[3] = {};
-};
-
-struct CombatIntentMsg {
-    u8 attackerId = kInvalidPlayerId;
-    u8 powerType = 0;  // the target enemy's mPowerType (validation vs owner)
-    u8 hitType = 0;    // HIT_TYPE_* (at_power_check output on the client)
-    u8 targetPlayerId = kInvalidPlayerId;  // friendly-fire target (v1: rejected)
-    u16 targetEnemyId = 0xFFFF;
-    u8 atp = 0;             // raw At collider atp (the enemy's own handler scales it)
-    u8 reserved = 0;
-    u16 computedPower = 0;  // client's locally-computed damage (informational;
-                            // owner reproduces deterministically — m2-design-notes §1)
-    u32 seq = 0;            // attacker request counter, echoed by CombatResult
-    u32 atType = 0;         // At collider mType bits (cCcD_ObjAtType)
-    Vec3f hitPos;           // SetAtTgGObjInf contact point
-    Vec3f attackerPos;      // attacker current.pos (range validation)
-};
-
-struct CombatResultMsg {
-    u16 targetEnemyId = 0xFFFF;
-    u16 damage = 0;
-    u16 newHp = 0;
-    u8 outcome = 0;   // CombatOutcome
-    u8 attackerId = kInvalidPlayerId;
-    u32 seq = 0;
+    u8 senderId = kInvalidPlayerId;
+    u8 eventId = 0;  // EnemyEventId::Died
+    u16 entityId = 0xFFFF;
 };
 
 // ---------------------------------------------------------------------------
@@ -464,22 +433,6 @@ struct WeatherChangeMsg {
     u16 intensity = 0; // current raincnt / mSnowCount
     u8 colpat = 0;     // mColpatWeather
     u8 pad = 0;
-};
-
-/// M4 room-owner assignment (docs/design/network.md §6). Reliable,
-/// host->all, one per changed room. The host is the only emitter: it tracks
-/// every player's (stage, room) from the PlayerState/PlayerEvent stream,
-/// maintains the sticky ownership table (host defaults to owning its own
-/// room; otherwise the first player in the room; transfers only on
-/// leave/disconnect), broadcasts each change, and sends the full map to each
-/// joiner. Message destination = authority: CombatIntent routes to the
-/// room's owner; EnemySnapshot fan-out is scoped to the sender's room.
-struct RoomOwnershipMsg {
-    char stage[kMaxStageNameLength] = {};  // e.g. "F_SP108"
-    s8 room = -1;
-    u8 owner = kInvalidPlayerId;  // PlayerId owning this room, or
-                                  // kInvalidPlayerId = ownerless
-    u8 reserved[2] = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -649,14 +602,11 @@ union PayloadUnion {
     WorldInitMsg worldInit;
     PlayerStateMsg playerState;
     PlayerEventMsg playerEvent;
-    EnemySnapshotMsg enemySnapshot;
+    GhostSnapshotMsg ghostSnapshot;
     EnemyEventMsg enemyEvent;
-    CombatIntentMsg combatIntent;
-    CombatResultMsg combatResult;
     TimeSyncMsg timeSync;
     TimeEventMsg timeEvent;
     WeatherChangeMsg weatherChange;
-    RoomOwnershipMsg roomOwnership;
 
     PayloadUnion() { std::memset(this, 0, sizeof(PayloadUnion)); }
 };
@@ -673,7 +623,7 @@ u16 WireSize(MsgType type);
 constexpr u8 ChannelFor(MsgType type) {
     switch (type) {
     case MsgType::PlayerState:
-    case MsgType::EnemySnapshot:
+    case MsgType::GhostSnapshot:
     case MsgType::TimeSync:
         return kChannelUnreliable;
     default:

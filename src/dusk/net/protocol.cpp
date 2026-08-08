@@ -170,19 +170,15 @@ u16 WireSize(MsgType type) {
         return PlayerStateWireSize();
     case MsgType::PlayerEvent:
         return 4 + 4 + 4;  // 12
-    case MsgType::EnemySnapshot:
-        // enemyId,type,hp,maxHp,aggro,flags,angle,anim,pos,speed,semantics,reserved[3]
-        // = 2+2+2+2+1+1+2+4+12+12+1+3 = 44
-        return 2 + 2 + 2 + 2 + 1 + 1 + 2 + 4 + 12 + 12 + 1 + 3;  // 44
+    case MsgType::GhostSnapshot:
+        // v7 (05-ghosts.md §4.2): senderId,flags,entityId,type,angle,animFrame,
+        // pos,speed = 1+1+2+2+2+2+12+12 = 34 (was the 44-B EnemySnapshot —
+        // hp/maxHp/aggro/semantics/reserved dropped)
+        return 1 + 1 + 2 + 2 + 2 + 2 + 12 + 12;  // 34
     case MsgType::EnemyEvent:
-        return 2 + 2 + 1 + 1 + 1 + 3;  // 10 (flagMask + reserved)
-    case MsgType::CombatIntent:
-        // attackerId,powerType,hitType,targetPlayerId,targetEnemyId,atp,reserved,
-        // computedPower,seq,atType,hitPos,attackerPos
-        // = 1+1+1+1+2+1+1+2+4+4+12+12 = 42
-        return 1 + 1 + 1 + 1 + 2 + 1 + 1 + 2 + 4 + 4 + 12 + 12;  // 42
-    case MsgType::CombatResult:
-        return 2 + 2 + 2 + 1 + 1 + 4;  // 12
+        // v7: senderId + eventId + entityId = 1+1+2 = 4 (data/flags/flagMask/
+        // reserved dropped — saves + drops are local)
+        return 1 + 1 + 2;  // 4
     case MsgType::TimeSync:
         // f32 time + u16 day + u8 rate + u8 flags
         return 4 + 2 + 1 + 1;  // 8
@@ -192,9 +188,6 @@ u16 WireSize(MsgType type) {
     case MsgType::WeatherChange:
         // u8 mode + u8 thunder + u16 intensity + u8 colpat + u8 pad
         return 1 + 1 + 2 + 1 + 1;  // 6
-    case MsgType::RoomOwnership:
-        // stage(16) + room(1) + owner(1) + reserved(2)
-        return kMaxStageNameLength + 1 + 1 + 2;  // 20
     }
     return 0;
 }
@@ -229,41 +222,19 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU8(msg.payload.playerEvent.scene) &&
                w.WriteU8(msg.payload.playerEvent.reserved) &&
                w.WriteU32(msg.payload.playerEvent.data) && w.WriteU32(msg.payload.playerEvent.data2);
-    case MsgType::EnemySnapshot:
-        return w.WriteU16(msg.payload.enemySnapshot.enemyId) &&
-               w.WriteU16(msg.payload.enemySnapshot.type) && w.WriteU16(msg.payload.enemySnapshot.hp) &&
-               w.WriteU16(msg.payload.enemySnapshot.maxHp) &&
-               w.WriteU8(msg.payload.enemySnapshot.aggro) && w.WriteU8(msg.payload.enemySnapshot.flags) &&
-               w.WriteS16(msg.payload.enemySnapshot.angle) && w.WriteU32(msg.payload.enemySnapshot.anim) &&
-               w.WriteVec3f(msg.payload.enemySnapshot.pos) &&
-               w.WriteVec3f(msg.payload.enemySnapshot.speed) &&
-               w.WriteU8(msg.payload.enemySnapshot.semantics) &&
-               w.WriteBytes(msg.payload.enemySnapshot.reserved, 3);
+    case MsgType::GhostSnapshot:
+        return w.WriteU8(msg.payload.ghostSnapshot.senderId) &&
+               w.WriteU8(msg.payload.ghostSnapshot.flags) &&
+               w.WriteU16(msg.payload.ghostSnapshot.entityId) &&
+               w.WriteU16(msg.payload.ghostSnapshot.type) &&
+               w.WriteS16(msg.payload.ghostSnapshot.angle) &&
+               w.WriteU16(msg.payload.ghostSnapshot.animFrame) &&
+               w.WriteVec3f(msg.payload.ghostSnapshot.pos) &&
+               w.WriteVec3f(msg.payload.ghostSnapshot.speed);
     case MsgType::EnemyEvent:
-        return w.WriteU16(msg.payload.enemyEvent.enemyId) && w.WriteU16(msg.payload.enemyEvent.data) &&
-               w.WriteU8(msg.payload.enemyEvent.eventId) && w.WriteU8(msg.payload.enemyEvent.flags) &&
-               w.WriteU8(msg.payload.enemyEvent.flagMask) &&
-               w.WriteBytes(msg.payload.enemyEvent.reserved, 3);
-    case MsgType::CombatIntent:
-        return w.WriteU8(msg.payload.combatIntent.attackerId) &&
-               w.WriteU8(msg.payload.combatIntent.powerType) &&
-               w.WriteU8(msg.payload.combatIntent.hitType) &&
-               w.WriteU8(msg.payload.combatIntent.targetPlayerId) &&
-               w.WriteU16(msg.payload.combatIntent.targetEnemyId) &&
-               w.WriteU8(msg.payload.combatIntent.atp) &&
-               w.WriteU8(msg.payload.combatIntent.reserved) &&
-               w.WriteU16(msg.payload.combatIntent.computedPower) &&
-               w.WriteU32(msg.payload.combatIntent.seq) &&
-               w.WriteU32(msg.payload.combatIntent.atType) &&
-               w.WriteVec3f(msg.payload.combatIntent.hitPos) &&
-               w.WriteVec3f(msg.payload.combatIntent.attackerPos);
-    case MsgType::CombatResult:
-        return w.WriteU16(msg.payload.combatResult.targetEnemyId) &&
-               w.WriteU16(msg.payload.combatResult.damage) &&
-               w.WriteU16(msg.payload.combatResult.newHp) &&
-               w.WriteU8(msg.payload.combatResult.outcome) &&
-               w.WriteU8(msg.payload.combatResult.attackerId) &&
-               w.WriteU32(msg.payload.combatResult.seq);
+        return w.WriteU8(msg.payload.enemyEvent.senderId) &&
+               w.WriteU8(msg.payload.enemyEvent.eventId) &&
+               w.WriteU16(msg.payload.enemyEvent.entityId);
     case MsgType::TimeSync:
         return w.WriteF32(msg.payload.timeSync.time) && w.WriteU16(msg.payload.timeSync.day) &&
                w.WriteU8(msg.payload.timeSync.rate) && w.WriteU8(msg.payload.timeSync.flags);
@@ -275,11 +246,6 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU8(msg.payload.weatherChange.thunder) &&
                w.WriteU16(msg.payload.weatherChange.intensity) &&
                w.WriteU8(msg.payload.weatherChange.colpat) && w.WriteU8(msg.payload.weatherChange.pad);
-    case MsgType::RoomOwnership:
-        return w.WriteFixedString(msg.payload.roomOwnership.stage, kMaxStageNameLength) &&
-               w.WriteS8(msg.payload.roomOwnership.room) &&
-               w.WriteU8(msg.payload.roomOwnership.owner) &&
-               w.WriteBytes(msg.payload.roomOwnership.reserved, 2);
     }
     return false;
 }
@@ -291,8 +257,10 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
         return false;
     }
     if (typeRaw < static_cast<u16>(MsgType::JoinRequest) ||
-        typeRaw > static_cast<u16>(MsgType::RoomOwnership))
+        typeRaw > static_cast<u16>(MsgType::WeatherChange))
     {
+        // v7: 13 types 1..13 — the removed CombatIntent(11)/CombatResult(12)/
+        // RoomOwnership(16) wire ids are now out of range and rejected here.
         return false;
     }
     const auto type = static_cast<MsgType>(typeRaw);
@@ -324,46 +292,19 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.playerEvent.reserved) &&
                r.ReadU32(out.payload.playerEvent.data) &&
                r.ReadU32(out.payload.playerEvent.data2);
-    case MsgType::EnemySnapshot:
-        return r.ReadU16(out.payload.enemySnapshot.enemyId) &&
-               r.ReadU16(out.payload.enemySnapshot.type) &&
-               r.ReadU16(out.payload.enemySnapshot.hp) &&
-               r.ReadU16(out.payload.enemySnapshot.maxHp) &&
-               r.ReadU8(out.payload.enemySnapshot.aggro) &&
-               r.ReadU8(out.payload.enemySnapshot.flags) &&
-               r.ReadS16(out.payload.enemySnapshot.angle) &&
-               r.ReadU32(out.payload.enemySnapshot.anim) &&
-               r.ReadVec3f(out.payload.enemySnapshot.pos) &&
-               r.ReadVec3f(out.payload.enemySnapshot.speed) &&
-               r.ReadU8(out.payload.enemySnapshot.semantics) &&
-               r.ReadBytes(out.payload.enemySnapshot.reserved, 3);
+    case MsgType::GhostSnapshot:
+        return r.ReadU8(out.payload.ghostSnapshot.senderId) &&
+               r.ReadU8(out.payload.ghostSnapshot.flags) &&
+               r.ReadU16(out.payload.ghostSnapshot.entityId) &&
+               r.ReadU16(out.payload.ghostSnapshot.type) &&
+               r.ReadS16(out.payload.ghostSnapshot.angle) &&
+               r.ReadU16(out.payload.ghostSnapshot.animFrame) &&
+               r.ReadVec3f(out.payload.ghostSnapshot.pos) &&
+               r.ReadVec3f(out.payload.ghostSnapshot.speed);
     case MsgType::EnemyEvent:
-        return r.ReadU16(out.payload.enemyEvent.enemyId) &&
-               r.ReadU16(out.payload.enemyEvent.data) &&
+        return r.ReadU8(out.payload.enemyEvent.senderId) &&
                r.ReadU8(out.payload.enemyEvent.eventId) &&
-               r.ReadU8(out.payload.enemyEvent.flags) &&
-               r.ReadU8(out.payload.enemyEvent.flagMask) &&
-               r.ReadBytes(out.payload.enemyEvent.reserved, 3);
-    case MsgType::CombatIntent:
-        return r.ReadU8(out.payload.combatIntent.attackerId) &&
-               r.ReadU8(out.payload.combatIntent.powerType) &&
-               r.ReadU8(out.payload.combatIntent.hitType) &&
-               r.ReadU8(out.payload.combatIntent.targetPlayerId) &&
-               r.ReadU16(out.payload.combatIntent.targetEnemyId) &&
-               r.ReadU8(out.payload.combatIntent.atp) &&
-               r.ReadU8(out.payload.combatIntent.reserved) &&
-               r.ReadU16(out.payload.combatIntent.computedPower) &&
-               r.ReadU32(out.payload.combatIntent.seq) &&
-               r.ReadU32(out.payload.combatIntent.atType) &&
-               r.ReadVec3f(out.payload.combatIntent.hitPos) &&
-               r.ReadVec3f(out.payload.combatIntent.attackerPos);
-    case MsgType::CombatResult:
-        return r.ReadU16(out.payload.combatResult.targetEnemyId) &&
-               r.ReadU16(out.payload.combatResult.damage) &&
-               r.ReadU16(out.payload.combatResult.newHp) &&
-               r.ReadU8(out.payload.combatResult.outcome) &&
-               r.ReadU8(out.payload.combatResult.attackerId) &&
-               r.ReadU32(out.payload.combatResult.seq);
+               r.ReadU16(out.payload.enemyEvent.entityId);
     case MsgType::TimeSync:
         return r.ReadF32(out.payload.timeSync.time) && r.ReadU16(out.payload.timeSync.day) &&
                r.ReadU8(out.payload.timeSync.rate) && r.ReadU8(out.payload.timeSync.flags);
@@ -375,11 +316,6 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.weatherChange.thunder) &&
                r.ReadU16(out.payload.weatherChange.intensity) &&
                r.ReadU8(out.payload.weatherChange.colpat) && r.ReadU8(out.payload.weatherChange.pad);
-    case MsgType::RoomOwnership:
-        return r.ReadFixedString(out.payload.roomOwnership.stage, kMaxStageNameLength) &&
-               r.ReadS8(out.payload.roomOwnership.room) &&
-               r.ReadU8(out.payload.roomOwnership.owner) &&
-               r.ReadBytes(out.payload.roomOwnership.reserved, 2);
     }
     return false;
 }
