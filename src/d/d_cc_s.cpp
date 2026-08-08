@@ -10,7 +10,6 @@
 #include "d/d_jnt_col.h"
 #include "f_op/f_op_actor_mng.h"
 #if TARGET_PC
-#include "dusk/coop/coop_combat.h"
 #include "dusk/settings.h"
 #endif
 
@@ -536,16 +535,6 @@ void dCcS::SetAtTgGObjInf(bool i_setAt, bool i_setTg, cCcD_Obj* i_atObj, cCcD_Ob
     dCcD_GObjInf* tgObjInf = (dCcD_GObjInf*)i_tgObjInf;
     dCcD_GStts* at_gstts = (dCcD_GStts*)i_atGStts;
     dCcD_GStts* tg_gstts = (dCcD_GStts*)i_tgGStts;
-
-#if TARGET_PC
-    // Co-op (M2): combat intent capture. When a local Link's attack contacts
-    // a registered enemy puppet, forward the raw attack fields to the sim
-    // owner as a CombatIntent (03-enemies.md §4.3). The puppet itself is
-    // frozen — it never polls this hit flag locally, so its HP is never
-    // touched; the owner injects the hit into ITS instance. Host role is a
-    // no-op (the host sims its own enemies natively).
-    dusk::coop::combat::noteAtTgHit(atObjInf->GetAc(), tgObjInf->GetAc(), i_atObj, i_hitPos);
-#endif
 
     bool chk_shield = ChkShield(i_atObj, i_tgObj, atObjInf, tgObjInf, i_hitPos);
 

@@ -134,13 +134,7 @@ int e_ai_class::Draw() {
 }
 
 BOOL e_ai_class::player_way_check() {
-#if TARGET_PC
-    // Co-op (M2.5, D3): nearest real player via scoped targeting context
-    // (slot-0 fallback outside the scope).
-    s16 angle_diff = shape_angle.y - fopAcM_getContextPlayer()->shape_angle.y;
-#else
     s16 angle_diff = shape_angle.y - dComIfGp_getPlayer(0)->shape_angle.y;
-#endif
     if (angle_diff < 0) {
         angle_diff = -angle_diff;
     }
@@ -173,13 +167,7 @@ BOOL e_ai_class::other_bg_check(fopAc_ac_c* i_other) {
 }
 
 BOOL e_ai_class::pl_check(f32 i_range, s16 i_angle) {
-#if TARGET_PC
-    // Co-op (M2.5, D3): the attack LOS gate resolves the nearest real player
-    // so E_AI only attacks a player it can actually see.
-    fopAc_ac_c* player = fopAcM_getContextPlayer();
-#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
-#endif
     
     if (m_playerDist < i_range) {
         s16 angle_diff = shape_angle.y - m_angleToPlayer;
@@ -192,12 +180,7 @@ BOOL e_ai_class::pl_check(f32 i_range, s16 i_angle) {
 }
 
 void e_ai_class::damage_check() {
-#if TARGET_PC
-    // Co-op (M2.5, D3): nearest real player via scoped targeting context.
-    fopAc_ac_c* player = fopAcM_getContextPlayer();
-#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
-#endif
     cXyz sp44;
 
     if (m_invulnerabilityTimer != 0) {

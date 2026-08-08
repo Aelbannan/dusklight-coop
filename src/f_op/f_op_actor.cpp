@@ -19,13 +19,6 @@
 #include "c/c_dylink.h"
 #include "m_Do/m_Do_printf.h"
 
-#if TARGET_PC
-#include "dusk/coop/coop_context.h"
-#include "dusk/coop/coop_enemy.h"
-
-#include <optional>
-#endif
-
 #if DEBUG
 class print_error_check_c {
 public:
@@ -293,18 +286,6 @@ static int fopAc_Execute(void* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     int ret = 1;
 
-#if TARGET_PC
-    // Co-op (M2): client-side enemy puppets are frozen — the snapshot apply
-    // runs here and the vanilla dispatch (the enemy's AI/action state machine)
-    // is skipped entirely, so divergence is impossible. Drawing is a separate
-    // dispatch and keeps running; the apply re-registered the damage
-    // colliders, so player attacks still contact the puppet and combat
-    // intents originate at the collider level (03-enemies.md §1.3).
-    if (dusk::coop::enemy::puppetExecute(actor)) {
-        return 1;
-    }
-#endif
-
     #if DEBUG
     fapGm_HIO_c::startCpuTimer();
 
@@ -354,32 +335,7 @@ static int fopAc_Execute(void* i_this) {
             print_error_check_c error_check(actor, print_error_check_c::sEXECUTE);
             #endif
 
-#if TARGET_PC
-            // Co-op (M2, D3): on the host, whitelisted enemies run their AI
-            // inside a targeting context so the inline player reads
-            // (fopAcM_searchPlayerAngleY/Distance*, daPy_getPlayer*ActorClass)
-            // resolve the NEAREST real player — the host's Link or a remote
-            // puppet — instead of slot 0. Clients never push (their enemies are
-            // frozen).
-            ret = [&]() {
-                std::optional<dusk::coop::ScopedEnemyTarget> scopedTarget;
-                if (dusk::coop::enemy::hostNeedsContext(actor)) {
-                    scopedTarget.emplace(actor);
-                }
-                return fpcMtd_Execute(
-                    (process_method_class DUSK_CONST*)actor->sub_method, actor);
-            }();
-#else
-            // Non-PC builds stay byte-identical to vanilla.
             ret = fpcMtd_Execute((process_method_class DUSK_CONST*)actor->sub_method, actor);
-#endif
-
-#if TARGET_PC
-            // Co-op (M2): host-side snapshot + death-window capture after the
-            // enemy's own execute ran (the pose is frame-final). No-op for
-            // non-registered actors and clients.
-            dusk::coop::enemy::hostOnExecuted(actor);
-#endif
 
             #if DEBUG
             }

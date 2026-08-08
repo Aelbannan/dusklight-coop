@@ -5,14 +5,6 @@
 #include "f_op/f_op_actor.h"
 #include "d/d_com_inf_game.h"
 
-#if TARGET_PC
-// Co-op (M2, D3): the scoped enemy-targeting player (forward decl — the
-// implementation lives in src/dusk/coop/coop_context.cpp).
-namespace dusk::coop {
-fopAc_ac_c* currentTargetPlayer();
-}
-#endif
-
 struct ResTIMG;
 
 class daPy_frameCtrl_c : public J3DFrameCtrl {
@@ -1286,21 +1278,11 @@ void daPy_aramBufferCheck(void* i_buffer, u32 i_size);
 int daPy_addCalcShort(s16* i_value, s16 i_target, s16 i_scale, s16 i_maxStep, s16 i_minStep);
 
 inline daPy_py_c* daPy_getPlayerActorClass() {
-#if TARGET_PC
-    // Co-op (M2, D3): resolve through the scoped enemy-targeting player (the
-    // nearest real player on the host), else the native slot-0 Link.
-    return (daPy_py_c*)dusk::coop::currentTargetPlayer();
-#else
     return (daPy_py_c*)dComIfGp_getPlayer(0);
-#endif
 }
 
 inline daPy_py_c* daPy_getLinkPlayerActorClass() {
-#if TARGET_PC
-    return (daPy_py_c*)dusk::coop::currentTargetPlayer();
-#else
     return dComIfGp_getLinkPlayer();
-#endif
 }
 
 #endif /* D_A_D_A_PLAYER_H */

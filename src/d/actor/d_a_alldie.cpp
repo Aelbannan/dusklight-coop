@@ -9,10 +9,6 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
 
-#if TARGET_PC
-#include "dusk/coop/coop_enemy.h"
-#endif
-
 u8 daAlldie_c::getEventNo() {
     return fopAcM_GetParam(this) >> 0x18;
 }
@@ -28,20 +24,6 @@ int daAlldie_c::actionWait() {
 int daAlldie_c::actionCheck() {
     const s8 roomNo = fopAcM_GetRoomNo(this);
     if (fopAcM_myRoomSearchEnemy(roomNo) == NULL) {
-#if TARGET_PC
-        // Co-op (M2, 03-enemies.md §5): on the host the room-clear moment is
-        // authoritative — broadcast the per-room EnemyEvent(RoomClear) bit so
-        // clients hold their own ALLDIE instead of opening the door early
-        // (corpse-linger / dynamic-spawn edges). On a client, hold the
-        // ACT_CHECK -> ACT_TIMER transition until that bit arrives for rooms
-        // that had synced enemies (their death mirror is authoritative);
-        // rooms without synced enemies behave vanilla. Both calls no-op on
-        // the other role.
-        dusk::coop::enemy::hostRoomCleared(roomNo);
-        if (dusk::coop::enemy::clientRoomClearGated(roomNo)) {
-            return 1;  // client: wait for the owner's roomClear bit
-        }
-#endif
         mAction = ACT_TIMER;
         mTimer = 65;
     }
@@ -53,15 +35,6 @@ int daAlldie_c::actionTimer() {
     if (fopAcM_myRoomSearchEnemy(fopAcM_GetRoomNo(this)) != NULL) {
         mAction = ACT_CHECK;
     } else {
-#if TARGET_PC
-        // Co-op (M2): a rescan racing the roomClear bit (e.g. the room gained
-        // a synced enemy between actionCheck and here) must not let the timer
-        // expire early on the client.
-        if (dusk::coop::enemy::clientRoomClearGated(fopAcM_GetRoomNo(this))) {
-            mAction = ACT_CHECK;
-            return 1;
-        }
-#endif
         if (mTimer > 0) {
             mTimer--;
         } else {
