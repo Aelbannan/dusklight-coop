@@ -29,15 +29,14 @@
  *     hard connection loss via peer timeout -> HandleDisconnect) gets its
  *     transport torn down by Stop() and starts a second/third session in the
  *     same process without an app restart (review-full-deepseek MAJOR 1);
- *   - M2 relay policy: CombatIntent/EnemySnapshot/CombatResult/EnemyEvent do
- *     NOT ride the PlayerState star-relay — a client's CombatIntent is
- *     consumed by the sim owner and never echoed to other clients; the
- *     owner's EnemySnapshot/CombatResult simulcasts reach every client;
- *     EnemyEvent is room-scoped like EnemySnapshot (M4.5 MAJOR 2: a died/
- *     room-clear event reaches only peers in the SENDER's room — a cross-stage
- *     peer with a coincident (roomNo<<8)|setID must not mis-kill local
- *     enemies or grant wrong switches); a buggy client's
- *     EnemySnapshot/CombatResult is not echoed;
+ *   - M4 LAN discovery (HostAnnounce over loopback);
+ *   - v7 net-off regression (d-m8): a session that was never started refuses
+ *     to send GhostSnapshot/EnemyEvent (zero ghost sends with net off), and
+ *     the ghost wire round-trips only when explicitly serialized — game code
+ *     emits nothing; the game-side "zero registry entries / myRoomSearchEnemy
+ *     unchanged" half of the net-off contract is enforced by the stub itself
+ *     (coop_enemy.cpp's onGameFrame early-returns when the session is off,
+ *     and the fopAc_Execute / d_cc_s / ALLDIE coop hooks are deleted);
  *   - M3 time/weather contract: v5 absolute-phase wire round-trips (TimeSync
  *     f32 time + day + rate + flags; TimeEvent; WeatherChange mode + thunder
  *     + intensity + colpat); host->all broadcasts of TimeSync/TimeEvent/
@@ -267,59 +266,23 @@ Message MakeMessage(MsgType type) {
         p.data2 = 0x0F0F0F0F;
         break;
     }
-    case MsgType::EnemySnapshot: {
-        auto& p = m.payload.enemySnapshot;
-        p.enemyId = 77;
+    case MsgType::GhostSnapshot: {
+        auto& p = m.payload.ghostSnapshot;
+        p.senderId = 5;
+        p.flags = 0xAA;  // v1: boss|projectile bits, rest 0
+        p.entityId = 77;
         p.type = 0x2041;
-        p.hp = 12;
-        p.maxHp = 30;
-        p.aggro = 6;
-        p.flags = 0xAA;
         p.angle = -12345;
-        p.anim = 0x01020304;
+        p.animFrame = 42;
         p.pos = Vec3f{10.0f, 20.0f, 30.0f};
         p.speed = Vec3f{-1.0f, 0.0f, 2.0f};
-        p.semantics = 1;
-        p.reserved[0] = 0xDE;
-        p.reserved[1] = 0xAD;
-        p.reserved[2] = 0xBE;
         break;
     }
     case MsgType::EnemyEvent: {
         auto& p = m.payload.enemyEvent;
-        p.enemyId = 88;
-        p.data = 99;
+        p.senderId = 3;
         p.eventId = static_cast<u8>(EnemyEventId::Died);
-        p.flags = 0x0F;
-        p.flagMask = 0x2A;
-        p.reserved[0] = 0x11;
-        p.reserved[1] = 0x22;
-        p.reserved[2] = 0x33;
-        break;
-    }
-    case MsgType::CombatIntent: {
-        auto& p = m.payload.combatIntent;
-        p.attackerId = 1;
-        p.powerType = 3;
-        p.hitType = 12;
-        p.targetPlayerId = kInvalidPlayerId;
-        p.targetEnemyId = 77;
-        p.atp = 3;
-        p.computedPower = 30;
-        p.seq = 12345;
-        p.atType = 0x00000006;  // NORMAL_SWORD | HORSE
-        p.hitPos = Vec3f{0.5f, 1.5f, 2.5f};
-        p.attackerPos = Vec3f{512.0f, 0.0f, -256.0f};
-        break;
-    }
-    case MsgType::CombatResult: {
-        auto& p = m.payload.combatResult;
-        p.targetEnemyId = 77;
-        p.damage = 4;
-        p.newHp = 26;
-        p.outcome = static_cast<u8>(CombatOutcome::Hit);
-        p.attackerId = 1;
-        p.seq = 12345;
+        p.entityId = 88;
         break;
     }
     case MsgType::TimeSync: {
@@ -343,15 +306,6 @@ Message MakeMessage(MsgType type) {
         p.thunder = 1;
         p.intensity = 250;
         p.colpat = 2;
-        break;
-    }
-    case MsgType::RoomOwnership: {
-        auto& p = m.payload.roomOwnership;
-        std::strncpy(p.stage, "F_SP108", sizeof(p.stage) - 1);
-        p.room = 3;
-        p.owner = 2;
-        p.reserved[0] = 0x12;
-        p.reserved[1] = 0x34;
         break;
     }
     }
@@ -391,8 +345,8 @@ bool RoundTrip(MsgType type) {
 }
 
 void RunProtocolChecks() {
-    std::printf("protocol: round-trip all 16 message types\n");
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::RoomOwnership);
+    std::printf("protocol: round-trip all 13 v7 message types\n");
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
@@ -405,9 +359,16 @@ void RunProtocolChecks() {
     Check(WireSize(MsgType::TimeSync) == 8 && WireSize(MsgType::TimeEvent) == 8 &&
               WireSize(MsgType::WeatherChange) == 6,
         "time/weather message sizes (absolute-phase contract)");
-    Check(WireSize(MsgType::RoomOwnership) == kMaxStageNameLength + 1 + 1 + 2 &&
-              ChannelFor(MsgType::RoomOwnership) == kChannelReliable,
-        "RoomOwnership wire size + reliable channel (M4)");
+    // v7 WireSize rows (05-ghosts.md §3/§4.2): the ghost payload is 34 B
+    // (senderId+flags+entityId+type+angle+animFrame+pos+speed) on the
+    // unreliable channel; the trimmed death event is 4 B on the reliable
+    // channel.
+    Check(WireSize(MsgType::GhostSnapshot) == 1 + 1 + 2 + 2 + 2 + 2 + 12 + 12 &&
+              ChannelFor(MsgType::GhostSnapshot) == kChannelUnreliable,
+        "GhostSnapshot wire size 34 B + unreliable channel (v7)");
+    Check(WireSize(MsgType::EnemyEvent) == 1 + 1 + 2 &&
+              ChannelFor(MsgType::EnemyEvent) == kChannelReliable,
+        "EnemyEvent wire size 4 B + reliable channel (v7 trim)");
     Check(WireSize(MsgType::PlayerState) == PlayerStateWireSize(),
         "PlayerState wire size");
     Check(ChannelFor(MsgType::PlayerState) == kChannelUnreliable &&
@@ -416,6 +377,26 @@ void RunProtocolChecks() {
               ChannelFor(MsgType::TimeEvent) == kChannelReliable &&
               ChannelFor(MsgType::WeatherChange) == kChannelReliable,
         "channel mapping (snapshots unreliable, control reliable; TimeSync 1 Hz unreliable, events reliable)");
+
+    // v7 shred regression: the removed combat/ownership wire surfaces must be
+    // dead on the wire. Type 16 (RoomOwnership) is outside the compacted
+    // 1..13 range and rejected at parse; wire id 11 is now TimeSync (8 B), so
+    // a frame carrying the old CombatIntent payload length (42 B) trips the
+    // exact-size check and is rejected — the removed message cannot smuggle
+    // its old bytes through the new enumeration.
+    {
+        const u8 removedType[] = {0x10, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};  // type 16
+        ByteReader r(removedType, sizeof(removedType));
+        Message out;
+        Check(!DeserializeMessage(r, out), "removed RoomOwnership wire id (16) rejected");
+    }
+    {
+        const u8 oldIntent[] = {0x0B, 0x00, 0x2A, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};  // id 11, size 42
+        ByteReader r(oldIntent, sizeof(oldIntent));
+        Message out;
+        Check(!DeserializeMessage(r, out),
+            "old CombatIntent frame at wire id 11 rejected (size mismatch vs TimeSync)");
+    }
 
     // Malformed input must be rejected.
     {
@@ -448,9 +429,10 @@ void RunProtocolChecks() {
 /// runs produced different bytes (deepseek M3).
 void RunDeterminismChecks() {
     std::printf("wire: deterministic serialization (zero-init payload unions)\n");
-    // M4.5 (review MINOR 5): sweep ALL 16 types — the original bound stopped
-    // at WeatherChange (15) and skipped RoomOwnership (16, added in M4).
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::RoomOwnership);
+    // v7 (M5.1): sweep the 13-type set — CombatIntent/CombatResult/
+    // RoomOwnership are gone and GhostSnapshot (renamed + re-laid-out) and
+    // the trimmed EnemyEvent are in.
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
@@ -896,186 +878,6 @@ void RunGameMessageDemo() {
     host->Stop();
 }
 
-/// M2 star-relay policy: enemy/combat traffic must NOT ride the
-/// PlayerState/PlayerEvent star-relay path. A client's CombatIntent reaches
-/// the sim owner (the host in v1) and is consumed there — it is never echoed
-/// to the other client; the host's EnemySnapshot/CombatResult/EnemyEvent
-/// simulcasts (SendGameMessage -> SendToAll) reach every client; a buggy
-/// client's EnemySnapshot/CombatResult is consumed but not echoed.
-void RunM2RelayPolicyCheck() {
-    std::printf("m2: enemy/combat relay policy (star seam)\n");
-    Demo demo;
-
-    auto host = std::make_unique<Session>();
-    SessionConfig hostCfg;
-    hostCfg.port = 0;
-    hostCfg.name = "M2 Host";
-    hostCfg.maxPlayers = 3;
-    Check(host->StartHost(hostCfg), "m2 host starts (Listening)");
-    demo.live.push_back(host.get());
-    const u16 port = host->boundPort();
-
-    auto a = std::make_unique<Session>();
-    SessionConfig aCfg;
-    aCfg.joinHost = "127.0.0.1";
-    aCfg.port = port;
-    aCfg.name = "M2 Attacker";
-    aCfg.version = kProtocolVersion;
-    Check(a->StartClient(aCfg), "m2 attacker starts");
-    demo.live.push_back(a.get());
-    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000),
-        "m2 attacker joined");
-
-    auto b = std::make_unique<Session>();
-    SessionConfig bCfg;
-    bCfg.joinHost = "127.0.0.1";
-    bCfg.port = port;
-    bCfg.name = "M2 Observer";
-    bCfg.version = kProtocolVersion;
-    Check(b->StartClient(bCfg), "m2 observer starts");
-    demo.live.push_back(b.get());
-    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000),
-        "m2 observer joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
-        "m2 host roster has 3 players");
-
-    int hostIntents = 0;
-    int aIntents = 0;
-    int bIntents = 0;
-    int hostSnapshots = 0;
-    int aSnapshots = 0;
-    int bSnapshots = 0;
-    int hostResults = 0;
-    int aResults = 0;
-    int bResults = 0;
-    int aEvents = 0;
-    int bEvents = 0;
-    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++hostIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++hostSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++hostResults;
-            break;
-        default:
-            break;
-        }
-    });
-    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++aIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++aSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++aResults;
-            break;
-        case MsgType::EnemyEvent:
-            ++aEvents;
-            break;
-        default:
-            break;
-        }
-    });
-    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++bIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++bSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++bResults;
-            break;
-        case MsgType::EnemyEvent:
-            ++bEvents;
-            break;
-        default:
-            break;
-        }
-    });
-
-    // 1) CombatIntent: client A -> sim owner (host). The host consumes it for
-    //    validation; it must NOT be relayed to observer B or echoed back to A.
-    PayloadUnion intent = {};
-    intent.combatIntent.attackerId = a->selfId();
-    intent.combatIntent.targetEnemyId = 77;
-    intent.combatIntent.atp = 3;
-    intent.combatIntent.powerType = 1;
-    intent.combatIntent.seq = 1;
-    Check(a->SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
-    Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
-        "sim owner consumed A's CombatIntent");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(aIntents == 0 && bIntents == 0,
-        "CombatIntent is NOT relayed to other clients");
-
-    // 2) EnemySnapshot: owner (host) simulcast reaches both clients.
-    PayloadUnion snap = {};
-    snap.enemySnapshot.enemyId = 77;
-    snap.enemySnapshot.type = 0x01AF;
-    snap.enemySnapshot.hp = 42;
-    snap.enemySnapshot.maxHp = 100;
-    Check(host->SendGameMessage(MsgType::EnemySnapshot, snap), "host sends EnemySnapshot");
-    Check(demo.WaitFor([&] { return aSnapshots >= 1 && bSnapshots >= 1; }, 10000),
-        "clients received the host's EnemySnapshot");
-
-    // 3) A buggy client's EnemySnapshot is consumed but NOT echoed to B.
-    PayloadUnion clientSnap = {};
-    clientSnap.enemySnapshot.enemyId = 78;
-    clientSnap.enemySnapshot.type = 0x01AF;
-    Check(a->SendGameMessage(MsgType::EnemySnapshot, clientSnap), "A sends EnemySnapshot");
-    Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
-        "sim owner consumed A's EnemySnapshot");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(bSnapshots == 1, "A's EnemySnapshot is NOT relayed to B");
-
-    // 4) CombatResult: owner simulcast reaches both clients.
-    PayloadUnion result = {};
-    result.combatResult.targetEnemyId = 77;
-    result.combatResult.damage = 4;
-    result.combatResult.newHp = 38;
-    result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
-    result.combatResult.attackerId = a->selfId();
-    result.combatResult.seq = 1;
-    Check(host->SendGameMessage(MsgType::CombatResult, result), "host sends CombatResult");
-    Check(demo.WaitFor([&] { return aResults >= 1 && bResults >= 1; }, 10000),
-        "CombatResult simulcast reached both clients");
-
-    // 5) EnemyEvent(died) from the host: no room was established in this
-    //    test, so the room-scoped fan-out opens (unknown-room rule — same as
-    //    the sender gate) and reaches both clients. (M4.5 MAJOR 2: with rooms
-    //    established, died/room-clear events reach only the room's players.)
-    PayloadUnion ev = {};
-    ev.enemyEvent.enemyId = 77;
-    ev.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
-    ev.enemyEvent.data = 0x1E;  // drop table id
-    Check(host->SendGameMessage(MsgType::EnemyEvent, ev), "host sends EnemyEvent(died)");
-    Check(demo.WaitFor([&] { return aEvents >= 1 && bEvents >= 1; }, 10000),
-        "EnemyEvent reach both clients with no room established (open gate)");
-
-    // 6) A buggy client's CombatResult is consumed but NOT echoed to B.
-    PayloadUnion rogueResult = {};
-    rogueResult.combatResult.targetEnemyId = 99;
-    Check(a->SendGameMessage(MsgType::CombatResult, rogueResult), "A sends CombatResult");
-    Check(demo.WaitFor([&] { return hostResults >= 1; }, 10000),
-        "sim owner consumed A's CombatResult");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(bResults == 1, "A's CombatResult is NOT relayed to B");
-
-    for (Session* s : demo.live) {
-        s->Stop();
-    }
-    demo.live.clear();
-    host->Stop();
-}
 
 // ---------------------------------------------------------------------------
 // Peer-slot generation guard (deepseek M4)
@@ -1874,513 +1676,6 @@ void RunOversizedMetricCheck() {
 // M4 — room ownership (network.md §6)
 // ---------------------------------------------------------------------------
 
-/// Pure table: sticky first-in-room ownership, host-defaults-own-its-room,
-/// transfer on leave/disconnect, never on arrival (no ping-pong).
-void RunM4OwnershipTableCheck() {
-    std::printf("m4: room ownership table (sticky first-in, host default, transfer)\n");
-
-    // 1) First player in the room owns it; a later arrival does NOT take it
-    //    over (sticky — no ping-pong).
-    {
-        RoomOwnershipTable t;
-        std::vector<RoomKey> changed;
-        Check(t.OwnerOf("F_SP108", 2) == kInvalidPlayerId, "empty room has no owner");
-        t.OnPlayerEnter("F_SP108", 2, 3, /*isHost=*/false, &changed);
-        Check(t.OwnerOf("F_SP108", 2) == 3, "first player owns the room");
-        changed.clear();
-        t.OnPlayerEnter("F_SP108", 2, 4, /*isHost=*/false, &changed);
-        Check(t.OwnerOf("F_SP108", 2) == 3,
-            "later arrival does not take ownership (sticky, no ping-pong)");
-        Check(changed.empty(), "no ownership broadcast on a non-transferring arrival");
-    }
-
-    // 2) The world host defaults to owning its own room — even over an
-    //    earlier client arrival.
-    {
-        RoomOwnershipTable t;
-        std::vector<RoomKey> changed;
-        t.OnPlayerEnter("F_SP108", 1, 2, /*isHost=*/false, &changed);
-        t.OnPlayerEnter("F_SP108", 1, 3, /*isHost=*/false, &changed);
-        Check(t.OwnerOf("F_SP108", 1) == 2, "client first-in owns the room");
-        changed.clear();
-        t.OnPlayerEnter("F_SP108", 1, 0, /*isHost=*/true, &changed);
-        Check(t.OwnerOf("F_SP108", 1) == 0,
-            "host entering takes ownership (host-defaults-own-its-room)");
-        Check(!changed.empty(), "host arrival is an ownership change (broadcast)");
-    }
-
-    // 3) Owner leaves -> next player in the room takes over; the room stays
-    //    owned. All leave -> ownerless.
-    {
-        RoomOwnershipTable t;
-        std::vector<RoomKey> changed;
-        t.OnPlayerEnter("F_SP108", 3, 1, false, &changed);
-        t.OnPlayerEnter("F_SP108", 3, 2, false, &changed);
-        t.OnPlayerEnter("F_SP108", 3, 5, false, &changed);
-        Check(t.OwnerOf("F_SP108", 3) == 1, "first arrival owns");
-        changed.clear();
-        t.OnPlayerLeave("F_SP108", 3, 1, false, &changed);
-        Check(t.OwnerOf("F_SP108", 3) == 2, "owner leave transfers to the next player");
-        Check(!changed.empty(), "takeover is broadcast");
-        changed.clear();
-        t.OnPlayerLeave("F_SP108", 3, 2, false, &changed);
-        Check(t.OwnerOf("F_SP108", 3) == 5, "second transfer to the remaining player");
-        changed.clear();
-        t.OnPlayerLeave("F_SP108", 3, 5, false, &changed);
-        Check(t.OwnerOf("F_SP108", 3) == kInvalidPlayerId, "empty room becomes ownerless");
-        Check(!changed.empty(), "ownerless broadcast");
-    }
-
-    // 4) Disconnect removes the player from every room and transfers.
-    {
-        RoomOwnershipTable t;
-        std::vector<RoomKey> changed;
-        t.OnPlayerEnter("F_SP108", 2, 4, false, &changed);
-        t.OnPlayerEnter("F_SP108", 2, 6, false, &changed);
-        t.OnPlayerEnter("F_SP104", 1, 6, false, &changed);
-        Check(t.OwnerOf("F_SP108", 2) == 4 && t.OwnerOf("F_SP104", 1) == 6,
-            "two rooms owned");
-        changed.clear();
-        t.OnPlayerDisconnect(6, false, &changed);
-        Check(t.OwnerOf("F_SP108", 2) == 4, "room unaffected by the other room's owner");
-        Check(t.OwnerOf("F_SP104", 1) == kInvalidPlayerId,
-            "disconnected owner leaves its room ownerless");
-    }
-
-    // 5) Stage is part of the key: same room number on another stage is a
-    //    separate room with a separate owner.
-    {
-        RoomOwnershipTable t;
-        std::vector<RoomKey> changed;
-        t.OnPlayerEnter("F_SP102", 1, 3, false, &changed);
-        t.OnPlayerEnter("F_SP108", 1, 4, false, &changed);
-        Check(t.OwnerOf("F_SP102", 1) == 3 && t.OwnerOf("F_SP108", 1) == 4,
-            "room number alone does not co-own across stages");
-    }
-
-    // 6) SetOwner (client view) applies the host's authoritative assignment.
-    {
-        RoomOwnershipTable t;
-        t.SetOwner("F_SP108", 2, 3);
-        Check(t.OwnerOf("F_SP108", 2) == 3, "SetOwner assigns");
-        t.SetOwner("F_SP108", 2, 7);
-        Check(t.OwnerOf("F_SP108", 2) == 7, "SetOwner replaces (host authority)");
-        t.SetOwner("F_SP108", 2, kInvalidPlayerId);
-        Check(t.OwnerOf("F_SP108", 2) == kInvalidPlayerId, "SetOwner clears (ownerless)");
-    }
-}
-
-/// Full-session: CombatIntent routes to the ROOM owner (which may be a
-/// client), never to other clients and not to the host's handler unless the
-/// host owns the room; EnemySnapshot from a client owner is relayed only to
-/// peers in the sender's room; CombatResult from a client owner reaches
-/// everyone; ownership stays sticky and transfers on leave.
-void RunM4RoomRoutingCheck() {
-    std::printf("m4: room-owner routing + same-room snapshot/event scoping (sessions)\n");
-    Demo demo;
-
-    auto host = std::make_unique<Session>();
-    SessionConfig hostCfg;
-    hostCfg.port = 0;
-    hostCfg.name = "M4 Host";
-    hostCfg.maxPlayers = 3;
-    Check(host->StartHost(hostCfg), "m4 host starts (Listening)");
-    demo.live.push_back(host.get());
-    const u16 port = host->boundPort();
-    // The host's own room: room 1 (host-defaults-own-its-room).
-    host->setLocalRoom("F_SP108", 1);
-
-    auto a = std::make_unique<Session>();
-    SessionConfig aCfg;
-    aCfg.joinHost = "127.0.0.1";
-    aCfg.port = port;
-    aCfg.name = "M4 Attacker";
-    aCfg.version = kProtocolVersion;
-    Check(a->StartClient(aCfg), "m4 attacker starts");
-    demo.live.push_back(a.get());
-    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000),
-        "m4 attacker joined");
-
-    auto b = std::make_unique<Session>();
-    SessionConfig bCfg;
-    bCfg.joinHost = "127.0.0.1";
-    bCfg.port = port;
-    bCfg.name = "M4 Owner";
-    bCfg.version = kProtocolVersion;
-    Check(b->StartClient(bCfg), "m4 owner starts");
-    demo.live.push_back(b.get());
-    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000),
-        "m4 owner joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
-        "m4 host roster has 3 players");
-
-    int hostIntents = 0;
-    int aIntents = 0;
-    int bIntents = 0;
-    int hostSnapshots = 0;
-    int aSnapshots = 0;
-    int bSnapshots = 0;
-    int aResults = 0;
-    int bResults = 0;
-    int cResults = 0;
-    int hostEvents = 0;
-    int aEvents = 0;
-    int bEvents = 0;
-    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++hostIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++hostSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++cResults;
-            break;
-        case MsgType::EnemyEvent:
-            ++hostEvents;
-            break;
-        default:
-            break;
-        }
-    });
-    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++aIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++aSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++aResults;
-            break;
-        case MsgType::EnemyEvent:
-            ++aEvents;
-            break;
-        default:
-            break;
-        }
-    });
-    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::CombatIntent:
-            ++bIntents;
-            break;
-        case MsgType::EnemySnapshot:
-            ++bSnapshots;
-            break;
-        case MsgType::CombatResult:
-            ++bResults;
-            break;
-        case MsgType::EnemyEvent:
-            ++bEvents;
-            break;
-        default:
-            break;
-        }
-    });
-
-    // -- room establishment: B enters room 2 first (owner=B), then A (sticky).
-    PayloadUnion bRoom = {};
-    bRoom.playerState.playerId = b->selfId();
-    std::strncpy(bRoom.playerState.stage, "F_SP108", sizeof(bRoom.playerState.stage) - 1);
-    bRoom.playerState.roomNo = 2;
-    Check(b->SendGameMessage(MsgType::PlayerState, bRoom), "B announces room 2");
-    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
-        "B owns room 2 (first in)");
-    Check(demo.WaitFor([&] { return a->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
-        "ownership broadcast reached A");
-
-    PayloadUnion aRoom = {};
-    aRoom.playerState.playerId = a->selfId();
-    std::strncpy(aRoom.playerState.stage, "F_SP108", sizeof(aRoom.playerState.stage) - 1);
-    aRoom.playerState.roomNo = 2;
-    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A announces room 2");
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    Check(host->roomOwner("F_SP108", 2) == b->selfId(),
-        "A arriving second does not take ownership (sticky)");
-
-    // -- 0b) M4.5 review MINOR 1: a cross-stage SceneChange (scene=0 — the
-    //    sender's stage changed) must NOT key the room table with the
-    //    player's LAST-KNOWN stage + new room (a bogus (F_SP108, 7) owner
-    //    entry that would mis-route intents for a frame or two). The crossing
-    //    room belongs to the NEW stage; the first new-stage PlayerState
-    //    (channel 1, send-window-guaranteed) establishes the entry instead.
-    PayloadUnion xStage = {};
-    xStage.playerEvent.playerId = a->selfId();
-    xStage.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    xStage.playerEvent.data = 7;  // the NEW stage's room
-    xStage.playerEvent.scene = 0; // stage changed
-    Check(a->SendGameMessage(MsgType::PlayerEvent, xStage),
-        "A sends a cross-stage SceneChange (scene=0)");
-    // A's aRoom PlayerState is unreliable; pump until the host processed it.
-    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
-        "host processed A's room-2 PlayerState");
-    Check(a->SendGameMessage(MsgType::PlayerEvent, xStage),
-        "A sends a cross-stage SceneChange (scene=0)");
-    // Pump a fixed window so the reliable SceneChange is certainly delivered
-    // (its only observable guarantee is that it does NOT move the table).
-    const u64 xDeadline = NowMs() + 500;
-    while (NowMs() < xDeadline) {
-        for (Session* s : demo.live) {
-            s->Update();
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-    Check(host->playerRoom(a->selfId()).room == 2,
-        "cross-stage SceneChange did not move A in the room table");
-    Check(host->roomOwner("F_SP108", 7) == kInvalidPlayerId,
-        "no bogus (F_SP108, 7) owner entry from the cross-stage SceneChange");
-    PayloadUnion xState = {};
-    xState.playerState.playerId = a->selfId();
-    std::strncpy(xState.playerState.stage, "F_SP104", sizeof(xState.playerState.stage) - 1);
-    xState.playerState.roomNo = 7;
-    Check(a->SendGameMessage(MsgType::PlayerState, xState),
-        "A's first new-stage PlayerState (F_SP104, 7)");
-    Check(demo.WaitFor(
-            [&] {
-                return host->playerRoom(a->selfId()).room == 7 &&
-                       std::strcmp(host->playerRoom(a->selfId()).stage, "F_SP104") == 0;
-            },
-            10000),
-        "new-stage PlayerState establishes (F_SP104, 7)");
-    Check(demo.WaitFor([&] { return host->roomOwner("F_SP104", 7) == a->selfId(); }, 10000),
-        "A owns the room it first enters on the new stage");
-    // A returns to room 2 (same-stage moves mark scene=1).
-    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
-    PayloadUnion aSceneBack = {};
-    aSceneBack.playerEvent.playerId = a->selfId();
-    aSceneBack.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    aSceneBack.playerEvent.data = 2;
-    aSceneBack.playerEvent.scene = 1; // same-stage move
-    Check(a->SendGameMessage(MsgType::PlayerEvent, aSceneBack),
-        "A announces room 2 again (same-stage, scene=1)");
-    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
-        "host sees A back in room 2");
-
-    // -- 1) CombatIntent from A (room 2) routes to the room owner B, NOT to
-    //    the host's handler and NOT back to A.
-    PayloadUnion intent = {};
-    intent.combatIntent.attackerId = a->selfId();
-    intent.combatIntent.targetEnemyId = 0x0203;  // stage-placed (room 2)
-    intent.combatIntent.atp = 3;
-    intent.combatIntent.powerType = 1;
-    intent.combatIntent.seq = 1;
-    Check(a->SendGameMessage(MsgType::CombatIntent, intent), "A sends CombatIntent");
-    Check(demo.WaitFor([&] { return bIntents >= 1; }, 10000),
-        "room owner B received A's CombatIntent (routed, not relayed)");
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    Check(hostIntents == 0, "host did NOT consume the intent it routed to B");
-    Check(aIntents == 0, "intent not echoed back to A");
-
-    // -- 2) A moves into the host's room 1; the host-default rule keeps the
-    //    host as owner. A's intent in room 1 must reach the host's handler.
-    PayloadUnion aRoom1 = {};
-    aRoom1.playerState.playerId = a->selfId();
-    std::strncpy(aRoom1.playerState.stage, "F_SP108", sizeof(aRoom1.playerState.stage) - 1);
-    aRoom1.playerState.roomNo = 1;
-    Check(a->SendGameMessage(MsgType::PlayerState, aRoom1), "A moves to room 1");
-    // The reliable SceneChange is the room-change authority (the real game
-    // sends it before the unreliable states); wait for the HOST's own view of
-    // A's room rather than the (already-true) ownership, so the intent below
-    // routes on A's NEW room.
-    PayloadUnion aScene1 = {};
-    aScene1.playerEvent.playerId = a->selfId();
-    aScene1.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    aScene1.playerEvent.data = 1;
-    aScene1.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
-    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene1), "A announces room 1 (reliable)");
-    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 1; }, 10000),
-        "host sees A in room 1");
-    Check(host->roomOwner("F_SP108", 1) == 0,
-        "host owns room 1 even with a client present (host default)");
-    PayloadUnion intent2 = {};
-    intent2.combatIntent.attackerId = a->selfId();
-    intent2.combatIntent.targetEnemyId = 0x0103;
-    intent2.combatIntent.atp = 2;
-    intent2.combatIntent.powerType = 1;
-    intent2.combatIntent.seq = 2;
-    Check(a->SendGameMessage(MsgType::CombatIntent, intent2),
-        "A sends CombatIntent in the host's room");
-    Check(demo.WaitFor([&] { return hostIntents >= 1; }, 10000),
-        "host consumed the intent for its own room");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(bIntents == 1, "B (owner of room 2 only) did not receive the room-1 intent");
-
-    // -- 2b) M4.5 MAJOR 2: EnemyEvent is room-scoped like EnemySnapshot. B
-    //    (room-2 owner) sends a died event for a room-2 enemy; A is in room 1
-    //    now, so it must NOT reach A (and not echo back to B); the host still
-    //    consumes it. Before this fix the event was star-relayed and a
-    //    cross-stage peer with a coincident (roomNo<<8)|setID mis-killed a
-    //    local enemy, spawned the wrong drop and granted the wrong switch.
-    PayloadUnion ev2 = {};
-    ev2.enemyEvent.enemyId = 0x0203;  // stage-placed room-2 enemy
-    ev2.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
-    ev2.enemyEvent.data = 0x1E;       // drop table id
-    ev2.enemyEvent.flagMask = 0x04;   // save switch that must NOT reach A
-    Check(b->SendGameMessage(MsgType::EnemyEvent, ev2), "owner B sends EnemyEvent(died) for room 2");
-    Check(demo.WaitFor([&] { return hostEvents >= 1; }, 10000),
-        "host consumed B's EnemyEvent");
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    Check(aEvents == 0, "room-2 died event NOT relayed to the room-1 peer A (room scoping)");
-    Check(bEvents == 0, "died event not echoed back to the owner B");
-
-    // -- 2c) M4.6 (capstone MINOR K): the RoomClear receive-gate rows + the
-    //    explicit CROSS-STAGE EnemyEvent row. RoomClear carries the BARE room
-    //    number; the relay is room-scoped like Died (stage+room), and the
-    //    receive side (coop_enemy.cpp) further gates on the local room. These
-    //    lock the M4.5 MAJOR-2 fix exactly.
-    //    (a) Owner B clears room 2 while A is in room 1: the bit must NOT
-    //    reach A (a room-1 peer no-ops).
-    PayloadUnion roomClear = {};
-    roomClear.enemyEvent.enemyId = 2;  // bare room number
-    roomClear.enemyEvent.eventId = static_cast<u8>(EnemyEventId::RoomClear);
-    Check(b->SendGameMessage(MsgType::EnemyEvent, roomClear),
-        "owner B sends EnemyEvent(RoomClear) for room 2");
-    Check(demo.WaitFor([&] { return hostEvents >= 2; }, 10000),
-        "host consumed B's RoomClear");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(aEvents == 0, "RoomClear room 2 NOT relayed to the room-1 peer A (receive gate no-op)");
-    Check(bEvents == 0, "RoomClear not echoed back to the owner B");
-
-    //    (b) CROSS-STAGE row: A moves to (F_SP104, 2) — a stage whose room
-    //    number COINCIDES with B's room 2 in F_SP108. B's died event for a
-    //    F_SP108 room-2 enemy must NOT reach A: the STAGE half of the
-    //    (stage, room) relay key blocks it (the pre-M4.5 star-relay would
-    //    have mis-killed A's coincident (2<<8)|setID local enemy, spawned the
-    //    wrong drop and granted the wrong switch).
-    PayloadUnion xRoom = {};
-    xRoom.playerState.playerId = a->selfId();
-    std::strncpy(xRoom.playerState.stage, "F_SP104", sizeof(xRoom.playerState.stage) - 1);
-    xRoom.playerState.roomNo = 2;
-    Check(a->SendGameMessage(MsgType::PlayerState, xRoom), "A moves to (F_SP104, 2)");
-    PayloadUnion xScene = {};
-    xScene.playerEvent.playerId = a->selfId();
-    xScene.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    xScene.playerEvent.data = 2;
-    xScene.playerEvent.scene = 0;  // cross-stage move
-    Check(a->SendGameMessage(MsgType::PlayerEvent, xScene), "A announces the cross-stage move");
-    Check(demo.WaitFor(
-            [&] {
-                return std::strcmp(host->playerRoom(a->selfId()).stage, "F_SP104") == 0 &&
-                       host->playerRoom(a->selfId()).room == 2;
-            },
-            10000),
-        "host sees A in (F_SP104, 2)");
-    Check(demo.WaitFor([&] { return host->roomOwner("F_SP104", 2) == a->selfId(); }, 10000),
-        "A owns (F_SP104, 2) (first in)");
-    PayloadUnion xDied = {};
-    xDied.enemyEvent.enemyId = 0x0203;  // stage-placed room-2 enemy in F_SP108
-    xDied.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
-    xDied.enemyEvent.data = 0x1E;       // drop table id that must NOT spawn on A
-    xDied.enemyEvent.flagMask = 0x06;   // save switch that must NOT reach A
-    Check(b->SendGameMessage(MsgType::EnemyEvent, xDied),
-        "owner B sends died for a F_SP108 room-2 enemy");
-    Check(demo.WaitFor([&] { return hostEvents >= 3; }, 10000),
-        "host consumed the cross-stage died event");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(aEvents == 0,
-        "cross-stage died (coincident room 2, different stage) NOT relayed to A");
-    Check(bEvents == 0, "cross-stage died not echoed back to the owner B");
-
-    //    (c) A returns to room 1 (F_SP108) so the section-3 snapshot-scoping
-    //    checks below still see a room-1 peer.
-    PayloadUnion aRoom1b = {};
-    aRoom1b.playerState.playerId = a->selfId();
-    std::strncpy(aRoom1b.playerState.stage, "F_SP108", sizeof(aRoom1b.playerState.stage) - 1);
-    aRoom1b.playerState.roomNo = 1;
-    Check(a->SendGameMessage(MsgType::PlayerState, aRoom1b), "A returns to room 1");
-    PayloadUnion aScene1b = {};
-    aScene1b.playerEvent.playerId = a->selfId();
-    aScene1b.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    aScene1b.playerEvent.data = 1;
-    aScene1b.playerEvent.scene = 1;  // same-stage move
-    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene1b), "A announces room 1 (reliable)");
-    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 1; }, 10000),
-        "host sees A back in room 1");
-
-    // -- 3) EnemySnapshot from owner B (room 2) reaches only room-2 peers.
-    //    A is now in room 1, so B's room-2 snapshot must NOT reach A (and
-    //    not echo back to B); the host still consumes it.
-    PayloadUnion snap = {};
-    snap.enemySnapshot.enemyId = 0x0205;
-    snap.enemySnapshot.type = 0x01AF;
-    snap.enemySnapshot.hp = 42;
-    snap.enemySnapshot.maxHp = 100;
-    Check(b->SendGameMessage(MsgType::EnemySnapshot, snap), "owner B sends EnemySnapshot");
-    Check(demo.WaitFor([&] { return hostSnapshots >= 1; }, 10000),
-        "host consumed B's EnemySnapshot");
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    Check(aSnapshots == 0,
-        "room-2 snapshot NOT relayed to a room-1 peer (same-room scoping)");
-    Check(bSnapshots == 0, "snapshot not echoed back to the owner");
-
-    // -- 4) A moves back to room 2: now B's snapshot reaches A.
-    Check(a->SendGameMessage(MsgType::PlayerState, aRoom), "A returns to room 2");
-    PayloadUnion aScene2 = {};
-    aScene2.playerEvent.playerId = a->selfId();
-    aScene2.playerEvent.eventId = static_cast<u8>(PlayerEventId::SceneChange);
-    aScene2.playerEvent.data = 2;
-    aScene2.playerEvent.scene = 1; // same-stage move (M4.5 MINOR 1)
-    Check(a->SendGameMessage(MsgType::PlayerEvent, aScene2), "A announces room 2 (reliable)");
-    Check(demo.WaitFor([&] { return host->playerRoom(a->selfId()).room == 2; }, 10000),
-        "host sees A back in room 2");
-    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == b->selfId(); }, 10000),
-        "B still owns room 2 (sticky across A's moves)");
-    PayloadUnion snap2 = {};
-    snap2.enemySnapshot.enemyId = 0x0207;
-    snap2.enemySnapshot.type = 0x01AF;
-    Check(b->SendGameMessage(MsgType::EnemySnapshot, snap2), "owner B sends another EnemySnapshot");
-    Check(demo.WaitFor([&] { return aSnapshots >= 1; }, 10000),
-        "room-2 snapshot relayed to the room-2 peer A");
-    // ... and now B's room-2 died event DOES reach A (both in room 2).
-    PayloadUnion ev3 = {};
-    ev3.enemyEvent.enemyId = 0x0204;
-    ev3.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
-    ev3.enemyEvent.data = 0x1F;
-    ev3.enemyEvent.flagMask = 0x05;
-    Check(b->SendGameMessage(MsgType::EnemyEvent, ev3), "owner B sends another EnemyEvent(died)");
-    Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000),
-        "room-2 died event relayed to the room-2 peer A");
-
-    // Capstone MINOR K (M4.6): the RoomClear receive gate LANDS once A is a
-    // room-2 peer — the same bit that no-oped from room 1 in 2c(a).
-    Check(b->SendGameMessage(MsgType::EnemyEvent, roomClear),
-        "owner B sends RoomClear for room 2 again");
-    Check(demo.WaitFor([&] { return aEvents >= 2; }, 10000),
-        "room-2 RoomClear relayed to the room-2 peer A (receive gate lands)");
-
-    // -- 5) CombatResult from owner B reaches everyone except the origin
-    //    (star relay; the host relays to the other joined peer A).
-    PayloadUnion result = {};
-    result.combatResult.targetEnemyId = 0x0205;
-    result.combatResult.damage = 4;
-    result.combatResult.newHp = 38;
-    result.combatResult.outcome = static_cast<u8>(CombatOutcome::Hit);
-    result.combatResult.attackerId = a->selfId();
-    result.combatResult.seq = 1;
-    Check(b->SendGameMessage(MsgType::CombatResult, result), "owner B sends CombatResult");
-    Check(demo.WaitFor([&] { return aResults >= 1 && cResults >= 1; }, 10000),
-        "CombatResult from a client owner reaches the other peer + host (star relay)");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(bResults == 0, "origin B does not receive its own CombatResult back");
-
-    // -- 6) Ownership transfer on leave: B (owner of room 2) leaves; A is
-    //    still in room 2 and must take over.
-    PayloadUnion leave = {};
-    leave.playerLeave.playerId = b->selfId();
-    Check(b->SendGameMessage(MsgType::PlayerLeave, leave), "B sends PlayerLeave");
-    Check(demo.WaitFor([&] { return host->roomOwner("F_SP108", 2) == a->selfId(); }, 10000),
-        "room 2 ownership transferred to A after the owner left");
-
-    for (Session* s : demo.live) {
-        s->Stop();
-    }
-    demo.live.clear();
-    host->Stop();
-}
-
 // ---------------------------------------------------------------------------
 // M4/M4.5 — worldStage carry (stay-put join) + entity stability
 // ---------------------------------------------------------------------------
@@ -2438,36 +1733,6 @@ void RunM4WorldStageCheck() {
         demo.live.clear();
         host->Stop();
     }
-}
-
-/// Entity-id stability across ownership transfer: stage-placed keys are a
-/// pure function of stage data (identical for any owner), dynamic ids are
-/// owner-major so two owners' spaces never collide after a takeover.
-void RunM4EntityStabilityCheck() {
-    std::printf("m4: entity-id stability across ownership transfer\n");
-    using namespace dusk::coop::enemy;
-
-    // Stage-placed keys: identical on every machine, independent of who owns
-    // the room (the transfer changes nothing — a map transfer, not renumber).
-    Check(StageEntityId(2, 3) == ((2 << 8) | 3), "stage key packs (room, setID)");
-    Check(StageEntityId(2, 3) == StageEntityId(2, 3),
-        "stage key is a pure function of stage data (stable across owners)");
-    Check(StageEntityId(2, 3) != StageEntityId(3, 3), "different rooms key differently");
-    Check(StageEntityId(4, 0xFFFF) == kInvalidEnemyId, "dynamic spawns are not stage-keyed");
-    Check(StageEntityId(-1, 3) == kInvalidEnemyId, "no room -> no key");
-
-    // Dynamic ids: owner-major — two owners can never collide, and ids stay
-    // clear of the stage-key space.
-    const u16 dynA = DynamicEntityId(3, 1);
-    const u16 dynB = DynamicEntityId(5, 1);
-    Check((dynA & kDynamicIdBase) != 0, "dynamic ids live above the stage-key space");
-    Check(dynA != dynB, "different owners allocate disjoint dynamic id spaces");
-    Check(dynA != StageEntityId(2, 3) && dynB != StageEntityId(2, 3),
-        "dynamic ids never collide with stage keys");
-    const u16 dynA2 = DynamicEntityId(3, 2);
-    Check(dynA != dynA2, "the same owner's counter advances");
-    Check(DynamicEntityId(3, 0x1234) == DynamicEntityId(3, 0x1234),
-        "same owner + same counter -> same id (deterministic)");
 }
 
 // ---------------------------------------------------------------------------
@@ -2683,6 +1948,50 @@ void RunM4DiscoveryCheck() {
     listener.Stop();
 }
 
+// --------------------------------------------------------------------------
+// v7 (M5.1) — net-off ghost regression row (d-m8)
+// --------------------------------------------------------------------------
+
+/// With the session OFF (never started — the `net.enabled=false` default),
+/// there are ZERO ghost sends: the idle Session refuses SendGameMessage for
+/// both ghost message types, and nothing else can put them on the wire (the
+/// M2 senders are shredded; the M5.2 sender does not exist yet). The game-
+/// side halves of the d-m8 contract — zero registry entries and
+/// `myRoomSearchEnemy`/ALLDIE untouched — are enforced by construction: the
+/// enemy stub's onGameFrame early-returns when the session is off, and the
+/// fopAc_Execute / d_cc_s / d_a_alldie coop hooks are deleted, so no coop
+/// code runs on the vanilla path at all.
+void RunV7NetOffRegression() {
+    std::printf("v7: net-off regression (d-m8) — zero ghost sends, dead combat/ownership ids\n");
+    Check(kProtocolVersion == 7, "protocol version is v7");
+    Check(static_cast<u16>(MsgType::JoinRequest) == 1 &&
+              static_cast<u16>(MsgType::WeatherChange) == 13,
+        "message ids compact 1..13 (16 -> 13 types)");
+
+    // An idle (never-started) session refuses every game send — the net-off
+    // zero-ghost-sends guarantee at the session boundary.
+    Session idle;
+    PayloadUnion ghost = {};
+    ghost.ghostSnapshot.senderId = 1;
+    ghost.ghostSnapshot.entityId = 0x0203;
+    PayloadUnion died = {};
+    died.enemyEvent.senderId = 1;
+    died.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
+    died.enemyEvent.entityId = 0x0203;
+    Check(!idle.SendGameMessage(MsgType::GhostSnapshot, ghost),
+        "off-session: GhostSnapshot send refused (zero ghost sends)");
+    Check(!idle.SendGameMessage(MsgType::EnemyEvent, died),
+        "off-session: EnemyEvent send refused");
+
+    // The removed combat/ownership wire ids are dead even at the protocol
+    // level (the exact-size rejection rows live in RunProtocolChecks; this
+    // pins the id-space boundary the shred relies on).
+    Check(WireSize(static_cast<MsgType>(16)) == 0,
+        "no wire size exists for the removed RoomOwnership id");
+    Check(WireSize(static_cast<MsgType>(11)) == 8,
+        "wire id 11 is TimeSync now (8 B), not CombatIntent");
+}
+
 }  // namespace
 
 int main() {
@@ -2707,14 +2016,11 @@ int main() {
     RunOversizedMetricCheck();
     RunHandshakeDemo();
     RunGameMessageDemo();
-    RunM2RelayPolicyCheck();
+    RunV7NetOffRegression();
     RunM3TimeWeatherCheck();
     RunM35TimeWeatherFixCheck();
-    RunM4OwnershipTableCheck();
-    RunM4RoomRoutingCheck();
-    RunM46SessionRestartCheck();
     RunM4WorldStageCheck();
-    RunM4EntityStabilityCheck();
+    RunM46SessionRestartCheck();
     RunM4DiscoveryCheck();
 
     dusk::net::shutdown();
