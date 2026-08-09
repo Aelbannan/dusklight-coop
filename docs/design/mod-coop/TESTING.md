@@ -3,14 +3,24 @@
 How to build, run, and verify the networked co-op milestones. Current status
 flag at the top; check it before testing.
 
-> **Status: M0–M4 + M4.5 fix pass + M4.6 capstone pass landed (branch
-> `net-coop`).** M4.5 (review-m4-glm-5.2.md) REMOVED the join-warp by user
-> decision — stay-put join policy (a joining client stays in its own stage;
-> players meet by traveling); room-scoped `EnemyEvent` (MAJOR 2); gated the
-> SceneChange room-table sniff on the wire same-stage flag (MINOR 1); dropped
-> dead code; swept all 16 message types in the wire-determinism test; and
-> seeded the announce player count before the first datagram (no 0-player
-> announces).
+> **Status: M0–M4 + M4.5 fix pass + M4.6 capstone pass + M5.1 SHRED landed
+> (branch `net-coop`).** M5.1 is the M5 pivot (`05-ghosts.md`): the
+> M2/M3/M4 owner-authoritative enemy/combat/room-ownership authority stack
+> was DELETED and everything reverted to vanilla. Co-op is now **parallel
+> worlds + ghost spectating** — every machine sims its own enemies
+> natively; only player puppets, time/weather, and (M5.2+, not yet) ghost
+> mirrors cross the wire. Protocol is now **v7 (13 message types)**:
+> `CombatIntent`/`CombatResult`/`RoomOwnership` are gone, `EnemySnapshot`→
+> `GhostSnapshot` (34 B). The M2/M4 in-game rows below describe the DEAD
+> model and apply only to the pre-M5.1 history; the M5 test list lives in
+> `05-ghosts.md §5/§7`. The pre-M5.1 note from the M4.5 capstone (stay-put
+> join, room-scoped events) is retained for history; none of the
+> enemy/combat/ownership mechanics below survive M5.1.
+>
+> *(Kept for history — M4.5 removed the join-warp by user decision; stay-put
+> join policy (a joining client stays in its own stage; players meet by
+> traveling); room-scoped `EnemyEvent`; gated the SceneChange room-table
+> sniff; swept all 16 message types; seeded the announce player count.)*
 >
 > **M4.6 (capstone — review-full-deepseek-v4-flash-0731.md +
 > review-full-glm-5.2.md):** the full-implementation pass. MAJOR 1 —

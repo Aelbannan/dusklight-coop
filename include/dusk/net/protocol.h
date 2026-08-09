@@ -160,7 +160,7 @@ enum class PlayerStateId : u8 {
 
 enum class PlayerEventId : u8 {
     FormChange = 0,      // data: form (0 human / 1 wolf)
-    Mount = 1,           // (reserved; horse entity channel is M5)
+    Mount = 1,           // (reserved; horse entity channel is M6)
     Dismount = 2,        // (reserved)
     Respawn = 3,         // (reserved)
     SceneChange = 4,     // data: roomNo

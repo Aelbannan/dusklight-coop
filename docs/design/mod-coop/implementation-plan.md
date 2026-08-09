@@ -257,6 +257,12 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 ### M5 — Future
 
+> **SUPERSEDED by `05-ghosts.md` (the M5 pivot).** The M5.1 SHRED deleted
+> the M2/M3/M4 enemy/combat/ownership direction below. Everything following
+> this banner is history. Current M5 state: M5.1 shipped parallel worlds
+> + puppets + time/weather (protocol v7); M5.2+ ships the ghost layer per
+> `05-ghosts.md`.
+
 Dynamic waves (`EnemyEvent(spawn/die)`), horse entity channel, PvP (dummy damage table +
 `DamagePlayer` intent), enemy pose matrix-copy upgrade, interpolation if internet play appears.
 (Room ownership moved to M4.)

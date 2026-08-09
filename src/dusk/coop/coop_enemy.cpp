@@ -22,7 +22,7 @@ aurora::Module EnemyLog("dusk::coop::enemy");
 // sender's id source (05-ghosts.md §4.1); everything M2/M3/M4 hung on it
 // (adapters, snapshots, death polls, freeze/apply, drops, room-clear) is
 // shredded. g_entries stays a NODE-BASED std::map so entry addresses are
-// stable across inserts (the old SetTgHitSynthetic pointer discipline); the
+// stable across inserts (the old M2 synth-collider pointer discipline (deleted in M5.1)); the
 // M5.2 sender stores {procName, isDead} on the entry, never derefs the actor
 // after `gone` (M4.6 UAF fix carries into the ghost table, 05-ghosts.md §5).
 // ---------------------------------------------------------------------------

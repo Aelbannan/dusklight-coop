@@ -138,6 +138,14 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 
 ## 5. Message protocol
 
+> **SUPERSEDED (v7, M5.1 — see `05-ghosts.md §3/§4.2`):** the message set
+> below is the DEAD pre-pivot v6 model. M5.1 shredded it: `EnemySnapshot` →
+> `GhostSnapshot` (34 B, unreliable), `EnemyEvent` trimmed to `{senderId,
+> eventId=Died, entityId}` (4 B, reliable), and `CombatIntent`/`CombatResult`/
+> `RoomOwnership` DELETED. Type count is 13 (v7); `protocol.h` is the
+> normative set. §7's combat-routing diagram is DROPPED. The envelope/
+> serializer mechanism is unchanged, but the table below is history.
+
 All messages: `u16 type` + `u16 size` + payload. Fixed-size little-endian
 structs, hand-written serializers (no reflection, no heap in the hot path).
 Packet version in `JoinRequest`; mismatches rejected.
@@ -225,7 +233,7 @@ data2     u32             // extended payload (M1: item joints)
 | `SceneChange` | roomNo | — |
 | `Equip` | equipItem u16 \| selectItemId u8 \| clothes u8 | leftItemJnt u16 \| rightItemJnt u16 |
 | `AttentionChange` | session entity id of the lock target (0xFFFF = none/local-only) | — |
-| `Mount` / `Dismount` / `Respawn` | (reserved; horse entity channel is M5) | — |
+| `Mount` / `Dismount` / `Respawn` | (reserved; horse entity channel is M6) | — |
 
 
 ### EnemyState (per enemy, per frame)
@@ -278,6 +286,12 @@ capstone MINOR I corrected the stale ~28 B provisional)
   KB/4x4-Mtx figure was corrected back in review m1 M3.)
 
 ## 7. Enemy authority & combat
+
+> **DROPPED (M5.1, `05-ghosts.md §1/§2`).** This section described the
+> owner-authoritative combat model the pivot deleted. Co-op now uses
+> parallel worlds: enemies are local + vanilla, no combat crosses the wire,
+> and the only enemy visibility is the M5.2+ ghost layer (transparent
+> mirrors). The diagram below is history.
 
 ```
 client (attacker)                  host / sim owner                  all clients
