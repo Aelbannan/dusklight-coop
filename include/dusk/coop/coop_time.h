@@ -28,9 +28,11 @@
  *                                        type-4 branch drives weather only)
  *
  * Host publisher runs in dusk::coop::onGameFrame (host role, session live);
- * client receive handling runs from dusk::coop::OnGameMessage. Everything is
- * a no-op when net.enabled is false or no session is active — single-player
- * stays byte-for-byte vanilla.
+ * client receive handling runs from dusk::coop::OnGameMessage. A client only
+ * *applies* the replica while `sharingHostStage()` — stay-put joiners keep
+ * vanilla local time/weather until they travel onto the host's stage.
+ * Everything is a no-op when net.enabled is false or no session is active —
+ * single-player stays byte-for-byte vanilla.
  */
 
 #include "dolphin/types.h"

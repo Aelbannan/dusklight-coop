@@ -23,6 +23,30 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
     dst[kMaxNameLength - 1] = '\0';
 }
 
+// Stamp the origin PlayerId onto a game message the host is about to
+// consume/relay. Clients only see peer 0 (star topology); the payload id
+// is whatever the sender wrote. GhostSnapshot already carries senderId for
+// this reason — PlayerState/PlayerEvent/PlayerLeave (and the ghost types)
+// must not trust the payload.
+void StampOrigin(Message& msg, PlayerId origin) {
+    switch (msg.type) {
+    case MsgType::PlayerState:
+        msg.payload.playerState.playerId = origin;
+        break;
+    case MsgType::PlayerEvent:
+        msg.payload.playerEvent.playerId = origin;
+        break;
+    case MsgType::GhostSnapshot:
+        msg.payload.ghostSnapshot.senderId = origin;
+        break;
+    case MsgType::EnemyEvent:
+        msg.payload.enemyEvent.senderId = origin;
+        break;
+    default:
+        break;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Star-relay policy (MINOR d): how the host should route a game message it
 // received from a peer. Every game message is star-relayed to every other
@@ -183,7 +207,9 @@ void Session::Stop() {
 }
 
 void Session::Update() {
-    if (state_ == SessionState::Idle || state_ == SessionState::Ended) {
+    if (state_ == SessionState::Idle || state_ == SessionState::Ended ||
+        state_ == SessionState::Rejected)
+    {
         return;
     }
     ++frame_;
@@ -208,8 +234,8 @@ void Session::Update() {
         NowMs() - connectedAtMs_ >= config_.joinTimeoutMs)
     {
         rejectReasonName_ = "join timed out";
-        state_ = SessionState::Rejected;
         NetLog.warn("net: join timed out after {} ms", config_.joinTimeoutMs);
+        DisconnectRejected();
     }
 
     // Reliable overflow is an explicit failure, never a silent drop (deepseek
@@ -301,7 +327,7 @@ void Session::HandleData(const InboundPacket& pkt) {
         }
         break;
     case MsgType::PlayerLeave:
-        OnPlayerLeave(msg);
+        OnPlayerLeave(pkt.peerIndex, msg);
         break;
     case MsgType::SessionEnd:
         if (role_ == SessionRole::Client) {
@@ -322,6 +348,19 @@ void Session::HandleData(const InboundPacket& pkt) {
         // is then star-relayed (v7: uniform — no room-scoped branches;
         // ghost receive filtering is a game-side gate in M5.3). The host no
         // longer sniffs rooms from the stream (the ownership table is gone).
+        // Origin stamp: overwrite the payload player/sender id from the
+        // peer map so a client cannot impersonate another slot (or the host).
+        if (role_ == SessionRole::Host) {
+            if (pkt.peerIndex >= Transport::kMaxPeers) {
+                break;
+            }
+            const PlayerId origin = peerToPlayer_[pkt.peerIndex];
+            if (origin == kInvalidPlayerId) {
+                NetLog.warn("net: dropping game message from unjoined peer {}", pkt.peerIndex);
+                break;
+            }
+            StampOrigin(msg, origin);
+        }
         if (gameHandler_) {
             gameHandler_(msg.type, msg.payload);
         }
@@ -433,6 +472,9 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
 }
 
 void Session::OnJoinAccept(const Message& msg) {
+    if (state_ != SessionState::Connected) {
+        return;  // ignore a late accept after timeout/reject
+    }
     const auto& accept = msg.payload.joinAccept;
     // Semantic validation on receive (deepseek M5): never store an out-of-
     // range assigned id, and require the roster to back the assignment (the
@@ -441,14 +483,14 @@ void Session::OnJoinAccept(const Message& msg) {
         NetLog.warn("net: JoinAccept assigns invalid player id {}; rejecting",
             accept.assignedPlayerId);
         rejectReasonName_ = "invalid join accept";
-        state_ = SessionState::Rejected;
+        DisconnectRejected();
         return;
     }
     if (accept.roster[accept.assignedPlayerId].present == 0) {
         NetLog.warn("net: JoinAccept roster does not mark player {} present; rejecting",
             accept.assignedPlayerId);
         rejectReasonName_ = "invalid join accept";
-        state_ = SessionState::Rejected;
+        DisconnectRejected();
         return;
     }
     selfId_ = accept.assignedPlayerId;
@@ -477,17 +519,25 @@ void Session::OnJoinReject(const Message& msg) {
         break;
     }
     NetLog.warn("net: join rejected: {}", rejectReasonName_);
-    state_ = SessionState::Rejected;
+    DisconnectRejected();
 }
 
-void Session::OnPlayerLeave(const Message& msg) {
-    const u8 playerId = msg.payload.playerLeave.playerId;
-    if (playerId >= kMaxLocalPlayers) {
+void Session::OnPlayerLeave(u8 originPeer, const Message& msg) {
+    if (role_ == SessionRole::Host) {
+        if (originPeer >= Transport::kMaxPeers) {
+            return;
+        }
+        // Bind leave to the sending peer — never trust the payload id (a
+        // client must not be able to kick another slot, including the host).
+        const PlayerId pid = peerToPlayer_[originPeer];
+        if (pid == kInvalidPlayerId || pid == 0) {
+            return;
+        }
+        RemovePlayer(pid, /*broadcastLeave=*/true);
         return;
     }
-    if (role_ == SessionRole::Host) {
-        // Relay the leave to the remaining players (00-network.md §4).
-        RemovePlayer(playerId, /*broadcastLeave=*/true);
+    const u8 playerId = msg.payload.playerLeave.playerId;
+    if (playerId >= kMaxLocalPlayers) {
         return;
     }
     if (roster_[playerId].present) {
@@ -642,11 +692,23 @@ void Session::RemovePlayer(u8 playerId, bool broadcastLeave) {
     roster_[playerId].present = false;
     roster_[playerId].playerId = kInvalidPlayerId;
     roster_[playerId].name[0] = '\0';
+    for (u8 i = 0; i < Transport::kMaxPeers; ++i) {
+        if (peerToPlayer_[i] == playerId) {
+            peerToPlayer_[i] = kInvalidPlayerId;
+        }
+    }
     NetLog.info("net: player {} left the session", playerId);
     if (broadcastLeave) {
         PayloadUnion payload = {};
         payload.playerLeave.playerId = playerId;
         SendToAll(MsgType::PlayerLeave, payload, /*exceptPlayer=*/playerId);
+    }
+}
+
+void Session::DisconnectRejected() {
+    state_ = SessionState::Rejected;
+    if (transport_.IsRunning()) {
+        transport_.Stop();
     }
 }
 

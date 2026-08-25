@@ -102,6 +102,12 @@ s8 localRoomNo();
 /// enemy-stub per-stage reset keys on (stage, room) because room numbers are
 /// not unique across stages.
 const char* localStageName();
+/// True when this machine should replicate the host clock/sky: the host
+/// always does (it IS the sky); a client only does while it shares a stage
+/// with the host. Stay-put join means players occupy different stages — the
+/// host's dungeon freeze / twilight midnight / Snowpeak weather must not
+/// overwrite a client still in Hyrule Field.
+bool sharingHostStage();
 
 // --------------------------------------------------------------------------
 // M3/M4 world state (host publishes; client seeds/joins from it)

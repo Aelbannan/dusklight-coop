@@ -52,6 +52,10 @@ struct SyncWeather : WeatherStateInfo {
 SyncTime g_time;
 SyncWeather g_weather;
 bool g_clientSeeded = false;
+// Rising-edge latch: when a stay-put client travels onto the host's stage,
+// snap the stored clock/sky once. Cleared when they leave that stage or the
+// session ends so vanilla local time resumes.
+bool g_appliedSharing = false;
 // Last world state seeded FROM (session worldTime/weather). Kept separate
 // from g_time/g_weather so a stale JoinAccept/WorldInit copy can never
 // regress fresher TimeSync/WeatherChange receipts: re-seeding triggers only
@@ -481,11 +485,14 @@ void SeedTargets(bool timeChanged, bool weatherChanged) {
         g_time.rate = t.rate;
         g_time.flags = t.flags;
         g_time.valid = true;
-        // Adopt into the save immediately so a mid-game joiner starts with
-        // the host's clock (task 6); a stage-load envcolor_init overwrite
-        // later in the same frame is re-clobbered by onStageCreate.
-        dComIfGs_setTime(t.time);
-        dComIfGs_setDate(t.day);
+        // Store always (so a later same-stage meeting has the host clock);
+        // write the save only while we share the host's stage. Stay-put
+        // joiners sit on their own stage — adopting here would freeze their
+        // Field clock to the host's dungeon/twilight.
+        if (dusk::coop::sharingHostStage()) {
+            dComIfGs_setTime(t.time);
+            dComIfGs_setDate(t.day);
+        }
     }
     if (d.adoptWeather) {
         g_weather.mode = w.mode;
@@ -493,10 +500,9 @@ void SeedTargets(bool timeChanged, bool weatherChanged) {
         g_weather.intensity = w.intensity;
         g_weather.colpat = w.colpat;
         g_weather.valid = true;
-        // Adopt into the sky immediately so a mid-game joiner starts with the
-        // host's sky (task 6); a dKyw_wether_init overwrite later in the same
-        // frame is re-clobbered by onStageCreate / the per-frame force.
-        PinWeather();
+        if (dusk::coop::sharingHostStage()) {
+            PinWeather();
+        }
     }
 }
 
@@ -509,6 +515,12 @@ void SeedTargets(bool timeChanged, bool weatherChanged) {
 bool clientClockReplica() {
     if (!ClientActive()) {
         return false;  // host / offline: vanilla advance unchanged
+    }
+    // Stay-put: a client on a different stage than the host keeps vanilla
+    // local time (dungeon freeze, twilight, house interiors). Replicating
+    // here would pin Hyrule Field to the host's midnight/frozen dungeon clock.
+    if (!dusk::coop::sharingHostStage()) {
+        return false;
     }
     dScnKy_env_light_c& env = g_env_light;
     if (dKy_darkworld_check()) {
@@ -557,7 +569,7 @@ bool clientClockReplica() {
 }
 
 void clientWeatherForce() {
-    if (!ClientActive() || !g_weather.valid) {
+    if (!ClientActive() || !g_weather.valid || !dusk::coop::sharingHostStage()) {
         return;
     }
     dScnKy_env_light_c& env = g_env_light;
@@ -570,7 +582,7 @@ void clientWeatherForce() {
 }
 
 void onStageCreate() {
-    if (!ClientActive()) {
+    if (!ClientActive() || !dusk::coop::sharingHostStage()) {
         return;
     }
     // 04 §5.10: re-assert the replicated time into the save. Ordering note
@@ -603,7 +615,7 @@ bool suppressDiceWeather() {
     // no non-weather effects — so suppressing the whole draw call is safe on
     // synced clients (04 §5.7). The host runs it natively; the offline client
     // runs vanilla.
-    return ClientActive();
+    return ClientActive() && dusk::coop::sharingHostStage();
 }
 
 void onGameMessage(MsgType type, const PayloadUnion& payload) {
@@ -618,17 +630,20 @@ void onGameMessage(MsgType type, const PayloadUnion& payload) {
         g_time.rate = s.rate;
         g_time.flags = s.flags;
         g_time.valid = true;
-        // Adopt the absolute phase into the save; setDaytime's replica reads
-        // it at the top of the same frame (Session::Update runs before the
-        // actor phase).
-        dComIfGs_setTime(s.time);
-        dComIfGs_setDate(s.day);
+        // Store always; write the save only on a shared stage so a stay-put
+        // client's own calendar is not the host's.
+        if (dusk::coop::sharingHostStage()) {
+            dComIfGs_setTime(s.time);
+            dComIfGs_setDate(s.day);
+        }
         break;
     }
     case MsgType::TimeEvent: {
         // Advisory (the phase in TimeSync already encodes the boundary): the
         // reliable event exists so local one-shots fire exactly once.
-        if (static_cast<TimeEventId>(payload.timeEvent.eventId) == TimeEventId::NewDay) {
+        if (static_cast<TimeEventId>(payload.timeEvent.eventId) == TimeEventId::NewDay &&
+            dusk::coop::sharingHostStage())
+        {
             // The host's day wrapped (its dKankyo_DayProc ran natively); run
             // the local equivalent exactly once. The replica's own wrap path
             // may also clear it — offTmpBit is idempotent.
@@ -645,7 +660,9 @@ void onGameMessage(MsgType type, const PayloadUnion& payload) {
         g_weather.intensity = w.intensity;
         g_weather.colpat = w.colpat;
         g_weather.valid = true;
-        PinWeather();  // re-pin on receipt only (R7); the ramp runs per frame
+        if (dusk::coop::sharingHostStage()) {
+            PinWeather();  // re-pin on receipt only (R7); the ramp runs per frame
+        }
         break;
     }
     default:
@@ -656,6 +673,7 @@ void onGameMessage(MsgType type, const PayloadUnion& payload) {
 void onGameFrame() {
     if (!dusk::coop::sessionActive()) {
         g_clientSeeded = false;
+        g_appliedSharing = false;
         g_time.valid = false;
         g_weather.valid = false;
         g_worldSeenTime = {};
@@ -679,25 +697,40 @@ void onGameFrame() {
     if (!g_clientSeeded) {
         g_clientSeeded = true;
         SeedTargets(/*timeChanged=*/true, /*weatherChanged=*/true);
-        return;
+    } else {
+        const TimeStateInfo& t = dusk::coop::worldTime();
+        const WeatherStateInfo& w = dusk::coop::worldWeather();
+        const bool timeChanged = t.time != g_worldSeenTime.time || t.day != g_worldSeenTime.day ||
+                                 t.rate != g_worldSeenTime.rate || t.flags != g_worldSeenTime.flags;
+        const bool weatherChanged = w.mode != g_worldSeenWeather.mode ||
+                                    w.thunder != g_worldSeenWeather.thunder ||
+                                    w.intensity != g_worldSeenWeather.intensity ||
+                                    w.colpat != g_worldSeenWeather.colpat;
+        if (timeChanged || weatherChanged) {
+            SeedTargets(timeChanged, weatherChanged);
+        }
     }
-    const TimeStateInfo& t = dusk::coop::worldTime();
-    const WeatherStateInfo& w = dusk::coop::worldWeather();
-    const bool timeChanged = t.time != g_worldSeenTime.time || t.day != g_worldSeenTime.day ||
-                             t.rate != g_worldSeenTime.rate || t.flags != g_worldSeenTime.flags;
-    const bool weatherChanged = w.mode != g_worldSeenWeather.mode ||
-                                w.thunder != g_worldSeenWeather.thunder ||
-                                w.intensity != g_worldSeenWeather.intensity ||
-                                w.colpat != g_worldSeenWeather.colpat;
-    if (timeChanged || weatherChanged) {
-        SeedTargets(timeChanged, weatherChanged);
+    // Rising edge: client just arrived on the host's stage — snap the stored
+    // clock/sky so they don't wait a full TimeSync/WeatherChange. Falling
+    // edge drops g_appliedSharing so a later return re-snaps.
+    const bool sharing = dusk::coop::sharingHostStage();
+    if (sharing && !g_appliedSharing) {
+        if (g_time.valid) {
+            dComIfGs_setTime(g_time.time);
+            dComIfGs_setDate(g_time.day);
+        }
+        if (g_weather.valid) {
+            PinWeather();
+        }
     }
+    g_appliedSharing = sharing;
 }
 
 void shutdown() {
     g_time = {};
     g_weather = {};
     g_clientSeeded = false;
+    g_appliedSharing = false;
     g_stageSeeded = false;
     g_lastStage[0] = '\0';
     g_lastPhase = 0.0f;

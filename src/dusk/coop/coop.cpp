@@ -665,15 +665,9 @@ void ApplyPuppetState(daAlink_c* link) {
         link->setWolfCollisionPos();
     }
 
-    // 10) per-frame Tg registration — dCcS clears registrations every frame,
-    //     so the frozen puppet re-registers its three target cylinders here
-    //     (risk 6). Host hearts stay safe: the puppet's damage paths are
-    //     neutralized (setDamagePoint guards), and v1 friendly fire is off.
-    for (int i = 0; i < 3; ++i) {
-        link->mTgCyls[i].OnTgSetBit();
-        dComIfG_Ccsp()->Set(&link->mTgCyls[i]);
-        dComIfG_Ccsp()->SetMass(&link->mTgCyls[i], 1);
-    }
+    // 10) no Tg / Co / mass — puppets are visual only (parallel-worlds:
+    //     a friend's body must not eat local hits or push local actors).
+    //     dCcS clears leftover create-time cylinders every frame.
 
     // 11) ground + room info
     link->mLinkAcch.CrrPos(dComIfG_Bgsp());
@@ -1395,6 +1389,32 @@ s8 localRoomNo() {
 
 const char* localStageName() {
     return LocalStageName();
+}
+
+bool sharingHostStage() {
+    if (!SessionLive()) {
+        return false;
+    }
+    if (hostRole()) {
+        return true;  // the host is the sky
+    }
+    const char* local = LocalStageName();
+    if (local == nullptr || local[0] == '\0') {
+        return false;
+    }
+    // Live host pose is authoritative (player 0). Stay-put clients sit on a
+    // different stage until they travel; the first PlayerState + the
+    // post-move send window keep this current.
+    const ReceiveSlot& hostSlot = g_receive[0];
+    if (hostSlot.hasState && hostSlot.state.stage[0] != '\0') {
+        return std::strcmp(hostSlot.state.stage, local) == 0;
+    }
+    // Join-time WorldInit/JoinAccept reference until the first host pose.
+    const char* world = g_session.worldStage().stage;
+    if (world != nullptr && world[0] != '\0') {
+        return std::strcmp(world, local) == 0;
+    }
+    return false;
 }
 
 void setWorldTime(const net::TimeStateInfo& time) {

@@ -153,9 +153,13 @@ private:
     void OnJoinRequest(u8 peerIndex, const Message& msg);
     void OnJoinAccept(const Message& msg);
     void OnJoinReject(const Message& msg);
-    void OnPlayerLeave(const Message& msg);
+    void OnPlayerLeave(u8 originPeer, const Message& msg);
     void OnSessionEnd(const Message& msg);
     void OnWorldInit(const Message& msg);
+    /// Client: mark Rejected and tear the transport down (no PlayerLeave —
+    /// we never joined). Frees the host's ENet peer slot / roster entry via
+    /// the resulting disconnect. State stays Rejected so the glue can toast.
+    void DisconnectRejected();
 
     // -- game-message routing (host relay, star topology) --
     void ForwardGameMessage(u8 originPeer, MsgType type, const PayloadUnion& payload);
