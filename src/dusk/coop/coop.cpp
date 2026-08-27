@@ -2,15 +2,16 @@
 
 #include "dusk/frame_interpolation.h"
 
-#include "dusk/coop/coop_enemy.h"
-#include "dusk/coop/coop_time.h"
-#include "dusk/net/discovery.h"
 #include "dusk/ui/ui.hpp"
 
 #include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_horse.h"
+#include "JSystem/J3DGraphAnimator/J3DModelData.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/config.hpp"
+#include "dusk/main.h"
 #include "dusk/net/config.h"
+#include "dusk/net/local_ipv4.h"
 #include "dusk/net/session.h"
 #include "f_op/f_op_actor_mng.h"
 #include "f_pc/f_pc_layer.h"
@@ -29,6 +30,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace dusk::coop {
 
@@ -49,10 +51,21 @@ bool g_sessionStarted = false;
 bool g_wasLive = false;
 bool g_startFailed = false;
 u32 g_startFailFrame = 0;
+bool g_startFailNotified = false;
+// Host/Connect button: stop this frame, start the next so PumpSessionAndSpawns
+// observes !live and clears puppets (a same-frame Stop+Start would skip that).
+bool g_restartRequested = false;
 // Capstone MINOR F (review-full-deepseek-v4-flash-0731.md MINOR F): one-shot
 // notification latch — a join rejection / start failure toasts once per
 // occurrence instead of spamming the 3 s retry loop.
 bool g_rejectedNotified = false;
+// This-process session intent. Host/Connect set it; Disconnect clears it.
+// autoConnect / --cvar net.connected / legacy --cvar net.enabled arm it on
+// the first EnsureSession of the process. Not written to config.json.
+bool g_connected = false;
+// autoConnect launch: first session this process is a client (Role ignored).
+bool g_forceClient = false;
+bool g_sawFirstEnsure = false;
 
 // ---------------------------------------------------------------------------
 // Real Link tracking (the local player's own daAlink_c per stage).
@@ -87,12 +100,47 @@ struct PuppetEntry {
 };
 
 std::array<PuppetEntry, kMaxLocalPlayers> g_puppets{};
-bool g_createInFlight = false;
+/// PlayerId of the puppet whose daAlink_c::create OR daHorse_c::create is in
+/// flight, or kInvalidPlayerId. Horse creates share the one-in-flight lock
+/// (vanilla create paths must not interleave).
+PlayerId g_creatingPid = kInvalidPlayerId;
+/// True when g_creatingPid is a horse create rather than a Link create.
+bool g_creatingHorse = false;
+
+struct HorseEntry {
+    SpawnState state = SpawnState::None;
+    fpc_ProcID pid = fpcM_ERROR_PROCESS_ID_e;
+    daHorse_c* actor = nullptr;
+    bool hidden = false;
+    u32 retryFrame = 0;
+    u32 createStartFrame = 0;
+};
+std::array<HorseEntry, kMaxLocalPlayers> g_horses{};
+
+bool CreateInFlight() { return g_creatingPid != kInvalidPlayerId; }
+
+void ClearCreatingIf(PlayerId pid) {
+    if (g_creatingPid != pid) {
+        return;
+    }
+    g_creatingPid = kInvalidPlayerId;
+    g_creatingHorse = false;
+    daAlink_c::clearCreateBgWait();
+}
+
+void ClearCreatingAll() {
+    if (g_creatingPid == kInvalidPlayerId) {
+        return;
+    }
+    g_creatingPid = kInvalidPlayerId;
+    g_creatingHorse = false;
+    daAlink_c::clearCreateBgWait();
+}
 
 // MAJOR M3: daAlink_c::create() phase 2 can spin on cPhs_INIT_e forever
 // (ground check over a cliff at the +120-unit spawn offset, a residual
 // ride/portal wait) without the process dying, so onLinkCreated never fires
-// and g_createInFlight would block every later spawn for ANY player. The
+// and g_creatingPid would block every later spawn for ANY player. The
 // pump aborts a create that exceeds kCreateDeadlineFrames; after
 // kCreateDeadlineStrikes consecutive aborts it drops the spawn until the
 // player leaves or a create succeeds.
@@ -108,8 +156,10 @@ struct CreateLimiter {
     bool hasAnchor = false;
     s8 anchorRoom = -1;
     f32 anchor[3] = {0.0f, 0.0f, 0.0f};
+    char anchorStage[net::kMaxStageNameLength] = {};
 };
 std::array<CreateLimiter, kMaxLocalPlayers> g_createLimiter{};
+std::array<CreateLimiter, kMaxLocalPlayers> g_horseLimiter{};
 
 // ---------------------------------------------------------------------------
 // Receive slots — latest PlayerState / PlayerEvent per remote player.
@@ -117,9 +167,9 @@ std::array<CreateLimiter, kMaxLocalPlayers> g_createLimiter{};
 
 struct ReceiveSlot {
     bool hasState = false;
-    bool hasEvent = false;
     net::PlayerStateMsg state{};
-    net::PlayerEventMsg event{};
+    bool hasHorseState = false;
+    net::HorseStateMsg horse{};
     // This machine's room/stage when the remote last sent us PlayerState. Used
     // by the sender gate (MAJOR M2): a remote's stale room can gate us silent
     // forever; if OUR room/stage changed since their last send, the gate opens
@@ -132,31 +182,90 @@ struct ReceiveSlot {
 std::array<ReceiveSlot, kMaxLocalPlayers> g_receive{};
 
 // ---------------------------------------------------------------------------
-// Form-swap state — a puppet's create only loads the host save's arc; when
-// the received form differs, the other form's arc is loaded on demand with
-// the vanilla metamorphose sequence (resDelete + cPhs_Reset + freeAll +
-// setArcName + resLoad), then changeWolf()/changeLink(0) swap the skeleton.
-// The object-res system refcounts shared arcs, so freeing a puppet's arc
-// never invalidates the real Link's model data.
+// Appearance state — a puppet's create loads the local save's body/shield
+// arcs. When the remote player's form, clothes, or shield differ, the target
+// arc is loaded on demand (resDelete + cPhs_Reset + freeAll + setArcName /
+// setShieldArcName + resLoad) and changeWolf()/changeLink(0)/setShieldModel
+// rebuild the instance. Sword models already live on the Alink arc, so a
+// sword change is an instant setSelectEquipItem. 0 on a want/loaded slot
+// means "unknown / not yet applied"; dItemNo_NONE_e (0xFF) is a real value.
 // ---------------------------------------------------------------------------
 
-struct FormSwapState {
-    bool active = false;
+struct AppearanceState {
+    bool arcLoadActive = false;
+    bool shieldLoadActive = false;
     bool wantWolf = false;
+    bool loadWantWolf = false;  // form snapshotted when the in-flight body load started
+    u8 wantClothes = 0;
+    u8 wantSword = 0;
+    u8 wantShield = 0;
+    u8 loadedClothes = 0;
+    u8 loadedSword = 0;
+    u8 loadedShield = 0;
+    // Latest Equip (applied immediately on receive — not queued behind
+    // SceneChange/AttentionChange, which used to drop appearance).
+    bool hasEquip = false;
+    u16 wantEquip = 0;
+    u8 wantSelectItem = 0;
+    u16 wantLeftJnt = 0xFFFF;
+    u16 wantRightJnt = 0xFFFF;
 };
 
-std::array<FormSwapState, kMaxLocalPlayers> g_formSwap{};
+std::array<AppearanceState, kMaxLocalPlayers> g_appearance{};
+
+/// Temporarily overwrite the SAVE select-equip slots so vanilla Link helpers
+/// (setArcName / changeLink / setSelectEquipItem / setShieldArcName) read the
+/// remote player's clothes/sword/shield. Restores on every exit path — must
+/// not span a resLoad yield. Does NOT call dComIfGs_setSelectEquipSword/Shield
+/// (those also set collect flags).
+class ScopedSelectEquip {
+    u8 clothes_;
+    u8 sword_;
+    u8 shield_;
+
+    static dSv_player_status_a_c& Status() {
+        return g_dComIfG_gameInfo.info.getPlayer().getPlayerStatusA();
+    }
+
+public:
+    ScopedSelectEquip(u8 clothes, u8 sword, u8 shield)
+        : clothes_(dComIfGs_getSelectEquipClothes()),
+          sword_(dComIfGs_getSelectEquipSword()),
+          shield_(dComIfGs_getSelectEquipShield()) {
+        auto& status = Status();
+        if (clothes != 0) {
+            status.setSelectEquip(COLLECT_CLOTHING, clothes);
+        }
+        if (sword != 0) {
+            status.setSelectEquip(COLLECT_SWORD, sword);
+        }
+        if (shield != 0) {
+            status.setSelectEquip(COLLECT_SHIELD, shield);
+        }
+    }
+
+    ~ScopedSelectEquip() {
+        auto& status = Status();
+        status.setSelectEquip(COLLECT_CLOTHING, clothes_);
+        status.setSelectEquip(COLLECT_SWORD, sword_);
+        status.setSelectEquip(COLLECT_SHIELD, shield_);
+    }
+
+    ScopedSelectEquip(const ScopedSelectEquip&) = delete;
+    ScopedSelectEquip& operator=(const ScopedSelectEquip&) = delete;
+};
 
 // ---------------------------------------------------------------------------
 // Sender change tracking (reliable PlayerEvent on change only).
 // ---------------------------------------------------------------------------
 
-u32 g_lastSentForm = 0xFFFFFFFF;
 u16 g_lastSentEquip = 0xFFFF;
 u8 g_lastSentSelectItem = 0xFF;
+u8 g_lastSentClothes = 0xFF;
+u8 g_lastSentSword = 0xFF;
+u8 g_lastSentShield = 0xFF;
 u16 g_lastSentLeftJnt = 0xFFFF;
 u16 g_lastSentRightJnt = 0xFFFF;
-u32 g_lastSentAttention = 0xFFFFFFFF;
 s8 g_lastSentRoom = 0x7F;
 // Stage of the last PlayerState we actually sent (NUL when none yet). Used to
 // detect a stage change even when the room number coincides (F_SP103 room 1 ->
@@ -171,16 +280,14 @@ char g_lastSentStage[net::kMaxStageNameLength] = {};
 // post-move states land).
 u32 g_postChangeSendWindow = 0;
 u32 g_frameCount = 0;
+/// Bitmask of roster-present remotes. A newly present bit forces Equip/Form
+/// to resend so joiners and rejoiners are not stuck in the local save's tunic.
+u8 g_lastRosterMask = 0;
 
 // ---------------------------------------------------------------------------
-// M4 state — host-leave UX (D8), LAN discovery
+// M4 state — host-leave UX (D8).
 // ---------------------------------------------------------------------------
 
-// LAN discovery lifecycle (host announces, clients listen).
-dusk::net::discovery::Announcer g_discoveryAnnouncer;
-dusk::net::discovery::Listener g_discoveryListener;
-bool g_announcerActive = false;
-bool g_listenerActive = false;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -189,6 +296,8 @@ bool g_listenerActive = false;
 // Forward declaration: defined in the M4 helpers section below (used by
 // EnsureSession's capstone MINOR F start-failure toast).
 void NotifyCoop(const char* title, const char* content);
+void ClearRemoteSlot(PlayerId pid);
+bool PoseIsFinite(const net::Vec3f& pos, const Mtx& baseTR, const Mtx* joints, u8 jointCount);
 
 bool SessionLive() {
     if (!g_sessionStarted) {
@@ -199,6 +308,54 @@ bool SessionLive() {
                g_session.state() == net::SessionState::Joined;
     }
     return g_session.state() == net::SessionState::Joined;
+}
+
+std::string TrimCopy(const std::string& s) {
+    const auto begin = s.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(begin, end - begin + 1);
+}
+
+void AppendRosterNames(char* buf, size_t cap, size_t& n) {
+    if (cap == 0) {
+        return;
+    }
+    if (n >= cap) {
+        n = cap - 1;
+        buf[n] = '\0';
+        return;
+    }
+    const auto& roster = g_session.roster();
+    bool first = true;
+    for (u8 i = 0; i < kMaxLocalPlayers && n + 1 < cap; ++i) {
+        if (!roster[i].present) {
+            continue;
+        }
+        const char* name = roster[i].name[0] != '\0' ? roster[i].name : "?";
+        const int wrote =
+            std::snprintf(buf + n, cap - n, "%s%s", first ? "" : ", ", name);
+        if (wrote < 0) {
+            break;
+        }
+        n += static_cast<size_t>(wrote);
+        if (n >= cap) {
+            n = cap - 1;
+            break;
+        }
+        first = false;
+    }
+}
+
+u32 DeadlineRemainSec() {
+    const u64 remainMs = g_session.deadlineRemainMs();
+    if (remainMs == 0) {
+        return 0;
+    }
+    const u32 sec = static_cast<u32>((remainMs + 999) / 1000);
+    return sec == 0 ? 1 : sec;
 }
 
 PlayerId SelfIdChecked() {
@@ -222,6 +379,72 @@ const PuppetEntry* EntryForPid(fpc_ProcID pid) {
     return nullptr;
 }
 
+const HorseEntry* EntryForHorsePid(fpc_ProcID pid) {
+    if (pid == fpcM_ERROR_PROCESS_ID_e) {
+        return nullptr;
+    }
+    for (const auto& e : g_horses) {
+        if (e.pid == pid && (e.state == SpawnState::Creating || e.state == SpawnState::Active ||
+                             e.state == SpawnState::Despawning))
+        {
+            return &e;
+        }
+    }
+    return nullptr;
+}
+
+PlayerId HorsePlayerId(fpc_ProcID pid) {
+    if (pid == fpcM_ERROR_PROCESS_ID_e) {
+        return kInvalidPlayerId;
+    }
+    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
+        const HorseEntry& e = g_horses[i];
+        if (e.pid == pid && (e.state == SpawnState::Creating || e.state == SpawnState::Active ||
+                             e.state == SpawnState::Despawning))
+        {
+            return i;
+        }
+    }
+    return kInvalidPlayerId;
+}
+
+void DisableHorseColliders(daHorse_c* horse) {
+    if (horse == nullptr) {
+        return;
+    }
+    for (int i = 0; i < 3; ++i) {
+        horse->m_tgco_cyl[i].OffTgSetBit();
+        horse->m_tgco_cyl[i].OffCoSetBit();
+    }
+    horse->m_boar_cyl.OffTgSetBit();
+    horse->m_boar_cyl.OffCoSetBit();
+    horse->m_at_cyl.OffAtSetBit();
+    horse->m_at_cyl.OffCoSetBit();
+    horse->m_head_sph.OffTgSetBit();
+    horse->m_head_sph.OffCoSetBit();
+}
+
+void ReassertRealHorseMtxCalc() {
+    daHorse_c* real = dComIfGp_getHorseActor();
+    if (real != nullptr && real->m_modelData != nullptr && real->m_mtxcalc != nullptr) {
+        real->m_modelData->getJointNodePointer(0)->setMtxCalc(real->m_mtxcalc);
+    }
+}
+
+void RequestHorseDespawn(HorseEntry& h) {
+    if (h.state == SpawnState::Creating || h.state == SpawnState::Active) {
+        if (h.actor != nullptr) {
+            fopAcM_delete(h.actor);
+        } else if (h.pid != fpcM_ERROR_PROCESS_ID_e) {
+            fopAcM_delete(h.pid);
+        }
+        h.state = SpawnState::Despawning;
+        h.actor = nullptr;
+    } else if (h.state == SpawnState::Requested) {
+        h = HorseEntry{};
+    }
+}
+
 s8 LocalRoomNo() {
     if (g_realLink != nullptr) {
         return fopAcM_GetRoomNo(g_realLink);
@@ -233,6 +456,89 @@ s8 LocalRoomNo() {
 /// play's start-stage object, which is re-pointed on every stage change).
 const char* LocalStageName() {
     return dComIfGp_getStartStageName();
+}
+
+void ClearRemoteSlot(PlayerId pid) {
+    if (pid >= kMaxLocalPlayers) {
+        return;
+    }
+    g_receive[pid] = {};
+    g_appearance[pid] = {};
+    g_createLimiter[pid] = {};
+    g_horseLimiter[pid] = {};
+}
+
+/// True when a dropped spawn limiter should stay dropped. Resets the
+/// strike budget when the host has moved away from the stuck anchor.
+bool LimiterStillDropped(CreateLimiter& lim) {
+    if (!lim.dropped) {
+        return false;
+    }
+    const char* stageNow = LocalStageName();
+    const bool stageMoved =
+        lim.anchorStage[0] != '\0' && std::strcmp(lim.anchorStage, stageNow) != 0;
+    if (!lim.hasAnchor) {
+        if (!g_realLinkReady || g_realLink == nullptr) {
+            return true;
+        }
+        lim = CreateLimiter{};
+        return false;
+    }
+    const bool moved = stageMoved || lim.anchorRoom != LocalRoomNo() || g_realLink == nullptr ||
+                       std::fabs(g_realLink->current.pos.x - lim.anchor[0]) > 300.0f ||
+                       std::fabs(g_realLink->current.pos.y - lim.anchor[1]) > 300.0f ||
+                       std::fabs(g_realLink->current.pos.z - lim.anchor[2]) > 300.0f;
+    if (moved) {
+        lim = CreateLimiter{};
+        return false;
+    }
+    return true;
+}
+
+void RememberLimiterAnchor(CreateLimiter& lim) {
+    lim.anchorRoom = LocalRoomNo();
+    std::snprintf(lim.anchorStage, sizeof(lim.anchorStage), "%s", LocalStageName());
+    if (g_realLink != nullptr) {
+        lim.anchor[0] = g_realLink->current.pos.x;
+        lim.anchor[1] = g_realLink->current.pos.y;
+        lim.anchor[2] = g_realLink->current.pos.z;
+        lim.hasAnchor = true;
+    } else {
+        lim.hasAnchor = false;
+    }
+}
+
+/// True when we have a pose for `pid` on our current stage and room. Same-stage
+/// other-room remotes must not materialize a full ALINK at local+120.
+bool RemoteInLocalScene(PlayerId pid) {
+    if (pid >= kMaxLocalPlayers || !g_receive[pid].hasState) {
+        return false;
+    }
+    const char* local = LocalStageName();
+    if (local == nullptr || local[0] == '\0') {
+        return false;
+    }
+    if (std::strcmp(g_receive[pid].state.stage, local) != 0) {
+        return false;
+    }
+    return g_receive[pid].state.roomNo == LocalRoomNo();
+}
+
+bool WantHorsePuppet(PlayerId pid) {
+    if (pid >= kMaxLocalPlayers) {
+        return false;
+    }
+    if (g_puppets[pid].state != SpawnState::Active) {
+        return false;
+    }
+    const ReceiveSlot& slot = g_receive[pid];
+    if (!slot.hasHorseState) {
+        return false;
+    }
+    if ((slot.state.stateFlags & net::kPlayerStateFlagHorseRide) == 0) {
+        return false;
+    }
+    return RemoteInLocalScene(pid);
 }
 
 void ClearAllPuppets() {
@@ -248,8 +554,17 @@ void ClearAllPuppets() {
             // the slot-0 guards in ~daAlink_c keep engaging.
             e.state = SpawnState::Despawning;
         }
+        HorseEntry& h = g_horses[i];
+        if (h.state == SpawnState::Creating || h.state == SpawnState::Active) {
+            if (h.actor != nullptr) {
+                fopAcM_delete(h.actor);
+            } else if (h.pid != fpcM_ERROR_PROCESS_ID_e) {
+                fopAcM_delete(h.pid);
+            }
+            h.state = SpawnState::Despawning;
+        }
     }
-    g_createInFlight = false;
+    ClearCreatingAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -270,115 +585,181 @@ void OnGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
         slot.myRoomAtLastRecv = LocalRoomNo();
         std::snprintf(slot.myStageAtLastRecv, sizeof(slot.myStageAtLastRecv), "%s",
                       LocalStageName());
+        if ((st.stateFlags & net::kPlayerStateFlagHorseRide) == 0) {
+            slot.hasHorseState = false;
+        }
+    } else if (type == net::MsgType::HorseState) {
+        const auto& hs = payload.horseState;
+        if (hs.playerId >= kMaxLocalPlayers || hs.playerId == SelfIdChecked()) {
+            return;
+        }
+        ReceiveSlot& slot = g_receive[hs.playerId];
+        slot.horse = hs;
+        slot.hasHorseState = true;
     } else if (type == net::MsgType::PlayerEvent) {
         const auto& ev = payload.playerEvent;
         if (ev.playerId >= kMaxLocalPlayers || ev.playerId == SelfIdChecked()) {
             return;
         }
         ReceiveSlot& slot = g_receive[ev.playerId];
-        slot.event = ev;
-        slot.hasEvent = true;
-        // MAJOR M1 (room visibility): PlayerState is unreliable and the
-        // sender's room-change send window is ~1 frame (the sender gate
-        // closes as soon as our reply lands), so the PlayerState carrying the
-        // remote's NEW room can drop while the reliable SceneChange event
-        // always arrives. Adopt the event's room into the slot now so the
-        // puppet's hidden gate (st.roomNo != local room) is deterministic
-        // instead of depending on an unreliable packet — otherwise a remote
-        // who left the room keeps rendering (and animating) on our screen.
-        if (static_cast<net::PlayerEventId>(ev.eventId) == net::PlayerEventId::SceneChange) {
-            // Capstone MINOR A (review-full-deepseek-v4-flash-0731.md MINOR A):
-            // adopt the event's room only for SAME-STAGE moves (scene == 1),
-            // exactly like the host's room-table sniff (session.cpp). A
-            // cross-stage mover sends scene=0; adopting (oldStage, newRoom)
-            // could coincide with our local room and flash the mover's puppet
-            // visible — the hidden gate `sameStage && roomNo == local` would
-            // hold — until the first new-stage PlayerState lands. Cross-stage
-            // moves are established by PlayerState only, which writes the
-            // room byte in the same message.
+        const auto eventId = static_cast<net::PlayerEventId>(ev.eventId);
+        if (eventId == net::PlayerEventId::Equip) {
+            AppearanceState& ap = g_appearance[ev.playerId];
+            ap.wantEquip = static_cast<u16>(ev.data & 0xFFFF);
+            ap.wantSelectItem = static_cast<u8>((ev.data >> 16) & 0xFF);
+            const u8 clothes = static_cast<u8>((ev.data >> 24) & 0xFF);
+            ap.wantLeftJnt = static_cast<u16>(ev.data2 & 0xFFFF);
+            ap.wantRightJnt = static_cast<u16>((ev.data2 >> 16) & 0xFFFF);
+            ap.hasEquip = true;
+            if (clothes != 0) {
+                ap.wantClothes = clothes;
+            }
+            if (ev.scene != 0) {
+                ap.wantSword = ev.scene;
+            }
+            if (ev.reserved != 0) {
+                ap.wantShield = ev.reserved;
+            }
+            CoopLog.debug("coop: player {} equip {} sel {} clothes {} sword {} shield {} joints {}/{}",
+                ev.playerId, ap.wantEquip, ap.wantSelectItem, clothes, ev.scene, ev.reserved,
+                ap.wantLeftJnt, ap.wantRightJnt);
+        } else if (eventId == net::PlayerEventId::SceneChange) {
+            slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
             if (ev.scene == 1) {
-                slot.state.roomNo = static_cast<s8>(ev.data & 0xFF);
+                // Same-stage room change: keep the existing stage name.
+            } else if (ev.stage[0] != '\0') {
+                std::snprintf(slot.state.stage, sizeof(slot.state.stage), "%s", ev.stage);
+            } else {
+                // Pre-v10 peer: no destination name. Invalidate until PlayerState.
+                slot.state.stage[0] = '\0';
             }
         }
-    } else if (type == net::MsgType::TimeSync || type == net::MsgType::TimeEvent ||
-               type == net::MsgType::WeatherChange)
-    {
-        // M3: the client clock/weather replica (absolute adopt, events,
-        // weather target + re-pin). The host never receives these from a
-        // peer (they are host-generated, host->all); a forged inbound copy is
-        // ignored here.
-        dusk::coop::timeweather::onGameMessage(type, payload);
     }
-    // v7 (M5.1): GhostSnapshot/EnemyEvent are wire-only until M5.2 lands —
-    // no receive branch exists, so an inbound ghost message is ignored.
 }
 
 // ---------------------------------------------------------------------------
 // Sender
 // ---------------------------------------------------------------------------
 
-void SendPlayerEvent(net::PlayerEventId eventId, u32 data, u32 data2, u8 scene = 0) {
+void SendPlayerEvent(net::PlayerEventId eventId, u32 data, u32 data2, u8 scene = 0,
+                     u8 reserved = 0, const char* stage = nullptr) {
     net::PayloadUnion payload = {};
     payload.playerEvent.playerId = SelfIdChecked();
     payload.playerEvent.eventId = static_cast<u8>(eventId);
     payload.playerEvent.scene = scene;
+    payload.playerEvent.reserved = reserved;
     payload.playerEvent.data = data;
     payload.playerEvent.data2 = data2;
+    if (stage != nullptr && stage[0] != '\0') {
+        std::snprintf(payload.playerEvent.stage, sizeof(payload.playerEvent.stage), "%s", stage);
+    }
     if (!g_session.SendGameMessage(net::MsgType::PlayerEvent, payload)) {
         CoopLog.debug("coop: dropped PlayerEvent {} (session not sendable)", static_cast<u8>(eventId));
     }
 }
 
-/// Maps the local Link's lock target to a session entity id (a remote player
-/// id) or kInvalidPlayerId (0xFFFF) when it is local-only / none.
-u32 AttentionTargetId(const daAlink_c* link) {
-    fopAc_ac_c* target = link->mTargetedActor;
-    if (target == nullptr) {
-        return kInvalidPlayerId;
+void SendHorseState(const daAlink_c* link) {
+    if (!link->checkHorseRide()) {
+        return;
     }
-    const PlayerId pid = puppetPlayerId(fopAcM_GetID(target));
-    return pid != kInvalidPlayerId ? static_cast<u32>(pid) : kInvalidPlayerId;
+    daHorse_c* horse = dComIfGp_getHorseActor();
+    if (horse == nullptr || horse->m_model == nullptr || horse->m_model->getModelData() == nullptr) {
+        return;
+    }
+    net::HorseStateMsg hs = {};
+    hs.playerId = SelfIdChecked();
+    hs.roomNo = fopAcM_GetRoomNo(horse);
+    std::snprintf(hs.stage, sizeof(hs.stage), "%s", LocalStageName());
+    const u16 jointCount = horse->m_model->getModelData()->getJointNum();
+    hs.jointCount = jointCount < net::kMaxJoints ? static_cast<u8>(jointCount) : net::kMaxJoints;
+    hs.yaw = horse->shape_angle.y;
+    hs.pos.x = horse->current.pos.x;
+    hs.pos.y = horse->current.pos.y;
+    hs.pos.z = horse->current.pos.z;
+    std::memcpy(hs.baseTR, horse->m_model->getBaseTRMtx(), sizeof(Mtx));
+    for (u16 j = 0; j < hs.jointCount; ++j) {
+        std::memcpy(hs.joints[j], horse->m_model->getAnmMtx(j), sizeof(Mtx));
+        if (horse->m_model->getMtxBuffer()->getScaleFlag(j) != 0) {
+            hs.scaleFlags[j >> 3] |= static_cast<u8>(1 << (j & 7));
+        }
+    }
+    if (!PoseIsFinite(hs.pos, hs.baseTR, hs.joints, hs.jointCount)) {
+        CoopLog.warn("coop: skipping non-finite local horse pose send");
+        return;
+    }
+    net::PayloadUnion payload = {};
+    payload.horseState = hs;
+    g_session.SendGameMessage(net::MsgType::HorseState, payload);
 }
 
 void ResetSenderTrackers() {
-    g_lastSentForm = 0xFFFFFFFF;
     g_lastSentEquip = 0xFFFF;
     g_lastSentSelectItem = 0xFF;
+    g_lastSentClothes = 0xFF;
+    g_lastSentSword = 0xFF;
+    g_lastSentShield = 0xFF;
     g_lastSentLeftJnt = 0xFFFF;
     g_lastSentRightJnt = 0xFFFF;
-    g_lastSentAttention = 0xFFFFFFFF;
     g_lastSentRoom = 0x7F;
     g_lastSentStage[0] = '\0';
     g_postChangeSendWindow = 0;
+    g_lastRosterMask = 0;
+}
+
+u8 PresentRemoteMask() {
+    u8 mask = 0;
+    const auto& roster = g_session.roster();
+    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
+        if (roster[i].present && i != SelfIdChecked()) {
+            mask |= static_cast<u8>(1u << i);
+        }
+    }
+    return mask;
+}
+
+/// Join/rejoin: Equip is change-detected. Reset the last-sent appearance so
+/// SendEventsOnChange fires again the next time the sender gate is open.
+void ResendAppearanceIfRosterGrew() {
+    const u8 mask = PresentRemoteMask();
+    const u8 gained = static_cast<u8>(mask & static_cast<u8>(~g_lastRosterMask));
+    g_lastRosterMask = mask;
+    if (gained == 0) {
+        return;
+    }
+    g_lastSentEquip = 0xFFFF;
+    g_lastSentSelectItem = 0xFF;
+    g_lastSentClothes = 0xFF;
+    g_lastSentSword = 0xFF;
+    g_lastSentShield = 0xFF;
+    g_lastSentLeftJnt = 0xFFFF;
+    g_lastSentRightJnt = 0xFFFF;
 }
 
 void SendEventsOnChange(const daAlink_c* link) {
-    const u32 form = link->checkWolf() ? 1u : 0u;
-    if (form != g_lastSentForm) {
-        g_lastSentForm = form;
-        SendPlayerEvent(net::PlayerEventId::FormChange, form, 0);
-    }
-
+    // Form rides PlayerState.form every frame. AttentionChange was never
+    // applied — queuing it dropped Equip. Only Equip is sent on change.
     const u16 equip = link->mEquipItem;
     const u8 selectItem = link->mSelectItemId;
+    const u8 clothes = dComIfGs_getSelectEquipClothes();
+    const u8 sword = dComIfGs_getSelectEquipSword();
+    const u8 shield = dComIfGs_getSelectEquipShield();
     const u16 leftJnt = link->mLeftItemJntNo;
     const u16 rightJnt = link->mRightItemJntNo;
     if (equip != g_lastSentEquip || selectItem != g_lastSentSelectItem ||
+        clothes != g_lastSentClothes || sword != g_lastSentSword || shield != g_lastSentShield ||
         leftJnt != g_lastSentLeftJnt || rightJnt != g_lastSentRightJnt)
     {
         g_lastSentEquip = equip;
         g_lastSentSelectItem = selectItem;
+        g_lastSentClothes = clothes;
+        g_lastSentSword = sword;
+        g_lastSentShield = shield;
         g_lastSentLeftJnt = leftJnt;
         g_lastSentRightJnt = rightJnt;
-        SendPlayerEvent(net::PlayerEventId::Equip, static_cast<u32>(equip) |
-                                                       (static_cast<u32>(selectItem) << 16),
-            static_cast<u32>(leftJnt) | (static_cast<u32>(rightJnt) << 16));
-    }
-
-    const u32 attention = AttentionTargetId(link);
-    if (attention != g_lastSentAttention) {
-        g_lastSentAttention = attention;
-        SendPlayerEvent(net::PlayerEventId::AttentionChange, attention, 0);
+        SendPlayerEvent(net::PlayerEventId::Equip,
+            static_cast<u32>(equip) | (static_cast<u32>(selectItem) << 16) |
+                (static_cast<u32>(clothes) << 24),
+            static_cast<u32>(leftJnt) | (static_cast<u32>(rightJnt) << 16), sword, shield);
     }
     // The room-change event is NOT sent here: sendPlayerState() sends it
     // before the sender gate so a room change always propagates (MAJOR M2).
@@ -389,9 +770,8 @@ void SendEventsOnChange(const daAlink_c* link) {
 /// its own stage+room, so same-scene peers are the only ones that can see us.
 ///
 /// Capstone MINOR L (review-full-deepseek-v4-flash-0731.md MINOR L): this is
-/// THE player sender gate. (The enemy snapshot sender that once shared it is
-/// gone in M5.1; the M5.2 ghost sender gates on the same-room rule via
-/// g_receive[sender].state, 05-ghosts.md §4.3.)
+/// THE player sender gate. (The enemy snapshot sender that once shared it
+/// was deleted with the authority stack.)
 ///
 /// MAJOR M2 (mutual room-change deadlock): two players entering the same new
 /// room together hold each other's stale room, so `state.roomNo == myRoom`
@@ -436,81 +816,96 @@ bool RemoteInOurRoom(const char* stage, s8 roomNo) {
 // Acch -> room info.
 // ---------------------------------------------------------------------------
 
-void ApplyPendingEvent(daAlink_c* link, PlayerId pid) {
-    ReceiveSlot& slot = g_receive[pid];
-    if (!slot.hasEvent) {
+void ApplyStoredEquip(daAlink_c* link, PlayerId pid) {
+    AppearanceState& ap = g_appearance[pid];
+    if (!ap.hasEquip) {
         return;
     }
-    const net::PlayerEventMsg& ev = slot.event;
-    if (ev.playerId != pid) {
-        slot.hasEvent = false;
-        return;
+    link->mEquipItem = ap.wantEquip;
+    link->mSelectItemId = ap.wantSelectItem;
+    if (ap.wantLeftJnt != 0xFFFF) {
+        link->mLeftItemJntNo = ap.wantLeftJnt;
     }
-    switch (static_cast<net::PlayerEventId>(ev.eventId)) {
-    case net::PlayerEventId::Equip: {
-        const u16 equip = static_cast<u16>(ev.data & 0xFFFF);
-        const u8 selectItem = static_cast<u8>((ev.data >> 16) & 0xFF);
-        const u16 leftJnt = static_cast<u16>(ev.data2 & 0xFFFF);
-        const u16 rightJnt = static_cast<u16>((ev.data2 >> 16) & 0xFFFF);
-        link->mEquipItem = equip;
-        link->mSelectItemId = selectItem;
-        if (leftJnt != 0xFFFF) {
-            link->mLeftItemJntNo = leftJnt;
-        }
-        if (rightJnt != 0xFFFF) {
-            link->mRightItemJntNo = rightJnt;
-        }
-        CoopLog.debug("coop: player {} equip {} sel {} joints {}/{}", pid, equip, selectItem,
-            leftJnt, rightJnt);
-        break;
+    if (ap.wantRightJnt != 0xFFFF) {
+        link->mRightItemJntNo = ap.wantRightJnt;
     }
-    default:
-        // FormChange / AttentionChange are either carried per frame in
-        // PlayerState (form) or not used for rendering (M1). SceneChange is
-        // consumed at receive time (OnGameMessage) — the reliable event is
-        // the room-change authority so a dropped PlayerState can't leave a
-        // room-leaver's puppet visible; PlayerState.roomNo then keeps it
-        // current while states flow.
-        break;
-    }
-    slot.hasEvent = false;
 }
 
-/// Drives the puppet's form swap (human <-> wolf) across frames. Returns
-/// true once the puppet's skeleton matches `wantWolf` (either it already
-/// does, or the target arc finished loading and changeWolf/changeLink ran).
-/// While the arc is loading the caller must hold the pose and hide the
-/// puppet (its current model data was freed).
-static bool DriveFormSwap(daAlink_c* link, PlayerId pid, bool wantWolf) {
-    FormSwapState& fs = g_formSwap[pid];
-    if ((link->checkWolf() != 0) == wantWolf) {
-        fs.active = false;
-        return true;
+/// Restore this Link's per-instance anm-blend calc on the shared J3DModelData
+/// joints. changeWolf/changeLink and puppet modelCalc overwrite those pointers;
+/// the real Link's draw callbacks need its own calc objects installed.
+void ReassertSharedMtxCalc(daAlink_c* link) {
+    if (link == nullptr || link->mpLinkModel == nullptr) {
+        return;
     }
-    if (!fs.active) {
-        fs.active = true;
-        fs.wantWolf = wantWolf;
-        // Vanilla metamorphose preamble (loadModelDVD): release the current
-        // arc (refcounted — shared arcs stay alive for the real Link), reset
-        // the phase machine, free this Link's arc heap, pick the target arc.
-        dComIfG_resDelete(&link->mPhaseReq, link->mArcName);
-        cPhs_Reset(&link->mPhaseReq);
-        link->mpArcHeap->freeAll();
-        link->setArcName(wantWolf ? TRUE : FALSE);
+    J3DModelData* md = link->mpLinkModel->getModelData();
+    if (md == nullptr) {
+        return;
     }
-    if (dComIfG_resLoad(&link->mPhaseReq, link->mArcName, link->mpArcHeap) != cPhs_COMPLEATE_e) {
-        return false;  // multi-frame load — hold the last pose
-    }
-    // Skeleton swap; changeModelDataDirect* re-arms the shared-model-data
-    // mtxCalc pointers, which modelCalc() re-asserts every frame (risk 2).
-    if (wantWolf) {
-        link->changeWolf();
+    if (link->checkWolf()) {
+        md->getJointNodePointer(0)->setMtxCalc(link->field_0x1f20);
+        md->getJointNodePointer(3)->setMtxCalc(link->field_0x1f24);
+        md->getJointNodePointer(15)->setMtxCalc(link->field_0x1f20);
     } else {
-        link->changeLink(0);
+        md->getJointNodePointer(0)->setMtxCalc(link->field_0x1f20);
+        md->getJointNodePointer(1)->setMtxCalc(link->field_0x1f24);
+        md->getJointNodePointer(16)->setMtxCalc(link->field_0x1f20);
     }
-    // The old arc was freed, so the anm packs now dangle. Re-point them from
-    // the new arc the same way create() does (calc() samples pack 0 and
-    // skips NULL packs, so the rest are cleared).
+}
+
+void ReassertRealLinkMtxCalc(const daAlink_c* puppet) {
+    if (g_realLink != nullptr && g_realLink != puppet) {
+        ReassertSharedMtxCalc(g_realLink);
+    }
+}
+
+/// Shared J3DModelData hide/show (sword/sheath/clothes shapes, joint
+/// callbacks) is mutated by puppet changeLink/setSelectEquipItem. Re-apply
+/// the real Link's presentation so the local player does not inherit the
+/// puppet's sheath/blade visibility.
+void ReassertRealLinkPresentation(const daAlink_c* puppet) {
+    if (g_realLink == nullptr || g_realLink == puppet) {
+        return;
+    }
+    if (g_realLink->checkWolf()) {
+        g_realLink->changeModelDataDirectWolf(0);
+    } else {
+        g_realLink->changeModelDataDirect(0);
+    }
+    g_realLink->setSelectEquipItem(FALSE);
+    ReassertSharedMtxCalc(g_realLink);
+}
+
+bool FiniteF32(f32 v) {
+    return std::isfinite(v);
+}
+
+bool PoseIsFinite(const net::Vec3f& pos, const Mtx& baseTR, const Mtx* joints, u8 jointCount) {
+    if (!FiniteF32(pos.x) || !FiniteF32(pos.y) || !FiniteF32(pos.z)) {
+        return false;
+    }
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            if (!FiniteF32(baseTR[r][c])) {
+                return false;
+            }
+        }
+    }
+    const u8 n = jointCount < net::kMaxJoints ? jointCount : net::kMaxJoints;
+    for (u8 j = 0; j < n; ++j) {
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                if (!FiniteF32(joints[j][r][c])) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/// Re-point anm packs after a body-arc reload (the old arc was freed).
+static void RepointPuppetWaitAnm(daAlink_c* link, bool wantWolf) {
     for (int i = 0; i < 3; ++i) {
         link->mNowAnmPackUnder[i].setAnmTransform(nullptr);
         link->mNowAnmPackUpper[i].setAnmTransform(nullptr);
@@ -527,7 +922,116 @@ static bool DriveFormSwap(daAlink_c* link, PlayerId pid, bool wantWolf) {
     } else {
         link->setSingleAnimeBase(daAlink_c::ANM_WAIT);
     }
-    fs.active = false;
+}
+
+/// Drives the puppet's form / clothes / sword / shield to match the remote
+/// player. Returns true once idle (skeleton and models match). While a body
+/// or shield arc is loading the caller must hide the puppet (model data was
+/// freed). Does not set mClothesChangeWaitTimer / mShieldChangeWaitTimer —
+/// puppets skip execute(), and those timers would stall the destructor.
+static bool DriveRemoteAppearance(daAlink_c* link, PlayerId pid, bool wantWolf) {
+    AppearanceState& ap = g_appearance[pid];
+    ap.wantWolf = wantWolf;
+
+    const bool formMismatch = (link->checkWolf() != 0) != wantWolf;
+
+    // First clothes Equip matching the local tunic: create already loaded
+    // that arc via playerInit/changeLink — skip a redundant reload.
+    if (!wantWolf && ap.wantClothes != 0 && ap.loadedClothes == 0 &&
+        ap.wantClothes == dComIfGs_getSelectEquipClothes())
+    {
+        ap.loadedClothes = ap.wantClothes;
+    }
+    // First shield Equip matching the local shield: create already called
+    // setShieldModel from the local save.
+    if (ap.wantShield != 0 && ap.loadedShield == 0 &&
+        ap.wantShield == dComIfGs_getSelectEquipShield())
+    {
+        ap.loadedShield = ap.wantShield;
+    }
+
+    const bool clothesMismatch =
+        !wantWolf && ap.wantClothes != 0 && ap.loadedClothes != ap.wantClothes;
+    const bool needBody = formMismatch || clothesMismatch || ap.arcLoadActive;
+
+    if (needBody) {
+        if (!ap.arcLoadActive) {
+            ap.arcLoadActive = true;
+            ap.loadWantWolf = wantWolf;
+            dComIfG_resDelete(&link->mPhaseReq, link->mArcName);
+            cPhs_Reset(&link->mPhaseReq);
+            link->mpArcHeap->freeAll();
+            {
+                ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+                link->setArcName(ap.loadWantWolf ? TRUE : FALSE);
+            }
+        }
+        if (dComIfG_resLoad(&link->mPhaseReq, link->mArcName, link->mpArcHeap) !=
+            cPhs_COMPLEATE_e)
+        {
+            return false;
+        }
+        {
+            ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+            if (ap.loadWantWolf) {
+                link->changeWolf();
+            } else {
+                link->changeLink(0);
+            }
+            RepointPuppetWaitAnm(link, ap.loadWantWolf);
+            link->setSelectEquipItem(FALSE);
+            ReassertRealLinkPresentation(link);
+        }
+        ap.arcLoadActive = false;
+        if (!ap.loadWantWolf && ap.wantClothes != 0) {
+            ap.loadedClothes = ap.wantClothes;
+        }
+        if (ap.wantSword != 0) {
+            ap.loadedSword = ap.wantSword;
+        }
+        // Form flipped mid-load — wait a frame so we start the other arc
+        // from a complete skeleton instead of chaining two freeAlls.
+        if ((link->checkWolf() != 0) != wantWolf) {
+            return false;
+        }
+    }
+
+    const bool shieldMismatch = ap.wantShield != 0 && ap.loadedShield != ap.wantShield;
+    if (ap.shieldLoadActive || shieldMismatch) {
+        if (!ap.shieldLoadActive) {
+            ap.shieldLoadActive = true;
+            link->mShieldModel = nullptr;
+            dComIfG_resDelete(&link->mShieldPhaseReq, link->mShieldArcName);
+            cPhs_Reset(&link->mShieldPhaseReq);
+            link->mpShieldArcHeap->freeAll();
+            {
+                ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+                link->setShieldArcName();
+            }
+        }
+        if (dComIfG_resLoad(&link->mShieldPhaseReq, link->mShieldArcName, link->mpShieldArcHeap) !=
+            cPhs_COMPLEATE_e)
+        {
+            return false;
+        }
+        {
+            ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+            link->setShieldModel();
+        }
+        ap.shieldLoadActive = false;
+        ap.loadedShield = ap.wantShield;
+    }
+
+    // Sword models already live on the Alink arc. Always apply on first Equip
+    // (create skipped setSelectEquipItem) even when the id matches the local
+    // save — playerInit hardcodes the ordon sword model.
+    if (ap.wantSword != 0 && ap.loadedSword != ap.wantSword) {
+        ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+        link->setSelectEquipItem(FALSE);
+        ap.loadedSword = ap.wantSword;
+        ReassertRealLinkPresentation(link);
+    }
+
     return true;
 }
 
@@ -541,6 +1045,9 @@ void ApplyPuppetState(daAlink_c* link) {
         return;  // nothing received yet — hold the spawn pose
     }
     const net::PlayerStateMsg& st = slot.state;
+
+    // Equip first so clothes/sword/shield are known before appearance drive.
+    ApplyStoredEquip(link, pid);
 
     // Hidden state: the remote player is in another stage or room (M4.5
     // stay-put join — players meet by traveling, so a remote on another stage
@@ -556,13 +1063,31 @@ void ApplyPuppetState(daAlink_c* link) {
     const bool sameStage = std::strcmp(st.stage, LocalStageName()) == 0;
     PuppetEntry& entry = g_puppets[pid];
     entry.hidden = !sameStage || st.roomNo != LocalRoomNo();
+    AppearanceState& ap = g_appearance[pid];
     if (entry.hidden) {
+        // A body/shield reload already freed this puppet's model. Keep
+        // driving the load even while room-hidden so we do not sit on a
+        // dangling arc until they re-enter.
+        if (ap.arcLoadActive || ap.shieldLoadActive) {
+            DriveRemoteAppearance(link, pid, st.form != 0);
+            ReassertRealLinkPresentation(link);
+            entry.hidden = true;
+        }
         return;
     }
 
     // Frozen-in-cutscene: while the remote player is inside a demo we hold
     // the last pose (accepted design — the puppet never runs demo code).
     if (st.stateFlags & net::kPlayerStateFlagDemo) {
+        if (ap.arcLoadActive || ap.shieldLoadActive) {
+            DriveRemoteAppearance(link, pid, st.form != 0);
+            ReassertRealLinkPresentation(link);
+        }
+        return;
+    }
+
+    if (!PoseIsFinite(st.pos, st.baseTR, st.joints, st.jointCount)) {
+        CoopLog.warn("coop: dropping non-finite pose from player {}", pid);
         return;
     }
 
@@ -574,17 +1099,14 @@ void ApplyPuppetState(daAlink_c* link) {
     link->current.angle.y = st.yaw;
     link->mBodyAngle.x = st.pitch;
 
-    // 2) form flag — swap the skeleton when the received form differs
-    //    (changeWolf/changeLink are heavier: the target arc loads on demand
-    //    first; the host-save transform-status write inside them is
-    //    suppressed for puppets in d_a_alink_wolf.inc).
+    // 2) form / clothes / sword / shield — target arcs load on demand;
+    //    the host-save transform-status write inside changeWolf/changeLink
+    //    is suppressed for puppets in d_a_alink_wolf.inc.
     const bool wantWolf = st.form != 0;
-    if (wantWolf != (link->checkWolf() != 0)) {
-        if (!DriveFormSwap(link, pid, wantWolf)) {
-            entry.hidden = true;  // model data is freed mid-swap — do not draw
-            return;
-        }
-        // Swap completed this frame; fall through and pose the new skeleton.
+    if (!DriveRemoteAppearance(link, pid, wantWolf)) {
+        entry.hidden = true;  // model data is freed mid-reload — do not draw
+        ReassertRealLinkPresentation(link);
+        return;
     }
 
     // 3) mProcID — PROC_WAIT v1 (pose replaces the action state machine)
@@ -592,7 +1114,12 @@ void ApplyPuppetState(daAlink_c* link) {
 
     // face expression on change (bck/btp indices; the face model calc inside
     // setItemMatrix/setWolfItemMatrix picks them up)
-    if (st.faceBckIdx != 0xFFFF && st.faceBckIdx != link->mFaceBckHeap.getIdx()) {
+    // 0 is the vanilla "derive from lock-on" sentinel and would use the local
+    // player's shared attention manager. Skip it; the pasted matrices already
+    // hold the sender's face.
+    if (st.faceBckIdx != 0 && st.faceBckIdx != 0xFFFF &&
+        st.faceBckIdx != link->mFaceBckHeap.getIdx())
+    {
         link->setFaceBck(st.faceBckIdx, FALSE, 0xFFFF);
     }
     if (st.faceBtpIdx != 0xFFFF && st.faceBtpIdx != link->mFaceBtpHeap.getIdx()) {
@@ -646,12 +1173,18 @@ void ApplyPuppetState(daAlink_c* link) {
         dusk::frame_interp::record_final_mtx(link->mpLinkModel->getWeightAnmMtx(i));
     }
 #endif
+    ReassertRealLinkPresentation(link);
 
-    // 7) item/face/hat model attachment at the (synced) item joints
-    if (!link->checkWolf()) {
-        link->setItemMatrix(0);
-    } else {
-        link->setWolfItemMatrix();
+    // 7) item/face/hat model attachment at the (synced) item joints.
+    //    checkSwordGet / checkMasterSwordEquip read the SAVE select-equip;
+    //    poke the remote's sword so sheath/sword presentation is theirs.
+    {
+        ScopedSelectEquip poke(ap.wantClothes, ap.wantSword, ap.wantShield);
+        if (!link->checkWolf()) {
+            link->setItemMatrix(0);
+        } else {
+            link->setWolfItemMatrix();
+        }
     }
 
     // 8) derived presentation positions
@@ -668,21 +1201,67 @@ void ApplyPuppetState(daAlink_c* link) {
     // 10) no Tg / Co / mass — puppets are visual only (parallel-worlds:
     //     a friend's body must not eat local hits or push local actors).
     //     dCcS clears leftover create-time cylinders every frame.
+    // 11) do NOT CrrPos / setRoomInfo — Acch would shove the pasted pose
+    //     onto local ground (fight swim/climb/Epona) and room comes from
+    //     the wire.
+    fopAcM_SetRoomNo(link, st.roomNo);
+    ReassertRealLinkPresentation(link);
+}
 
-    // 11) ground + room info
-    link->mLinkAcch.CrrPos(dComIfG_Bgsp());
-    link->setRoomInfo();
-
-    // Pose-mirroring diagnostics (throttled to 1 Hz per puppet): the applied
-    // position vs the received position, for the M1 accept test.
-    if (g_frameCount % 60 == 0) {
-        CoopLog.info("coop: apply player {} to pos=({:.1f},{:.1f},{:.1f}) recv=({:.1f},{:.1f},{:.1f}) yaw={} room={}",
-            pid, link->current.pos.x, link->current.pos.y, link->current.pos.z, st.pos.x, st.pos.y,
-            st.pos.z, st.yaw, fopAcM_GetRoomNo(link));
+void ApplyHorseState(daHorse_c* horse) {
+    const PlayerId pid = HorsePlayerId(fopAcM_GetID(horse));
+    if (pid == kInvalidPlayerId) {
+        return;
+    }
+    HorseEntry& entry = g_horses[pid];
+    ReceiveSlot& slot = g_receive[pid];
+    if (!slot.hasHorseState) {
+        entry.hidden = true;
+        return;
+    }
+    const net::HorseStateMsg& hs = slot.horse;
+    const bool sameStage = std::strcmp(hs.stage, LocalStageName()) == 0;
+    entry.hidden = !sameStage || hs.roomNo != LocalRoomNo() || g_puppets[pid].hidden;
+    if (entry.hidden) {
+        return;
+    }
+    if (horse->m_model == nullptr || horse->m_model->getModelData() == nullptr) {
+        return;
+    }
+    if (!PoseIsFinite(hs.pos, hs.baseTR, hs.joints, hs.jointCount)) {
+        CoopLog.warn("coop: dropping non-finite horse pose from player {}", pid);
+        return;
     }
 
-    // reliable-event application (equip)
-    ApplyPendingEvent(link, pid);
+    horse->current.pos.x = hs.pos.x;
+    horse->current.pos.y = hs.pos.y;
+    horse->current.pos.z = hs.pos.z;
+    horse->old.pos = horse->current.pos;
+    horse->shape_angle.y = hs.yaw;
+    horse->current.angle.y = hs.yaw;
+    fopAcM_SetRoomNo(horse, hs.roomNo);
+
+    const u16 localJoints = horse->m_model->getModelData()->getJointNum();
+    const u16 copyCount = hs.jointCount < localJoints ? hs.jointCount : localJoints;
+    for (u16 j = 0; j < copyCount; ++j) {
+        Mtx mtx;
+        std::memcpy(mtx, hs.joints[j], sizeof(Mtx));
+        horse->m_model->setAnmMtx(j, mtx);
+        horse->m_model->setScaleFlag(j, static_cast<u8>((hs.scaleFlags[j >> 3] >> (j & 7)) & 1));
+    }
+    Mtx baseMtx;
+    std::memcpy(baseMtx, hs.baseTR, sizeof(Mtx));
+    horse->m_model->setBaseTRMtx(baseMtx);
+    fopAcM_SetMtx(horse, horse->m_model->getBaseTRMtx());
+    horse->m_model->calcWeightEnvelopeMtx();
+#ifdef TARGET_PC
+    for (u16 i = 0; i < horse->m_model->getModelData()->getWEvlpMtxNum(); ++i) {
+        dusk::frame_interp::record_final_mtx(horse->m_model->getWeightAnmMtx(i));
+    }
+#endif
+    DisableHorseColliders(horse);
+    horse->attention_info.flags = 0;
+    ReassertRealHorseMtxCalc();
 }
 
 // ---------------------------------------------------------------------------
@@ -701,33 +1280,22 @@ void PumpSpawns() {
                 e.pid = fpcM_ERROR_PROCESS_ID_e;
                 e.actor = nullptr;
                 e.createStartFrame = 0;
-                g_createInFlight = false;
+                ClearCreatingIf(static_cast<PlayerId>(i));
                 e.retryFrame = g_frameCount + 30;
             } else if (g_frameCount - e.createStartFrame >= kCreateDeadlineFrames) {
-                // MAJOR M3: the create is alive but stuck in phase 2 on
-                // cPhs_INIT_e — onLinkCreated will never fire and the
-                // in-flight lock would block every later spawn (for any
-                // player). Delete the stuck process; its destructor
-                // (onLinkDestroyed) clears this entry and releases the lock.
-                // Count the strike and drop the spawn after too many.
+                // MAJOR M3 + review H1: the create is alive but stuck in phase 2
+                // on cPhs_INIT_e. Abort ONCE — move to Despawning so this
+                // predicate cannot re-fire every subsequent frame (that used
+                // to spam fopAcM_delete, explode deadlineHits past 3 in
+                // ~50 ms, and permanently drop the spawn).
                 CoopLog.warn(
                     "coop: puppet {} create stuck {} frames at cPhs_INIT (pid {}); aborting create",
                     i, g_frameCount - e.createStartFrame, e.pid);
                 fopAcM_delete(e.pid);
+                e.state = SpawnState::Despawning;
+                e.actor = nullptr;
                 CreateLimiter& lim = g_createLimiter[i];
-                // Capstone MINOR G (review-full-deepseek MINOR G): remember
-                // the anchor where this create stuck (real Link pos + room) so
-                // the strike budget can be reset when the host moves away
-                // materially — the abort cause is position-specific.
-                lim.anchorRoom = LocalRoomNo();
-                if (g_realLink != nullptr) {
-                    lim.anchor[0] = g_realLink->current.pos.x;
-                    lim.anchor[1] = g_realLink->current.pos.y;
-                    lim.anchor[2] = g_realLink->current.pos.z;
-                    lim.hasAnchor = true;
-                } else {
-                    lim.hasAnchor = false;
-                }
+                RememberLimiterAnchor(lim);
                 if (++lim.deadlineHits >= kCreateDeadlineStrikes) {
                     lim.dropped = true;
                     CoopLog.warn(
@@ -736,13 +1304,18 @@ void PumpSpawns() {
                 }
             }
             // else: still multi-phase; onLinkCreated flips it to Active.
+        } else if (e.state == SpawnState::Despawning) {
+            if (e.pid != fpcM_ERROR_PROCESS_ID_e && fopAcM_SearchByID(e.pid) == nullptr) {
+                ClearCreatingIf(static_cast<PlayerId>(i));
+                e = PuppetEntry{};
+            }
         } else if (e.state == SpawnState::Active) {
             if (fopAcM_SearchByID(e.pid) == nullptr) {
                 // Stage changed / actor died. If the player is still in the
-                // session, re-spawn on the new stage; otherwise drop.
+                // session, re-spawn; otherwise drop. Do not touch the create
+                // lock — another pid may still be Creating.
                 const bool stillPresent = g_session.roster()[i].present && i != SelfIdChecked();
                 e = PuppetEntry{};
-                g_createInFlight = false;
                 if (stillPresent) {
                     e.state = SpawnState::Requested;
                     CoopLog.info("coop: player {} puppet died; re-requesting", i);
@@ -751,10 +1324,57 @@ void PumpSpawns() {
         }
     }
 
+    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
+        HorseEntry& h = g_horses[i];
+        if (h.state == SpawnState::Creating) {
+            if (fopAcM_SearchByID(h.pid) == nullptr) {
+                h.state = SpawnState::Requested;
+                h.pid = fpcM_ERROR_PROCESS_ID_e;
+                h.actor = nullptr;
+                h.createStartFrame = 0;
+                if (g_creatingHorse) {
+                    ClearCreatingIf(static_cast<PlayerId>(i));
+                }
+                h.retryFrame = g_frameCount + 30;
+            } else if (g_frameCount - h.createStartFrame >= kCreateDeadlineFrames) {
+                CoopLog.warn(
+                    "coop: horse puppet {} create stuck {} frames (pid {}); aborting",
+                    i, g_frameCount - h.createStartFrame, h.pid);
+                fopAcM_delete(h.pid);
+                h.state = SpawnState::Despawning;
+                h.actor = nullptr;
+                CreateLimiter& lim = g_horseLimiter[i];
+                RememberLimiterAnchor(lim);
+                if (++lim.deadlineHits >= kCreateDeadlineStrikes) {
+                    lim.dropped = true;
+                    CoopLog.warn(
+                        "coop: horse puppet {} create hit its deadline {} times; dropping spawn",
+                        i, lim.deadlineHits);
+                }
+            }
+        } else if (h.state == SpawnState::Despawning) {
+            if (h.pid != fpcM_ERROR_PROCESS_ID_e && fopAcM_SearchByID(h.pid) == nullptr) {
+                if (g_creatingHorse) {
+                    ClearCreatingIf(static_cast<PlayerId>(i));
+                }
+                h = HorseEntry{};
+            }
+        } else if (h.state == SpawnState::Active) {
+            if (fopAcM_SearchByID(h.pid) == nullptr) {
+                const bool stillWant = WantHorsePuppet(static_cast<PlayerId>(i));
+                h = HorseEntry{};
+                if (stillWant) {
+                    h.state = SpawnState::Requested;
+                    CoopLog.info("coop: player {} horse puppet died; re-requesting", i);
+                }
+            }
+        }
+    }
+
     // Issue at most one create per frame (serialized — the vanilla create
     // path shares a static bgWaitFlg, and multi-phase creates must not
     // interleave; plan Rev 3 R4).
-    if (g_createInFlight) {
+    if (CreateInFlight()) {
         return;
     }
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
@@ -765,31 +1385,8 @@ void PumpSpawns() {
         if (e.retryFrame > g_frameCount) {
             continue;
         }
-        if (g_createLimiter[i].dropped) {
-            // Capstone MINOR G (review-full-deepseek-v4-flash-0731.md MINOR G):
-            // the M3 strike budget is position-specific, not permanent — after
-            // 3 create-deadline aborts the spawn was dropped forever until
-            // leave/rejoin, so a host standing at a cliff edge for 30+ s
-            // permanently hid the remote's puppet. Reset the budget when the
-            // host's position/room changed materially since the stuck anchor:
-            // the next spawn attempt from a clear spot can then succeed.
-            CreateLimiter& lim = g_createLimiter[i];
-            if (lim.hasAnchor) {
-                const bool moved = lim.anchorRoom != LocalRoomNo() || g_realLink == nullptr ||
-                                   std::fabs(g_realLink->current.pos.x - lim.anchor[0]) > 300.0f ||
-                                   std::fabs(g_realLink->current.pos.y - lim.anchor[1]) > 300.0f ||
-                                   std::fabs(g_realLink->current.pos.z - lim.anchor[2]) > 300.0f;
-                if (moved) {
-                    lim = CreateLimiter{};
-                    CoopLog.info(
-                        "coop: puppet {} spawn limiter reset (host moved away from the stuck anchor)",
-                        i);
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            }
+        if (LimiterStillDropped(g_createLimiter[i])) {
+            continue;
         }
         // Wait for the real Link's create to complete (its create and a
         // puppet create must never overlap on the shared bgWaitFlg).
@@ -827,9 +1424,59 @@ void PumpSpawns() {
         e.pid = pid;
         e.state = SpawnState::Creating;
         e.createStartFrame = g_frameCount;
-        g_createInFlight = true;
+        g_creatingPid = static_cast<PlayerId>(i);
+        g_creatingHorse = false;
         CoopLog.info("coop: puppet spawn requested for player {} (pid {})", i, pid);
         break;  // serialized: one create in flight
+    }
+
+    if (CreateInFlight()) {
+        return;
+    }
+    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
+        HorseEntry& h = g_horses[i];
+        if (h.state != SpawnState::Requested) {
+            continue;
+        }
+        if (h.retryFrame > g_frameCount) {
+            continue;
+        }
+        if (LimiterStillDropped(g_horseLimiter[i])) {
+            continue;
+        }
+        if (!g_realLinkReady || g_realLink == nullptr) {
+            continue;
+        }
+        if (!g_receive[i].hasHorseState) {
+            continue;
+        }
+        const net::HorseStateMsg& hs = g_receive[i].horse;
+        cXyz pos(hs.pos.x, hs.pos.y, hs.pos.z);
+        csXyz angle(0, hs.yaw, 0);
+        const int roomNo = hs.roomNo;
+
+        base_process_class* realProc = reinterpret_cast<base_process_class*>(g_realLink);
+        layer_class* savedLayer = fpcLy_CurrentLayer();
+        if (realProc->layer_tag.layer == nullptr) {
+            continue;
+        }
+        fpcLy_SetCurrentLayer(realProc->layer_tag.layer);
+        const fpc_ProcID pid =
+            fopAcM_create(fpcNm_HORSE_e, 0xFFFF, 0, &pos, roomNo, &angle, nullptr, -1, nullptr);
+        fpcLy_SetCurrentLayer(savedLayer);
+
+        if (pid == fpcM_ERROR_PROCESS_ID_e) {
+            CoopLog.warn("coop: fopAcM_create(HORSE) failed for player {}", i);
+            h.retryFrame = g_frameCount + 60;
+            continue;
+        }
+        h.pid = pid;
+        h.state = SpawnState::Creating;
+        h.createStartFrame = g_frameCount;
+        g_creatingPid = static_cast<PlayerId>(i);
+        g_creatingHorse = true;
+        CoopLog.info("coop: horse puppet spawn requested for player {} (pid {})", i, pid);
+        break;
     }
 }
 
@@ -839,6 +1486,9 @@ void PumpSessionAndSpawns() {
         if (g_wasLive) {
             ClearAllPuppets();
             g_receive = {};
+            g_appearance = {};
+            g_createLimiter = {};
+            g_horseLimiter = {};
             ResetSenderTrackers();
             CoopLog.info("coop: session ended; puppets cleared");
         }
@@ -847,27 +1497,43 @@ void PumpSessionAndSpawns() {
     }
     g_wasLive = true;
 
-    // Roster diff -> spawn requests / despawns.
+    // Roster diff -> spawn requests / despawns. Stay-put: only materialize a
+    // daAlink_c when the remote is on OUR stage and room. Off-scene remotes
+    // keep their receive slot so we notice when they travel in.
     const auto& roster = g_session.roster();
     for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
         const bool present = roster[i].present && i != SelfIdChecked();
+        const bool wantPuppet = present && RemoteInLocalScene(i);
         PuppetEntry& e = g_puppets[i];
-        if (present) {
+        if (wantPuppet) {
             if (e.state == SpawnState::None) {
                 e.state = SpawnState::Requested;
             }
-        } else if (e.state == SpawnState::Creating || e.state == SpawnState::Active) {
-            CoopLog.info("coop: player {} left; despawning puppet", i);
-            g_createLimiter[i] = CreateLimiter{};  // a rejoin restarts the M3 deadline budget
-            if (e.actor != nullptr) {
-                fopAcM_delete(e.actor);
-            } else if (e.pid != fpcM_ERROR_PROCESS_ID_e) {
-                fopAcM_delete(e.pid);
+        } else {
+            if (!present) {
+                ClearRemoteSlot(i);
             }
-            // Keep the entry flagged (Despawning) until ~daAlink_c clears it,
-            // so the destructor's slot-0 guards keep engaging.
-            e.state = SpawnState::Despawning;
-            e.actor = nullptr;
+            if (e.state == SpawnState::Creating || e.state == SpawnState::Active) {
+                CoopLog.info("coop: player {} {}; despawning puppet", i,
+                    present ? "left our room" : "left");
+                if (e.actor != nullptr) {
+                    fopAcM_delete(e.actor);
+                } else if (e.pid != fpcM_ERROR_PROCESS_ID_e) {
+                    fopAcM_delete(e.pid);
+                }
+                e.state = SpawnState::Despawning;
+                e.actor = nullptr;
+            } else if (e.state == SpawnState::Requested) {
+                e = PuppetEntry{};
+            }
+        }
+        HorseEntry& h = g_horses[i];
+        if (WantHorsePuppet(static_cast<PlayerId>(i))) {
+            if (h.state == SpawnState::None) {
+                h.state = SpawnState::Requested;
+            }
+        } else {
+            RequestHorseDespawn(h);
         }
     }
     PumpSpawns();
@@ -877,7 +1543,8 @@ void PumpSessionAndSpawns() {
 /// a terminal client-side end) whenever a relevant net.* var changes. The
 /// user edits these from the Settings -> Network tab / cvars to fix a
 /// port-busy or join failure; without this the failed start retried the SAME
-/// broken values forever.
+/// broken values forever. autoConnect is omitted: toggling "remember this
+/// host" must not start or stop a session.
 void RegisterNetVarCallbacks() {
     static bool registered = false;
     if (registered) {
@@ -886,6 +1553,7 @@ void RegisterNetVarCallbacks() {
     registered = true;
     const auto onNetVarChange = [](dusk::config::ConfigVarBase&, const void*) {
         g_startFailed = false;
+        g_startFailNotified = false;
         // A terminal client-side end (Rejected / Ended) must be re-armable
         // with the new values — tear the old session down so the next
         // EnsureSession starts fresh. An ACTIVE session is left untouched
@@ -900,22 +1568,74 @@ void RegisterNetVarCallbacks() {
             CoopLog.info("coop: net.* vars changed; re-arming session start");
         }
     };
-    dusk::config::subscribe(net::config::enabled.getName(), onNetVarChange);
     dusk::config::subscribe(net::config::hostPort.getName(), onNetVarChange);
     dusk::config::subscribe(net::config::joinHost.getName(), onNetVarChange);
     dusk::config::subscribe(net::config::sessionName.getName(), onNetVarChange);
     dusk::config::subscribe(net::config::role.getName(), onNetVarChange);
 }
 
+void MigrateLegacyEnabled() {
+    // config.json net.enabled was the old master switch. Client + on becomes
+    // autoConnect; host + on does not auto-host. Launch `--cvar net.enabled`
+    // (Override) is handled in ApplyLaunchAutostart, not here.
+    if (net::config::enabled.getLayer() == dusk::config::ConfigVarLayer::Override) {
+        return;
+    }
+    if (!net::config::enabled.getValue()) {
+        return;
+    }
+    if (net::config::role.getValue() == "client") {
+        net::config::autoConnect.setValue(true);
+    }
+    net::config::enabled.setValue(false);
+    dusk::config::save();
+    CoopLog.info("coop: migrated net.enabled to net.autoConnect / disconnected");
+}
+
+void ApplyLaunchAutostart() {
+    // Host/Connect at prelaunch already set g_connected — keep that intent.
+    if (g_connected) {
+        return;
+    }
+    if (net::config::autoConnect.getValue()) {
+        g_connected = true;
+        g_forceClient = true;
+        CoopLog.info("coop: autoConnect — will start a client session");
+        return;
+    }
+    const bool legacyEnabled =
+        net::config::enabled.getLayer() == dusk::config::ConfigVarLayer::Override &&
+        net::config::enabled.getValue();
+    if (legacyEnabled || net::config::connected.getValue()) {
+        g_connected = true;
+        CoopLog.info("coop: launch connected override — will start from net.role");
+    }
+}
+
 void EnsureSession() {
     RegisterNetVarCallbacks();
-    const bool wantEnabled = net::config::enabled.getValue();
-    if (!wantEnabled) {
+    if (g_restartRequested) {
+        g_restartRequested = false;
         if (g_sessionStarted) {
             g_session.Stop();
             g_sessionStarted = false;
             g_startFailed = false;
-            CoopLog.info("coop: networking disabled; session stopped");
+            g_rejectedNotified = false;
+            CoopLog.info("coop: session restart requested; stopping this frame");
+            return;  // start on the next frame after puppets see !live
+        }
+    }
+    if (!g_sawFirstEnsure) {
+        g_sawFirstEnsure = true;
+        MigrateLegacyEnabled();
+        ApplyLaunchAutostart();
+    }
+    if (!g_connected) {
+        if (g_sessionStarted) {
+            g_session.Stop();
+            g_sessionStarted = false;
+            g_startFailed = false;
+            CoopLog.info("coop: disconnected; session stopped");
         }
         return;
     }
@@ -927,12 +1647,8 @@ void EnsureSession() {
     cfg.name = net::config::sessionName.getValue();
     cfg.joinHost = net::config::joinHost.getValue();
     cfg.version = net::kProtocolVersion;
-    // M4 (D6): the host fills worldStage_ from the real Link every frame
-    // (onGameFrame), so a joiner receives the real stage in JoinAccept /
-    // WorldInit — the M1 TODO is now live. The inert seed below is only the
-    // pre-Link fallback (stage[0] = '\0' => "host stage unknown").
     cfg.stage.stage[0] = '\0';
-    const bool isClient = net::config::role.getValue() == "client";
+    const bool isClient = g_forceClient || net::config::role.getValue() == "client";
     bool ok;
     if (isClient) {
         ok = g_session.StartClient(cfg);
@@ -940,19 +1656,16 @@ void EnsureSession() {
         ok = g_session.StartHost(cfg);
     }
     if (!ok) {
-        const bool first = !g_startFailed;
         g_startFailed = true;
         g_startFailFrame = g_frameCount;
-        // Capstone MINOR F: log the failure cause distinctly (port-busy vs
-        // already-running vs resolve-failed) and toast ONCE per failure — the
-        // old code logged a generic line every 3 s forever.
         const char* reason = g_session.startFailureReason();
         if (reason == nullptr || reason[0] == '\0') {
             reason = "unknown cause";
         }
-        CoopLog.error("coop: failed to start {} session ({}); retrying in 3s{}",
-            isClient ? "client" : "host", reason, first ? "" : " (retry)");
-        if (first) {
+        if (!g_startFailNotified) {
+            g_startFailNotified = true;
+            CoopLog.error("coop: failed to start {} session ({}); retrying in 3s",
+                isClient ? "client" : "host", reason);
             char buf[160];
             std::snprintf(buf, sizeof(buf), "%s: %s",
                 isClient ? "Could not start the client session" : "Could not host the session",
@@ -962,13 +1675,14 @@ void EnsureSession() {
         return;
     }
     g_sessionStarted = true;
+    g_startFailNotified = false;
     g_session.SetGameMessageHandler(OnGameMessage);
     CoopLog.info("coop: {} session started (port {})", isClient ? "client" : "host",
         g_session.boundPort());
 }
 
 // ---------------------------------------------------------------------------
-// M4 helpers — toasts, host-leave UX, discovery
+// M4 helpers — toasts, host-leave UX
 // ---------------------------------------------------------------------------
 
 /// Pushes a HUD toast via the project's toast mechanism (dusk::ui, the
@@ -995,11 +1709,13 @@ void NoticeSessionEnd(bool justEnded) {
     }
     switch (g_session.endReason()) {
     case net::SessionEndReason::HostLeft:
+        g_connected = false;
         CoopLog.warn("coop: host ended the session — returning to single-player");
         NotifyCoop("Host left", "The host ended the session. Remote players have gone home; "
                                  "your game continues as single-player.");
         break;
     case net::SessionEndReason::ConnectionLost:
+        g_connected = false;
         CoopLog.warn("coop: connection to the host lost — returning to single-player");
         NotifyCoop("Host disconnected", "Lost the connection to the host. Remote players have "
                                          "gone home; your game continues as single-player.");
@@ -1009,48 +1725,18 @@ void NoticeSessionEnd(bool justEnded) {
     }
 }
 
-/// LAN discovery lifecycle: the host announces its session (session name /
-/// players / port); clients listen and log what they find. Manual net.joinHost
-/// stays the fallback; the settings UI lists discovered sessions.
-void DriveDiscovery() {
-    const bool hostUp = g_sessionStarted && hostRole() &&
-                        g_session.state() == net::SessionState::Listening;
-    if (hostUp && !g_announcerActive) {
-        g_announcerActive = true;
-        // M4.5 (review MINOR 6): seed the player count BEFORE the thread
-        // starts — ThreadMain's very first datagram already reads players_, so
-        // SetPlayers-after-Start advertised 0 players for up to one announce
-        // interval. (Everything sequenced before the thread is created
-        // happens-before the thread's first read.)
-        g_discoveryAnnouncer.SetPlayers(static_cast<u8>(remoteCount() + 1));
-        g_discoveryAnnouncer.Start(net::config::sessionName.getValue(), g_session.boundPort(),
-            net::kMaxLocalPlayers);
-    }
-    if (g_announcerActive) {
-        if (!hostUp) {
-            g_announcerActive = false;
-            g_discoveryAnnouncer.Stop();
-        } else {
-            g_discoveryAnnouncer.SetPlayers(static_cast<u8>(remoteCount() + 1));
-        }
-    }
-
-    const bool clientUp = g_sessionStarted && !hostRole() &&
-                          g_session.state() == net::SessionState::Joined;
-    if (clientUp && !g_listenerActive) {
-        g_listenerActive = true;
-        dusk::net::discovery::SetActiveListener(&g_discoveryListener);
-        g_discoveryListener.Start();
-    }
-    if (g_listenerActive) {
-        if (!clientUp) {
-            g_listenerActive = false;
-            dusk::net::discovery::SetActiveListener(nullptr);
-            g_discoveryListener.Stop();
-        }
-        // New sessions are logged once each by the listener itself
-        // ("discovery: found session ...") and listed in Settings -> Network;
-        // nothing to do here beyond keeping the listener alive.
+void ArmSession() {
+    g_restartRequested = false;
+    g_startFailed = false;
+    g_startFailNotified = false;
+    g_rejectedNotified = false;
+    g_forceClient = false;
+    g_connected = true;
+    if (g_sessionStarted) {
+        g_restartRequested = true;
+        CoopLog.info("coop: Host/Connect — restart armed");
+    } else {
+        CoopLog.info("coop: Host/Connect — will start from current net.* CVars");
     }
 }
 
@@ -1060,14 +1746,225 @@ void DriveDiscovery() {
 // Public API
 // ---------------------------------------------------------------------------
 
-// sessionActive()/hostRole() are exported (coop.h) but currently have no
-// callers outside this TU (review m1 MINOR m5). They are retained for the M4
-// host-leave UX / LAN-discovery UI; keeping them behind the same
-// TARGET_PC-guarded vanilla attachment points costs nothing and avoids
-// churn. selfId()/remoteCount() ARE used (sender + modelCalc gate).
+// sessionActive() is used by enemies and the Network tab.
+// hostRole() is used by the same. selfId()/remoteCount() ARE used (sender +
+// modelCalc gate).
 
 bool sessionActive() {
     return SessionLive();
+}
+
+bool sessionStarted() {
+    return g_sessionStarted;
+}
+
+bool connected() {
+    return g_connected;
+}
+
+void requestHost() {
+    net::config::role.setValue("host");
+    dusk::config::save();
+    ArmSession();
+}
+
+void requestConnect() {
+    net::config::role.setValue("client");
+    dusk::config::save();
+    ArmSession();
+}
+
+void requestDisconnect() {
+    g_restartRequested = false;
+    g_startFailed = false;
+    g_startFailNotified = false;
+    g_forceClient = false;
+    g_connected = false;
+    CoopLog.info("coop: Disconnect");
+}
+
+bool sessionWouldRestart() {
+    if (!g_sessionStarted) {
+        return false;
+    }
+    switch (g_session.state()) {
+    case net::SessionState::Listening:
+    case net::SessionState::Connecting:
+    case net::SessionState::Connected:
+    case net::SessionState::Joined:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool hostingCurrentSettings() {
+    if (!hostRole()) {
+        return false;
+    }
+    const auto state = g_session.state();
+    if (state != net::SessionState::Listening && state != net::SessionState::Joined) {
+        return false;
+    }
+    if (g_session.boundPort() != net::config::hostPort.getValue()) {
+        return false;
+    }
+    return g_session.configName() == net::config::sessionName.getValue();
+}
+
+bool connectingCurrentSettings() {
+    if (!g_sessionStarted || g_session.role() != net::SessionRole::Client) {
+        return false;
+    }
+    switch (g_session.state()) {
+    case net::SessionState::Connecting:
+    case net::SessionState::Connected:
+    case net::SessionState::Joined:
+        break;
+    default:
+        return false;
+    }
+    if (g_session.configPort() != net::config::hostPort.getValue()) {
+        return false;
+    }
+    if (g_session.configName() != net::config::sessionName.getValue()) {
+        return false;
+    }
+    return g_session.configJoinHost() == TrimCopy(net::config::joinHost.getValue());
+}
+
+const char* joinTargetError() {
+    const std::string host = TrimCopy(net::config::joinHost.getValue());
+    if (host.empty()) {
+        return "Join Host IP is empty. Enter the host's LAN IPv4 or hostname.";
+    }
+    if (host.find(':') != std::string::npos) {
+        return "Join Host IP cannot contain a colon. Put the port in Port. IPv6 is not supported.";
+    }
+    return nullptr;
+}
+
+bool hostPortValid() {
+    return net::config::hostPort.getValue() != 0;
+}
+
+const char* sessionStatusLabel() {
+    static char buf[512];
+    auto remainSuffix = [](char* out, size_t cap, size_t n) {
+        if (n >= cap) {
+            return;
+        }
+        const u32 sec = DeadlineRemainSec();
+        if (sec > 0) {
+            std::snprintf(out + n, cap - n, " (%us)", sec);
+        }
+    };
+    if (!dusk::IsGameLaunched) {
+        const bool asClient =
+            g_forceClient || net::config::role.getValue() == "client";
+        if (g_connected) {
+            if (asClient) {
+                std::snprintf(buf, sizeof(buf), "Will connect to %s:%u when the game launches",
+                    net::config::joinHost.getValue().c_str(),
+                    static_cast<unsigned>(net::config::hostPort.getValue()));
+                return buf;
+            }
+            const char* ips = net::localIpv4Label();
+            if (ips != nullptr && ips[0] != '\0') {
+                std::snprintf(buf, sizeof(buf), "Will host on %s:%u when the game launches", ips,
+                    static_cast<unsigned>(net::config::hostPort.getValue()));
+            } else {
+                std::snprintf(buf, sizeof(buf), "Will host on port %u when the game launches",
+                    static_cast<unsigned>(net::config::hostPort.getValue()));
+            }
+            return buf;
+        }
+        if (net::config::autoConnect.getValue()) {
+            std::snprintf(buf, sizeof(buf), "Will connect to %s:%u when the game launches",
+                net::config::joinHost.getValue().c_str(),
+                static_cast<unsigned>(net::config::hostPort.getValue()));
+            return buf;
+        }
+        return "Disconnected";
+    }
+    if (g_restartRequested) {
+        return "Restarting...";
+    }
+    if (!g_connected && !g_sessionStarted) {
+        return "Disconnected";
+    }
+    if (g_startFailed) {
+        const char* reason = g_session.startFailureReason();
+        if (reason == nullptr || reason[0] == '\0') {
+            reason = "unknown cause";
+        }
+        const u32 elapsed = g_frameCount - g_startFailFrame;
+        const u32 remainFrames = elapsed >= 180 ? 0 : 180 - elapsed;
+        const u32 remainSec = (remainFrames + 59) / 60;
+        std::snprintf(buf, sizeof(buf), "Start failed (%s); retrying in %us", reason,
+            remainSec == 0 ? 1 : remainSec);
+        return buf;
+    }
+    if (!g_sessionStarted) {
+        if (!g_connected) {
+            return "Disconnected";
+        }
+        return "Starting...";
+    }
+    switch (g_session.state()) {
+    case net::SessionState::Listening: {
+        size_t n = 0;
+        const char* ips = net::localIpv4Label();
+        const unsigned port = static_cast<unsigned>(g_session.boundPort());
+        const int players = remoteCount() + 1;
+        if (ips != nullptr && ips[0] != '\0') {
+            n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "Hosting %s:%u (%d/%d: ", ips,
+                port, players, static_cast<int>(kMaxLocalPlayers)));
+        } else {
+            n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "Hosting on port %u (%d/%d: ",
+                port, players, static_cast<int>(kMaxLocalPlayers)));
+        }
+        if (n >= sizeof(buf)) {
+            n = sizeof(buf) - 1;
+        }
+        AppendRosterNames(buf, sizeof(buf), n);
+        if (n + 1 < sizeof(buf)) {
+            buf[n++] = ')';
+            buf[n] = '\0';
+        }
+        return buf;
+    }
+    case net::SessionState::Connecting: {
+        size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "Connecting to %s:%u",
+            net::config::joinHost.getValue().c_str(),
+            static_cast<unsigned>(net::config::hostPort.getValue())));
+        remainSuffix(buf, sizeof(buf), n);
+        return buf;
+    }
+    case net::SessionState::Connected: {
+        size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "Connected; joining..."));
+        remainSuffix(buf, sizeof(buf), n);
+        return buf;
+    }
+    case net::SessionState::Joined: {
+        size_t n = static_cast<size_t>(std::snprintf(buf, sizeof(buf), "Connected (%d/%d: ",
+            remoteCount() + 1, static_cast<int>(kMaxLocalPlayers)));
+        AppendRosterNames(buf, sizeof(buf), n);
+        if (n + 1 < sizeof(buf)) {
+            buf[n++] = ')';
+            buf[n] = '\0';
+        }
+        return buf;
+    }
+    case net::SessionState::Rejected:
+        std::snprintf(buf, sizeof(buf), "Join rejected (%s)", g_session.rejectReasonName());
+        return buf;
+    case net::SessionState::Ended:
+        return "Disconnected";
+    case net::SessionState::Idle:
+    default:
+        return "Idle";
+    }
 }
 
 bool hostRole() {
@@ -1119,7 +2016,11 @@ void onLinkCreated(daAlink_c* link) {
             e.actor = link;
             e.state = SpawnState::Active;
             e.hidden = true;  // until the first received state marks the room
-            g_createInFlight = false;
+            link->attention_info.flags = 0;
+            if (g_creatingPid == pid) {
+                g_creatingPid = kInvalidPlayerId;
+                g_creatingHorse = false;
+            }
             g_createLimiter[pid] = CreateLimiter{};  // success clears M3 strike count
             CoopLog.info("coop: puppet for player {} active (pid {})", pid, e.pid);
         }
@@ -1139,7 +2040,9 @@ void onLinkDestroyed(daAlink_c* link) {
         if (playerId != kInvalidPlayerId) {
             CoopLog.info("coop: puppet for player {} destroyed (pid {})", playerId, pid);
             g_puppets[playerId] = PuppetEntry{};
-            g_createInFlight = false;
+            if (!g_creatingHorse) {
+                ClearCreatingIf(playerId);
+            }
         }
         return;
     }
@@ -1167,6 +2070,7 @@ void sendPlayerState(daAlink_c* link) {
     if (isPuppet(link)) {
         return;
     }
+    ResendAppearanceIfRosterGrew();
     // MAJOR M2: the room-change event is sent regardless of the sender gate.
     // Two players entering the same new room together both hold the other's
     // stale room; the gate (which now also opens on "my room changed since
@@ -1186,9 +2090,8 @@ void sendPlayerState(daAlink_c* link) {
     // M4.5 (review MINOR 1): the event marks whether the move is WITHIN the
     // current stage (scene=1) or a stage change (scene=0). v7: the host no
     // longer sniffs rooms (ownership table gone); the receive-side puppet
-    // gate adopts the event's room for same-stage moves only, and a
-    // cross-stage SceneChange is left to the first new-stage PlayerState
-    // (channel 1, inside this send window).
+    // gate adopts the event's room for same-stage moves, and the destination
+    // stage name (v10) so a dropped unreliable burst cannot blank the remote.
     const bool stageChanged = std::strcmp(myStage, g_lastSentStage) != 0;
     if (roomNow != g_lastSentRoom || stageChanged) {
         g_lastSentRoom = roomNow;
@@ -1196,7 +2099,7 @@ void sendPlayerState(daAlink_c* link) {
         g_postChangeSendWindow = 30;
         SendPlayerEvent(net::PlayerEventId::SceneChange,
             static_cast<u32>(static_cast<s32>(roomNow)), 0,
-            /*sameStage=*/stageChanged ? 0u : 1u);
+            /*sameStage=*/stageChanged ? 0u : 1u, 0, myStage);
     }
     if (g_postChangeSendWindow > 0) {
         --g_postChangeSendWindow;  // keep sending through the post-move window
@@ -1212,6 +2115,9 @@ void sendPlayerState(daAlink_c* link) {
     st.stateFlags = 0;
     if (link->mRideStatus != 0) {
         st.stateFlags |= net::kPlayerStateFlagRiding;
+    }
+    if (link->checkHorseRide()) {
+        st.stateFlags |= net::kPlayerStateFlagHorseRide;
     }
     if (link->mDamageTimer > 0) {
         st.stateFlags |= net::kPlayerStateFlagInvuln;
@@ -1247,15 +2153,13 @@ void sendPlayerState(daAlink_c* link) {
 
     net::PayloadUnion payload = {};
     payload.playerState = st;
-    g_session.SendGameMessage(net::MsgType::PlayerState, payload);
-
-    // Pose-mirroring diagnostics (throttled to 1 Hz): the sender's frame-
-    // final position + root matrix + a sample joint, for the M1 accept test.
-    if (g_frameCount % 60 == 0) {
-        CoopLog.info("coop: send player {} pos=({:.1f},{:.1f},{:.1f}) yaw={} j0=({:.3f},{:.3f},{:.3f},{:.3f})",
-            st.playerId, st.pos.x, st.pos.y, st.pos.z, st.yaw, st.joints[0][0][3], st.joints[0][1][3],
-            st.joints[0][2][3], st.baseTR[2][3]);
+    if (!PoseIsFinite(st.pos, st.baseTR, st.joints, static_cast<u8>(st.jointCount))) {
+        CoopLog.warn("coop: skipping non-finite local pose send");
+    } else {
+        g_session.SendGameMessage(net::MsgType::PlayerState, payload);
     }
+
+    SendHorseState(link);
 
     SendEventsOnChange(link);
 }
@@ -1268,13 +2172,72 @@ bool puppetDrawHidden(const daAlink_c* link) {
     return g_puppets[pid].hidden;
 }
 
+bool isHorsePuppet(const daHorse_c* horse) {
+    if (horse == nullptr) {
+        return false;
+    }
+    return EntryForHorsePid(fopAcM_GetID(horse)) != nullptr;
+}
+
+int horsePuppetExecute(daHorse_c* horse) {
+    ApplyHorseState(horse);
+    return 1;
+}
+
+bool horsePuppetDrawHidden(const daHorse_c* horse) {
+    const PlayerId pid = HorsePlayerId(fopAcM_GetID(horse));
+    if (pid == kInvalidPlayerId) {
+        return false;
+    }
+    return g_horses[pid].hidden;
+}
+
+void onHorseCreated(daHorse_c* horse) {
+    const PlayerId pid = HorsePlayerId(fopAcM_GetID(horse));
+    if (pid == kInvalidPlayerId) {
+        return;
+    }
+    HorseEntry& e = g_horses[pid];
+    e.actor = horse;
+    e.state = SpawnState::Active;
+    e.hidden = true;
+    horse->attention_info.flags = 0;
+    DisableHorseColliders(horse);
+    if (g_creatingHorse && g_creatingPid == pid) {
+        g_creatingPid = kInvalidPlayerId;
+        g_creatingHorse = false;
+    }
+    ReassertRealHorseMtxCalc();
+    g_horseLimiter[pid] = CreateLimiter{};
+    CoopLog.info("coop: horse puppet for player {} active (pid {})", pid, e.pid);
+}
+
+void onHorseDestroyed(daHorse_c* horse) {
+    const fpc_ProcID pid = fopAcM_GetID(horse);
+    const PlayerId playerId = HorsePlayerId(pid);
+    if (playerId == kInvalidPlayerId) {
+        return;
+    }
+    CoopLog.info("coop: horse puppet for player {} destroyed (pid {})", playerId, pid);
+    g_horses[playerId] = HorseEntry{};
+    if (g_creatingHorse) {
+        ClearCreatingIf(playerId);
+    }
+}
+
 void onGameFrame() {
     ++g_frameCount;
+    // Retry a failed start after a 3 s backoff. This MUST run even when
+    // g_sessionStarted is false (a failed start never sets that flag).
+    if (g_startFailed && g_frameCount - g_startFailFrame >= 180) {
+        g_startFailed = false;
+    }
     EnsureSession();
     // Capstone MINOR F: the client's join rejection gets a ONE-SHOT toast
     // (version mismatch / session full / invalid slot / join timeout) —
-    // previously only a log line, leaving the client stuck until the user
-    // toggled net.enabled (which now also resets via any net.* var change).
+        // previously only a log line, leaving the client stuck until the user
+        // pressed Host/Connect again (which now also resets via a net.* var
+        // change).
     if (g_sessionStarted && g_session.state() == net::SessionState::Rejected) {
         if (!g_rejectedNotified) {
             g_rejectedNotified = true;
@@ -1290,10 +2253,6 @@ void onGameFrame() {
     // transition for the host-leave UX (M4 D8).
     const bool wasLive = SessionLive();
     if (g_sessionStarted) {
-        // Retry a failed start after a backoff.
-        if (g_startFailed && g_frameCount - g_startFailFrame >= 180) {
-            g_startFailed = false;
-        }
         g_session.Update();
         // Capstone MAJOR 1 (glue half — the review's "alternatively"): a
         // session that ended from the host's side (SessionEnd / connection
@@ -1301,11 +2260,11 @@ void onGameFrame() {
         // always tears the transport down; call it the frame we observe Ended
         // so the socket thread is released promptly. g_sessionStarted stays
         // set, so the session is NOT auto-restarted here — the user re-arms a
-        // new session via net.enabled / the Network tab (or a net.* var
-        // change, which resets the failed-start state, MINOR F).
+        // new session via Host/Connect (or a net.* var change, which resets
+        // the failed-start state, MINOR F).
         if (g_session.state() == net::SessionState::Ended && g_session.transportRunning()) {
             g_session.Stop();
-            CoopLog.info("coop: session ended remotely; transport torn down (a new session can start)");
+            CoopLog.info("coop: session ended remotely; transport torn down");
         }
     }
     PumpSessionAndSpawns();
@@ -1316,7 +2275,7 @@ void onGameFrame() {
     // own save stage and players meet by traveling; the carry behind the
     // cross-stage `stageOk` puppet-visibility gate (a puppet's visibility keys
     // on the remote's REAL stage from PlayerState, so it stays hidden until
-    // both players share a stage). v7 (M5.1): setLocalRoom is gone with the
+    // both players share a stage). setLocalRoom is gone with the
     // ownership table — the host's own room feeds nothing here anymore.
     if (g_sessionStarted && hostRole() && g_realLinkReady && g_realLink != nullptr) {
         net::StageInfo st = {};
@@ -1326,19 +2285,31 @@ void onGameFrame() {
         st.point = dComIfGp_getStartStagePoint();
         g_session.setWorldStage(st);
     }
-    // M4: host-leave UX + LAN discovery.
+    // M4: host-leave UX. Then drop the sticky Ended/Connecting-fail leftover so
+    // the Network tab does not sit on "Session ended" with Disconnect still
+    // enabled. A pre-join loss (Connecting/Connected) is a start failure and
+    // retries like DNS/port-busy; a live session end stays disconnected.
     NoticeSessionEnd(wasLive && !SessionLive());
-    DriveDiscovery();
-    // M5.1: enemy subsystem stub — per-stage id-table reset on room change,
-    // no senders, no freeze/apply, no combat (everything local now). No-op
-    // when the session is not live (net-off vanilla guarantee). The M5.2
-    // ghost sender lands on this seam.
-    dusk::coop::enemy::onGameFrame();
-    // M3: time of day & weather — host publisher (TimeSync 1 Hz / TimeEvent /
-    // WeatherChange + world info for joiners), client world-state re-seed.
-    // The actual client replica/force hooks live in d_kankyo.cpp /
-    // d_a_kytag06.cpp under TARGET_PC. No-op when the session is not live.
-    dusk::coop::timeweather::onGameFrame();
+    if (g_sessionStarted && g_session.state() == net::SessionState::Ended) {
+        if (wasLive) {
+            g_sessionStarted = false;
+        } else if (g_connected) {
+            g_sessionStarted = false;
+            g_startFailed = true;
+            g_startFailFrame = g_frameCount;
+            const char* reason = g_session.startFailureReason();
+            if (reason == nullptr || reason[0] == '\0') {
+                reason = "could not reach the host";
+            }
+            if (!g_startFailNotified) {
+                g_startFailNotified = true;
+                CoopLog.error("coop: connect failed ({}); retrying in 3s", reason);
+                NotifyCoop("Could not connect", reason);
+            }
+        } else {
+            g_sessionStarted = false;
+        }
+    }
 }
 
 void shutdown() {
@@ -1353,20 +2324,6 @@ void shutdown() {
         g_startFailed = false;
         CoopLog.info("coop: session stopped on shutdown");
     }
-    // M4: stop the discovery threads (they hold sockets; a leaked announcer
-    // would keep broadcasting after shutdown).
-    if (g_announcerActive) {
-        g_announcerActive = false;
-        g_discoveryAnnouncer.Stop();
-    }
-    if (g_listenerActive) {
-        g_listenerActive = false;
-        g_discoveryListener.Stop();
-    }
-    // M5.1: clear the per-stage entity-id tables.
-    dusk::coop::enemy::shutdown();
-    // M3: clear host/clients time-weather module state.
-    dusk::coop::timeweather::shutdown();
 }
 
 bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload) {
@@ -1381,56 +2338,6 @@ bool rosterPresent(net::PlayerId pid) {
         return false;
     }
     return g_session.roster()[pid].present;
-}
-
-s8 localRoomNo() {
-    return LocalRoomNo();
-}
-
-const char* localStageName() {
-    return LocalStageName();
-}
-
-bool sharingHostStage() {
-    if (!SessionLive()) {
-        return false;
-    }
-    if (hostRole()) {
-        return true;  // the host is the sky
-    }
-    const char* local = LocalStageName();
-    if (local == nullptr || local[0] == '\0') {
-        return false;
-    }
-    // Live host pose is authoritative (player 0). Stay-put clients sit on a
-    // different stage until they travel; the first PlayerState + the
-    // post-move send window keep this current.
-    const ReceiveSlot& hostSlot = g_receive[0];
-    if (hostSlot.hasState && hostSlot.state.stage[0] != '\0') {
-        return std::strcmp(hostSlot.state.stage, local) == 0;
-    }
-    // Join-time WorldInit/JoinAccept reference until the first host pose.
-    const char* world = g_session.worldStage().stage;
-    if (world != nullptr && world[0] != '\0') {
-        return std::strcmp(world, local) == 0;
-    }
-    return false;
-}
-
-void setWorldTime(const net::TimeStateInfo& time) {
-    g_session.setWorldTime(time);
-}
-
-void setWorldWeather(const net::WeatherStateInfo& weather) {
-    g_session.setWorldWeather(weather);
-}
-
-const net::TimeStateInfo& worldTime() {
-    return g_session.worldTime();
-}
-
-const net::WeatherStateInfo& worldWeather() {
-    return g_session.worldWeather();
 }
 
 }  // namespace dusk::coop

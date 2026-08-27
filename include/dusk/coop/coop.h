@@ -12,8 +12,9 @@
  * frozen `daAlink_c` from received `PlayerState`).
  *
  * Vanilla files call into this module exclusively under `#if TARGET_PC`
- * (docs/code-conventions.md); with networking off (`net.enabled = false`)
- * nothing here runs and single-player is byte-for-byte vanilla.
+ * (docs/code-conventions.md); with no session (`connected` false, no
+ * autoConnect launch) nothing here runs and single-player is byte-for-byte
+ * vanilla.
  *
  * Wire surface: docs/design/mod-coop/00-network.md §5 (PlayerState raw-matrix
  * pose, Rev 3 D4; PlayerEvent on change) — see dusk/net/protocol.h.
@@ -23,17 +24,50 @@
 #include "dusk/net/protocol.h"
 
 class daAlink_c;
+class daHorse_c;
 
 namespace dusk::coop {
 
 // ---------------------------------------------------------------------------
-// Session glue (gated by net.enabled; driven from duskExecute)
+// Session glue (driven from duskExecute)
 // ---------------------------------------------------------------------------
 
 /// True when a network session is active (host listening or client joined).
 bool sessionActive();
+/// True when EnsureSession has started a session (including Connecting or
+/// Rejected). Disconnect uses this; sessionActive() is the narrower
+/// "currently playing" check. A remote end clears this so the Network tab
+/// does not sit on a sticky Ended state.
+bool sessionStarted();
+/// This-process session intent (Host/Connect vs Disconnect). Not persisted.
+bool connected();
 /// True when this machine is the world host.
 bool hostRole();
+/// Start or restart a host session from the current net.* CVars. A live
+/// session is stopped this frame and started on the next so puppets can
+/// despawn (do not Stop+Start same frame). Does not set autoConnect.
+void requestHost();
+/// Start or restart a client session to joinHost:hostPort. Does not set
+/// autoConnect.
+void requestConnect();
+/// Stop the session this process. Leaves net.autoConnect unchanged.
+void requestDisconnect();
+/// True when Host/Connect would tear down a live session (Listening /
+/// Connecting / Connected / Joined). The Network tab confirms before that.
+bool sessionWouldRestart();
+/// True when already hosting with the current Port / Session Name — Host is
+/// a no-op (do not restart / kick everyone).
+bool hostingCurrentSettings();
+/// True when already connecting or joined to the current Join Host IP / Port
+/// / Session Name — Connect is a no-op.
+bool connectingCurrentSettings();
+/// Why Connect cannot proceed (empty or colon in Join Host IP), or nullptr.
+const char* joinTargetError();
+/// False when net.hostPort is 0 (ephemeral bind — the Network tab forbids it).
+bool hostPortValid();
+/// Short status for the Settings Network tab (Disconnected / Hosting / ...).
+/// Valid until the next call.
+const char* sessionStatusLabel();
 /// Our session-wide PlayerId (0..kMaxLocalPlayers-1).
 net::PlayerId selfId();
 /// Number of remote players currently in the session roster.
@@ -74,6 +108,22 @@ void sendPlayerState(daAlink_c* link);
 bool puppetDrawHidden(const daAlink_c* link);
 
 // ---------------------------------------------------------------------------
+// Horse puppet (v11) — ridden visual only. Never occupies mPlayerPtr[1].
+// ---------------------------------------------------------------------------
+
+/// True when `horse` is a remote ridden-Epona puppet, including during create.
+bool isHorsePuppet(const daHorse_c* horse);
+/// Frozen horse update: paste the latest HorseState pose. No AI, no save
+/// writes, no HUD, no colliders.
+int horsePuppetExecute(daHorse_c* horse);
+/// True when the horse puppet must not draw (rider hidden / other room).
+bool horsePuppetDrawHidden(const daHorse_c* horse);
+/// Called at the end of daHorse_c::create() (cPhs_COMPLEATE_e) for a puppet.
+void onHorseCreated(daHorse_c* horse);
+/// Called from ~daHorse_c() for a puppet.
+void onHorseDestroyed(daHorse_c* horse);
+
+// ---------------------------------------------------------------------------
 // Per-frame pump (duskExecute)
 // ---------------------------------------------------------------------------
 
@@ -90,40 +140,9 @@ void shutdown();
 // ---------------------------------------------------------------------------
 
 /// Sends a game message into the session (host: host->all simulcast; client:
-/// to the host, which star-relays). M3 time/weather traffic uses this today;
-/// the M5.2 ghost sender will too.
+/// to the host, which star-relays). Puppet pose/events use this.
 bool sendGameMessage(net::MsgType type, const net::PayloadUnion& payload);
 /// True when a remote roster slot is present in the session.
 bool rosterPresent(net::PlayerId pid);
-/// The real Link's current room (s8), or -1 when no real Link.
-s8 localRoomNo();
-/// The local player's CURRENT stage name (dComIfGp_getStartStageName — the
-/// play's start-stage object, re-pointed on every stage change). The M5.1
-/// enemy-stub per-stage reset keys on (stage, room) because room numbers are
-/// not unique across stages.
-const char* localStageName();
-/// True when this machine should replicate the host clock/sky: the host
-/// always does (it IS the sky); a client only does while it shares a stage
-/// with the host. Stay-put join means players occupy different stages — the
-/// host's dungeon freeze / twilight midnight / Snowpeak weather must not
-/// overwrite a client still in Hyrule Field.
-bool sharingHostStage();
-
-// --------------------------------------------------------------------------
-// M3/M4 world state (host publishes; client seeds/joins from it)
-// --------------------------------------------------------------------------
-
-/// Host publishes its clock/sky/stage into the session every frame so a
-/// mid-game joiner receives current values in JoinAccept/WorldInit (M3 task 6;
-/// M4: the stage fill carries the host's world to joiners — with join-warp
-/// REMOVED (M4.5 stay-put) the client stays in its own stage, but the carry
-/// feeds the cross-stage `stageOk` puppet gate which keys on the remote's
-/// REAL stage from PlayerState).
-void setWorldTime(const net::TimeStateInfo& time);
-void setWorldWeather(const net::WeatherStateInfo& weather);
-/// Latest world time/weather the session carries (host: last publish; client:
-/// JoinAccept/WorldInit receipt) — the M3 replica seeds from these.
-const net::TimeStateInfo& worldTime();
-const net::WeatherStateInfo& worldWeather();
 
 }  // namespace dusk::coop

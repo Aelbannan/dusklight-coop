@@ -1,5 +1,7 @@
 #include "dusk/net/protocol.h"
 
+#include <cmath>
+
 namespace dusk::net {
 
 namespace {
@@ -46,24 +48,6 @@ bool DeserializeStage(StageInfo& s, ByteReader& r) {
            r.ReadS8(s.layer) && r.ReadS16(s.point);
 }
 
-bool SerializeTimeState(const TimeStateInfo& t, ByteWriter& w) {
-    return w.WriteF32(t.time) && w.WriteU16(t.day) && w.WriteU8(t.rate) && w.WriteU8(t.flags);
-}
-
-bool DeserializeTimeState(TimeStateInfo& t, ByteReader& r) {
-    return r.ReadF32(t.time) && r.ReadU16(t.day) && r.ReadU8(t.rate) && r.ReadU8(t.flags);
-}
-
-bool SerializeWeatherState(const WeatherStateInfo& wth, ByteWriter& w) {
-    return w.WriteU8(wth.mode) && w.WriteU8(wth.thunder) && w.WriteU16(wth.intensity) &&
-           w.WriteU8(wth.colpat) && w.WriteU8(wth.pad);
-}
-
-bool DeserializeWeatherState(WeatherStateInfo& wth, ByteReader& r) {
-    return r.ReadU8(wth.mode) && r.ReadU8(wth.thunder) && r.ReadU16(wth.intensity) &&
-           r.ReadU8(wth.colpat) && r.ReadU8(wth.pad);
-}
-
 bool SerializeJoinRequest(const JoinRequestMsg& m, ByteWriter& w) {
     return w.WriteU32(m.version) && w.WriteU8(m.requestedSlot) && w.WriteBytes(m.reserved, 3) &&
            w.WriteFixedString(m.name, kMaxNameLength);
@@ -76,24 +60,20 @@ bool DeserializeJoinRequest(JoinRequestMsg& m, ByteReader& r) {
 
 bool SerializeJoinAccept(const JoinAcceptMsg& m, ByteWriter& w) {
     return w.WriteU8(m.assignedPlayerId) && w.WriteBytes(m.reserved, 3) &&
-           SerializeStage(m.stage, w) && SerializeTimeState(m.time, w) &&
-           SerializeWeatherState(m.weather, w) && SerializeRoster(m.roster, w);
+           SerializeStage(m.stage, w) && SerializeRoster(m.roster, w);
 }
 
 bool DeserializeJoinAccept(JoinAcceptMsg& m, ByteReader& r) {
     return r.ReadU8(m.assignedPlayerId) && r.ReadBytes(m.reserved, 3) &&
-           DeserializeStage(m.stage, r) && DeserializeTimeState(m.time, r) &&
-           DeserializeWeatherState(m.weather, r) && DeserializeRoster(m.roster, r);
+           DeserializeStage(m.stage, r) && DeserializeRoster(m.roster, r);
 }
 
 bool SerializeWorldInit(const WorldInitMsg& m, ByteWriter& w) {
-    return SerializeStage(m.stage, w) && SerializeTimeState(m.time, w) &&
-           SerializeWeatherState(m.weather, w) && SerializeRoster(m.roster, w);
+    return SerializeStage(m.stage, w) && SerializeRoster(m.roster, w);
 }
 
 bool DeserializeWorldInit(WorldInitMsg& m, ByteReader& r) {
-    return DeserializeStage(m.stage, r) && DeserializeTimeState(m.time, r) &&
-           DeserializeWeatherState(m.weather, r) && DeserializeRoster(m.roster, r);
+    return DeserializeStage(m.stage, r) && DeserializeRoster(m.roster, r);
 }
 
 bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
@@ -110,6 +90,25 @@ bool SerializePlayerState(const PlayerStateMsg& m, ByteWriter& w) {
     for (const auto& j : m.joints) {
         if (!w.WriteBytes(j, sizeof(Mtx))) {
             return false;
+        }
+    }
+    return true;
+}
+
+bool FiniteF32(f32 v) {
+    return std::isfinite(v);
+}
+
+bool FiniteVec3(const Vec3f& v) {
+    return FiniteF32(v.x) && FiniteF32(v.y) && FiniteF32(v.z);
+}
+
+bool FiniteMtx(const Mtx& m) {
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            if (!FiniteF32(m[r][c])) {
+                return false;
+            }
         }
     }
     return true;
@@ -137,6 +136,57 @@ bool DeserializePlayerState(PlayerStateMsg& m, ByteReader& r) {
     if (m.jointCount > kMaxJoints) {
         return false;
     }
+    if (!FiniteVec3(m.pos) || !FiniteMtx(m.baseTR)) {
+        return false;
+    }
+    for (u8 j = 0; j < m.jointCount; ++j) {
+        if (!FiniteMtx(m.joints[j])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SerializeHorseState(const HorseStateMsg& m, ByteWriter& w) {
+    if (!w.WriteU8(m.playerId) || !w.WriteS8(m.roomNo) ||
+        !w.WriteFixedString(m.stage, kMaxStageNameLength) || !w.WriteU8(m.jointCount) ||
+        !w.WriteBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !w.WriteS16(m.yaw) ||
+        !w.WriteU8(m.reserved) || !w.WriteVec3f(m.pos) || !w.WriteBytes(m.baseTR, sizeof(Mtx)))
+    {
+        return false;
+    }
+    for (const auto& j : m.joints) {
+        if (!w.WriteBytes(j, sizeof(Mtx))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool DeserializeHorseState(HorseStateMsg& m, ByteReader& r) {
+    if (!r.ReadU8(m.playerId) || !r.ReadS8(m.roomNo) ||
+        !r.ReadFixedString(m.stage, kMaxStageNameLength) || !r.ReadU8(m.jointCount) ||
+        !r.ReadBytes(m.scaleFlags, sizeof(m.scaleFlags)) || !r.ReadS16(m.yaw) ||
+        !r.ReadU8(m.reserved) || !r.ReadVec3f(m.pos) || !r.ReadBytes(m.baseTR, sizeof(Mtx)))
+    {
+        return false;
+    }
+    for (auto& j : m.joints) {
+        if (!r.ReadBytes(j, sizeof(Mtx))) {
+            return false;
+        }
+    }
+    if (m.jointCount > kMaxJoints) {
+        return false;
+    }
+    if (!FiniteVec3(m.pos) || !FiniteMtx(m.baseTR)) {
+        return false;
+    }
+    for (u8 j = 0; j < m.jointCount; ++j) {
+        if (!FiniteMtx(m.joints[j])) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -151,15 +201,15 @@ u16 WireSize(MsgType type) {
     case MsgType::JoinRequest:
         return 4 + 1 + 3 + kMaxNameLength;  // 40
     case MsgType::JoinAccept:
-        // assignedPlayerId + reserved + stage(20) + time(8) + weather(6) + roster
-        return 1 + 3 + 20 + 8 + 6 + kMaxLocalPlayers * 36;  // 326
+        // assignedPlayerId + reserved + stage(20) + roster (v9: no time/weather)
+        return 1 + 3 + 20 + kMaxLocalPlayers * 36;  // 312
     case MsgType::JoinReject:
     case MsgType::PlayerLeave:
     case MsgType::SessionEnd:
         return 4;
     case MsgType::WorldInit:
-        // stage(20) + time(8) + weather(6) + roster (M3 v5: time+weather added)
-        return 20 + 8 + 6 + kMaxLocalPlayers * 36;  // 322
+        // stage(20) + roster (v9: no time/weather)
+        return 20 + kMaxLocalPlayers * 36;  // 308
     case MsgType::PlayerState:
         // raw-matrix pose (Rev 3 D4): 5 (id/room/form/flags/jointCount)
         // + 16 stage + 5 scaleFlags + 10 (yaw/pitch face bck/btp/frame/
@@ -169,25 +219,10 @@ u16 WireSize(MsgType type) {
         // field was omitted from the old figure).
         return PlayerStateWireSize();
     case MsgType::PlayerEvent:
-        return 4 + 4 + 4;  // 12
-    case MsgType::GhostSnapshot:
-        // v7 (05-ghosts.md §4.2): senderId,flags,entityId,type,angle,animFrame,
-        // pos,speed = 1+1+2+2+2+2+12+12 = 34 (was the 44-B EnemySnapshot —
-        // hp/maxHp/aggro/semantics/reserved dropped)
-        return 1 + 1 + 2 + 2 + 2 + 2 + 12 + 12;  // 34
-    case MsgType::EnemyEvent:
-        // v7: senderId + eventId + entityId = 1+1+2 = 4 (data/flags/flagMask/
-        // reserved dropped — saves + drops are local)
-        return 1 + 1 + 2;  // 4
-    case MsgType::TimeSync:
-        // f32 time + u16 day + u8 rate + u8 flags
-        return 4 + 2 + 1 + 1;  // 8
-    case MsgType::TimeEvent:
-        // u8 eventId + u8 pad + f32 time + u16 day
-        return 1 + 1 + 4 + 2;  // 8
-    case MsgType::WeatherChange:
-        // u8 mode + u8 thunder + u16 intensity + u8 colpat + u8 pad
-        return 1 + 1 + 2 + 1 + 1;  // 6
+        // id/event/scene/reserved + data + data2 + stage (v10)
+        return 4 + 4 + 4 + kMaxStageNameLength;  // 28
+    case MsgType::HorseState:
+        return HorseStateWireSize();
     }
     return 0;
 }
@@ -221,31 +256,11 @@ bool SerializeMessage(const Message& msg, ByteWriter& w) {
                w.WriteU8(msg.payload.playerEvent.eventId) &&
                w.WriteU8(msg.payload.playerEvent.scene) &&
                w.WriteU8(msg.payload.playerEvent.reserved) &&
-               w.WriteU32(msg.payload.playerEvent.data) && w.WriteU32(msg.payload.playerEvent.data2);
-    case MsgType::GhostSnapshot:
-        return w.WriteU8(msg.payload.ghostSnapshot.senderId) &&
-               w.WriteU8(msg.payload.ghostSnapshot.flags) &&
-               w.WriteU16(msg.payload.ghostSnapshot.entityId) &&
-               w.WriteU16(msg.payload.ghostSnapshot.type) &&
-               w.WriteS16(msg.payload.ghostSnapshot.angle) &&
-               w.WriteU16(msg.payload.ghostSnapshot.animFrame) &&
-               w.WriteVec3f(msg.payload.ghostSnapshot.pos) &&
-               w.WriteVec3f(msg.payload.ghostSnapshot.speed);
-    case MsgType::EnemyEvent:
-        return w.WriteU8(msg.payload.enemyEvent.senderId) &&
-               w.WriteU8(msg.payload.enemyEvent.eventId) &&
-               w.WriteU16(msg.payload.enemyEvent.entityId);
-    case MsgType::TimeSync:
-        return w.WriteF32(msg.payload.timeSync.time) && w.WriteU16(msg.payload.timeSync.day) &&
-               w.WriteU8(msg.payload.timeSync.rate) && w.WriteU8(msg.payload.timeSync.flags);
-    case MsgType::TimeEvent:
-        return w.WriteU8(msg.payload.timeEvent.eventId) && w.WriteU8(msg.payload.timeEvent.pad) &&
-               w.WriteF32(msg.payload.timeEvent.time) && w.WriteU16(msg.payload.timeEvent.day);
-    case MsgType::WeatherChange:
-        return w.WriteU8(msg.payload.weatherChange.mode) &&
-               w.WriteU8(msg.payload.weatherChange.thunder) &&
-               w.WriteU16(msg.payload.weatherChange.intensity) &&
-               w.WriteU8(msg.payload.weatherChange.colpat) && w.WriteU8(msg.payload.weatherChange.pad);
+               w.WriteU32(msg.payload.playerEvent.data) &&
+               w.WriteU32(msg.payload.playerEvent.data2) &&
+               w.WriteFixedString(msg.payload.playerEvent.stage, kMaxStageNameLength);
+    case MsgType::HorseState:
+        return SerializeHorseState(msg.payload.horseState, w);
     }
     return false;
 }
@@ -257,14 +272,16 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
         return false;
     }
     if (typeRaw < static_cast<u16>(MsgType::JoinRequest) ||
-        typeRaw > static_cast<u16>(MsgType::WeatherChange))
+        typeRaw > static_cast<u16>(MsgType::HorseState))
     {
-        // v7: 13 types 1..13 — the removed CombatIntent(11)/CombatResult(12)/
-        // RoomOwnership(16) wire ids are now out of range and rejected here.
+        // v11: 9 types 1..9. EnemyEvent(10), TimeSync(11)/TimeEvent(12)/
+        // WeatherChange(13), and the older CombatIntent/CombatResult/
+        // RoomOwnership ids are out of range. Id 9 is HorseState (the old
+        // GhostSnapshot layout is rejected by exact-size).
         return false;
     }
     const auto type = static_cast<MsgType>(typeRaw);
-    if (payloadSize != WireSize(type) || r.remaining() < payloadSize) {
+    if (payloadSize != WireSize(type) || r.remaining() != payloadSize) {
         return false;
     }
     out.type = type;
@@ -291,31 +308,10 @@ bool DeserializeMessage(ByteReader& r, Message& out) {
                r.ReadU8(out.payload.playerEvent.scene) &&
                r.ReadU8(out.payload.playerEvent.reserved) &&
                r.ReadU32(out.payload.playerEvent.data) &&
-               r.ReadU32(out.payload.playerEvent.data2);
-    case MsgType::GhostSnapshot:
-        return r.ReadU8(out.payload.ghostSnapshot.senderId) &&
-               r.ReadU8(out.payload.ghostSnapshot.flags) &&
-               r.ReadU16(out.payload.ghostSnapshot.entityId) &&
-               r.ReadU16(out.payload.ghostSnapshot.type) &&
-               r.ReadS16(out.payload.ghostSnapshot.angle) &&
-               r.ReadU16(out.payload.ghostSnapshot.animFrame) &&
-               r.ReadVec3f(out.payload.ghostSnapshot.pos) &&
-               r.ReadVec3f(out.payload.ghostSnapshot.speed);
-    case MsgType::EnemyEvent:
-        return r.ReadU8(out.payload.enemyEvent.senderId) &&
-               r.ReadU8(out.payload.enemyEvent.eventId) &&
-               r.ReadU16(out.payload.enemyEvent.entityId);
-    case MsgType::TimeSync:
-        return r.ReadF32(out.payload.timeSync.time) && r.ReadU16(out.payload.timeSync.day) &&
-               r.ReadU8(out.payload.timeSync.rate) && r.ReadU8(out.payload.timeSync.flags);
-    case MsgType::TimeEvent:
-        return r.ReadU8(out.payload.timeEvent.eventId) && r.ReadU8(out.payload.timeEvent.pad) &&
-               r.ReadF32(out.payload.timeEvent.time) && r.ReadU16(out.payload.timeEvent.day);
-    case MsgType::WeatherChange:
-        return r.ReadU8(out.payload.weatherChange.mode) &&
-               r.ReadU8(out.payload.weatherChange.thunder) &&
-               r.ReadU16(out.payload.weatherChange.intensity) &&
-               r.ReadU8(out.payload.weatherChange.colpat) && r.ReadU8(out.payload.weatherChange.pad);
+               r.ReadU32(out.payload.playerEvent.data2) &&
+               r.ReadFixedString(out.payload.playerEvent.stage, kMaxStageNameLength);
+    case MsgType::HorseState:
+        return DeserializeHorseState(out.payload.horseState, r);
     }
     return false;
 }

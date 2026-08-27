@@ -1,6 +1,11 @@
 # Networking design (mod-coop)
 
-Status: **Design — authored by main session. Feeds the consolidated implementation plan.**
+Status: **Historical above the M5.1 cut; v10 wire is in `include/dusk/net/protocol.h`.**
+
+Live co-op is **parallel worlds + player puppets** (protocol v10). Enemies,
+clock, and sky stay local — they never cross the wire. The sections below that
+describe host-authoritative enemies, combat validation, TimeSync, and room
+ownership are the pre-pivot design record.
 
 This is the transport/session/protocol design for the network layer of the co-op
 mod. It is intentionally agnostic of the game-side integration details (those
@@ -109,8 +114,8 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 
 | Step | Message | Channel | Notes |
 |------|---------|---------|-------|
-| Host up | `HostAnnounce` (UDP broadcast, port 44771) | — | game id, session name, players n/max — **M4: implemented** (`discovery.cpp`): the host broadcasts a fixed-size announce every 2 s to the LAN broadcast + loopback; clients listen on 44771, log (`discovery: found session ...`, emitted by `discovery.cpp`) + list discovered sessions. Manual IP join (`joinHost` CVar) remains the fallback. **M4.5**: the player count is seeded BEFORE the announcer thread starts, so no datagram ever advertises 0 players |
-| Discover | (listen for announce) | — | also manual IP join via config var |
+| Host up | (listen on hostPort) | — | Host/Connect is explicit; `net.autoConnect` only auto-starts a **client**. Join is by IP (`net.joinHost` + `net.hostPort`). |
+| Discover | — | — | Removed. Manual IP join only. |
 | Connect | ENet handshake | — | ENet-level |
 | Join | `JoinRequest` | reliable | name, client version, requested slot |
 | Accept | `JoinAccept` | reliable | assigned `PlayerId` (session-wide 0–7), roster, stage, time, weather |
@@ -138,13 +143,13 @@ socket thread (mod-owned)          game thread (mod_update + hooks)
 
 ## 5. Message protocol
 
-> **SUPERSEDED (v7, M5.1 — see `05-ghosts.md §3/§4.2`):** the message set
-> below is the DEAD pre-pivot v6 model. M5.1 shredded it: `EnemySnapshot` →
-> `GhostSnapshot` (34 B, unreliable), `EnemyEvent` trimmed to `{senderId,
-> eventId=Died, entityId}` (4 B, reliable), and `CombatIntent`/`CombatResult`/
-> `RoomOwnership` DELETED. Type count is 13 (v7); `protocol.h` is the
-> normative set. §7's combat-routing diagram is DROPPED. The envelope/
-> serializer mechanism is unchanged, but the table below is history.
+> **SUPERSEDED (v9):** the message set below is the DEAD pre-pivot v6 model.
+> M5.1 shredded combat/ownership (`CombatIntent`/`CombatResult`/
+> `RoomOwnership` deleted, `EnemySnapshot` renamed then dropped). v9 also
+> dropped time/weather and ghost spectating. Type count is 8; `protocol.h`
+> is the normative set. §7's combat-routing diagram is DROPPED. The
+> envelope/serializer mechanism is unchanged, but the table below is
+> history.
 
 All messages: `u16 type` + `u16 size` + payload. Fixed-size little-endian
 structs, hand-written serializers (no reflection, no heap in the hot path).
@@ -225,15 +230,16 @@ scene     u8
 reserved  u8
 data      u32             // event-specific (see below)
 data2     u32             // extended payload (M1: item joints)
+stage     char[16]        // v10: SceneChange destination; empty otherwise
 ```
 
-| event | data | data2 |
-|-------|------|-------|
-| `FormChange` | form (0 human / 1 wolf) | — |
-| `SceneChange` | roomNo | — |
-| `Equip` | equipItem u16 \| selectItemId u8 \| clothes u8 | leftItemJnt u16 \| rightItemJnt u16 |
-| `AttentionChange` | session entity id of the lock target (0xFFFF = none/local-only) | — |
-| `Mount` / `Dismount` / `Respawn` | (reserved; horse entity channel is M6) | — |
+| event | data | data2 | stage |
+|-------|------|-------|-------|
+| `FormChange` | form (0 human / 1 wolf) | — | empty |
+| `SceneChange` | roomNo | — | destination stage name |
+| `Equip` | equipItem u16 \| selectItemId u8 \| clothes u8 | leftItemJnt u16 \| rightItemJnt u16 | empty |
+| `AttentionChange` | session entity id of the lock target (0xFFFF = none/local-only) | — | empty |
+| `Mount` / `Dismount` / `Respawn` | (reserved; horse entity channel is M6) | — | empty |
 
 
 ### EnemyState (per enemy, per frame)
@@ -278,20 +284,23 @@ capstone MINOR I corrected the stale ~28 B provisional)
 
 ### Bandwidth
 
-- 8 players × ~2.0 KB (raw matrix pose, 48-B 3x4 Mtx) + 40 enemies × 44 B,
-  all at 60 Hz ≈ **~1.0 MB/s worst case** (players ≈ 8 × 2017 B × 60 ≈ 0.97
-  MB/s; enemies ≈ 40 × 44 B × 60 ≈ 106 KB/s). Trivial on LAN; Anchor does more
-  (JSON) over the internet. ENet's `enet_host_bandwidth_limit` caps it if ever
-  needed. (Capstone MINOR I corrected the 2001-B/28-B figures; the ~2.7
-  KB/4x4-Mtx figure was corrected back in review m1 M3.)
+- Star topology fan-out, not a single 8-player stream: the host relays every
+  PlayerState to every other joined peer **and** sends its own pose to each.
+  Host outbound pose traffic is `(n-1)²` packets/frame. At 8 players that is
+  **49 × 2017 × 60 ≈ 5.9 MB/s** payload before events — about 6× the
+  naive `8 × 2017 × 60 ≈ 0.97 MB/s` figure. Two-player LAN is ~120 KB/s and
+  is fine. v1 play should stay at 2–4 players on Wi-Fi; the 8-player id space
+  is not a bandwidth budget. ENet's `enet_host_bandwidth_limit` caps it
+  if ever needed. (Capstone MINOR I corrected the 2001-B/28-B figures; the ~2.7
+  KB/4x4-Mtx figure was corrected back in review m1 M3. v7 dropped the 40×44 B
+  enemy snapshot stream. v10 PlayerEvent is 28 B with the stage name.)
 
 ## 7. Enemy authority & combat
 
-> **DROPPED (M5.1, `05-ghosts.md §1/§2`).** This section described the
-> owner-authoritative combat model the pivot deleted. Co-op now uses
-> parallel worlds: enemies are local + vanilla, no combat crosses the wire,
-> and the only enemy visibility is the M5.2+ ghost layer (transparent
-> mirrors). The diagram below is history.
+> **DROPPED (M5.1).** This section described the owner-authoritative combat
+> model the pivot deleted. Co-op uses parallel worlds: enemies are local +
+> vanilla, no combat crosses the wire, and ghost spectating was scrapped
+> (never built). The diagram below is history.
 
 ```
 client (attacker)                  host / sim owner                  all clients
@@ -338,17 +347,15 @@ client (attacker)                  host / sim owner                  all clients
 
 ## 10. Config, UI, and debug surface
 
-- Config vars (M4, `net.*` via the dusk config registry): `net.enabled`,
-  `net.role` ("host"/"client"), `net.hostPort` (session port; 44771 is
-  reserved for the announce), `net.joinHost` (manual IP fallback),
-  `net.sessionName` (host: advertised name; client: player name).
-- UI (M4): a Settings → **Network** tab edits all five vars and lists
-  LAN-discovered sessions (join by copying the IP into `net.joinHost`).
-- Discovery: broadcast announce + listener (M4, `discovery.cpp`); new
-  sessions are logged by the listener itself (`discovery: found session
-  ...`, `discovery.cpp`).
-- Debug: coop/net logs via the dusk logging system; `net.enabled` off =
-  byte-for-byte vanilla single-player.
+- Config vars: `net.autoConnect` (persisted client autostart on launch),
+  `net.connected` (launch override only; Host/Connect use in-memory intent),
+  `net.role` (`"host"` / `"client"`, set by Host / Connect), `net.hostPort`,
+  `net.joinHost` (IP or hostname; port is `net.hostPort`), `net.sessionName`.
+  Legacy `net.enabled` is loaded to migrate: client+on → `autoConnect`, host+on
+  does not auto-host; `--cvar net.enabled=true` still starts a session this run.
+- UI: Settings → **Network** tab. Host / Connect / Disconnect. No LAN list.
+- Debug: coop/net logs via the dusk logging system; no session = vanilla
+  single-player.
 
 ## 11. Open integration points (to resolve with investigations)
 

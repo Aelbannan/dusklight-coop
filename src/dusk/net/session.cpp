@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
 
 namespace dusk::net {
 
@@ -23,11 +24,19 @@ void CopyName(char (&dst)[kMaxNameLength], const char* src) {
     dst[kMaxNameLength - 1] = '\0';
 }
 
+std::string TrimCopy(const std::string& s) {
+    const auto begin = s.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(begin, end - begin + 1);
+}
+
 // Stamp the origin PlayerId onto a game message the host is about to
 // consume/relay. Clients only see peer 0 (star topology); the payload id
-// is whatever the sender wrote. GhostSnapshot already carries senderId for
-// this reason — PlayerState/PlayerEvent/PlayerLeave (and the ghost types)
-// must not trust the payload.
+// is whatever the sender wrote. PlayerState/PlayerEvent must not trust
+// the payload.
 void StampOrigin(Message& msg, PlayerId origin) {
     switch (msg.type) {
     case MsgType::PlayerState:
@@ -36,11 +45,8 @@ void StampOrigin(Message& msg, PlayerId origin) {
     case MsgType::PlayerEvent:
         msg.payload.playerEvent.playerId = origin;
         break;
-    case MsgType::GhostSnapshot:
-        msg.payload.ghostSnapshot.senderId = origin;
-        break;
-    case MsgType::EnemyEvent:
-        msg.payload.enemyEvent.senderId = origin;
+    case MsgType::HorseState:
+        msg.payload.horseState.playerId = origin;
         break;
     default:
         break;
@@ -48,17 +54,11 @@ void StampOrigin(Message& msg, PlayerId origin) {
 }
 
 // -------------------------------------------------------------------------
-// Star-relay policy (MINOR d): how the host should route a game message it
-// received from a peer. Every game message is star-relayed to every other
-// joined peer (PlayerState/PlayerEvent, and v7's GhostSnapshot/EnemyEvent)
-// or is host-generated host->all and NEVER relayed (time/weather). v7
-// (M5.1) removes the M4 room-scoped branches and the explicit combat
-// routing — parallel-worlds co-op has no shared enemy/combat state and no
-// room-authority map, so there is nothing to scope or route; ghost room
-// filtering is a receive-side gate in M5.3 (05-ghosts.md §2/§4.3).
+// Star-relay policy: PlayerState/PlayerEvent are star-relayed. v9 dropped
+// host->all time/weather (and the unused ghost wire).
 // -------------------------------------------------------------------------
 enum class RelayPolicy : u8 {
-    None, // not star-relayed (handshake, time/weather)
+    None, // not star-relayed (handshake)
     Star, // relay to every joined peer except the origin
 };
 
@@ -66,19 +66,9 @@ RelayPolicy PolicyFor(MsgType type) {
     switch (type) {
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
-    case MsgType::GhostSnapshot:
-    case MsgType::EnemyEvent:
+    case MsgType::HorseState:
         return RelayPolicy::Star;
-    case MsgType::TimeSync:
-    case MsgType::TimeEvent:
-    case MsgType::WeatherChange:
-        // M3: the host owns one clock and one sky (00-network.md §8); a peer
-        // that sends these is reported into the handler (for diagnostics) and
-        // not echoed to anyone else.
-        return RelayPolicy::None;
     default:
-        // Handshake (Join*/WorldInit/PlayerLeave/SessionEnd) is handled
-        // directly by the session, never via ForwardGameMessage.
         return RelayPolicy::None;
     }
 }
@@ -88,8 +78,6 @@ RelayPolicy PolicyFor(MsgType type) {
 Session::~Session() {
     Stop();
 }
-
-
 
 bool Session::StartHost(const SessionConfig& config) {
     Stop();
@@ -104,12 +92,13 @@ bool Session::StartHost(const SessionConfig& config) {
     startFailureReason_ = "";
     endReason_ = SessionEndReason::Shutdown;
     frame_ = 0;
+    startedAtMs_ = 0;
     connectedAtMs_ = 0;
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
+    peerGeneration_.fill(0);
+    peerConnectedAtMs_.fill(0);
     worldStage_ = StageInfo{};
-    worldTime_ = TimeStateInfo{};
-    worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartHost(config_.port)) {
         // Capstone MINOR F: surface the distinct cause (port-busy vs
@@ -139,8 +128,16 @@ bool Session::StartHost(const SessionConfig& config) {
 bool Session::StartClient(const SessionConfig& config) {
     Stop();
     config_ = config;
+    config_.joinHost = TrimCopy(config_.joinHost);
     if (config_.joinHost.empty()) {
-        config_.joinHost = "127.0.0.1";
+        startFailureReason_ = "join host is empty";
+        role_ = SessionRole::None;
+        return false;
+    }
+    if (config_.joinHost.find(':') != std::string::npos) {
+        startFailureReason_ = "join host is an IP or hostname (port is net.hostPort)";
+        role_ = SessionRole::None;
+        return false;
     }
     role_ = SessionRole::Client;
     state_ = SessionState::Idle;
@@ -149,12 +146,13 @@ bool Session::StartClient(const SessionConfig& config) {
     startFailureReason_ = "";
     endReason_ = SessionEndReason::Shutdown;
     frame_ = 0;
+    startedAtMs_ = 0;
     connectedAtMs_ = 0;
     roster_ = {};
     peerToPlayer_.fill(kInvalidPlayerId);
+    peerGeneration_.fill(0);
+    peerConnectedAtMs_.fill(0);
     worldStage_ = StageInfo{};
-    worldTime_ = TimeStateInfo{};
-    worldWeather_ = WeatherStateInfo{};
 
     if (!transport_.StartClient(config_.joinHost, config_.port)) {
         // Capstone MINOR F: surface the distinct cause (resolve-failed vs
@@ -167,8 +165,32 @@ bool Session::StartClient(const SessionConfig& config) {
     }
 
     state_ = SessionState::Connecting;
+    startedAtMs_ = NowMs();
     NetLog.info("net: connecting to {}:{} as '{}'", config_.joinHost, config_.port, config_.name);
     return true;
+}
+
+u64 Session::deadlineRemainMs() const {
+    u64 start = 0;
+    if (state_ == SessionState::Connecting) {
+        start = startedAtMs_;
+    } else if (state_ == SessionState::Connected) {
+        start = connectedAtMs_;
+    } else {
+        return 0;
+    }
+    if (start == 0 || config_.joinTimeoutMs == 0) {
+        return 0;
+    }
+    const u64 now = NowMs();
+    if (now < start) {
+        return 0;
+    }
+    const u64 elapsed = now - start;
+    if (elapsed >= config_.joinTimeoutMs) {
+        return 0;
+    }
+    return config_.joinTimeoutMs - elapsed;
 }
 
 void Session::Stop() {
@@ -218,7 +240,7 @@ void Session::Update() {
     while (transport_.Poll(pkt)) {
         switch (pkt.type) {
         case NetEventType::Connected:
-            HandleConnect(pkt.peerIndex);
+            HandleConnect(pkt.peerIndex, pkt.generation);
             break;
         case NetEventType::Disconnected:
             HandleDisconnect(pkt.peerIndex);
@@ -229,6 +251,21 @@ void Session::Update() {
         }
     }
 
+    // Client connect deadline: Connecting must become Connected in time.
+    // Without this, a dead Join Host IP sits in Connecting until ENet's
+    // 5–30 s peer timeout, and the Network tab had nothing to show.
+    if (role_ == SessionRole::Client && state_ == SessionState::Connecting && startedAtMs_ != 0 &&
+        NowMs() - startedAtMs_ >= config_.joinTimeoutMs)
+    {
+        startFailureReason_ = "connection timed out";
+        NetLog.warn("net: connect timed out after {} ms", config_.joinTimeoutMs);
+        endReason_ = SessionEndReason::ConnectionLost;
+        if (transport_.IsRunning()) {
+            transport_.Stop();
+        }
+        state_ = SessionState::Ended;
+    }
+
     // Client join deadline: Connected must turn into Joined in time.
     if (role_ == SessionRole::Client && state_ == SessionState::Connected && connectedAtMs_ != 0 &&
         NowMs() - connectedAtMs_ >= config_.joinTimeoutMs)
@@ -236,6 +273,22 @@ void Session::Update() {
         rejectReasonName_ = "join timed out";
         NetLog.warn("net: join timed out after {} ms", config_.joinTimeoutMs);
         DisconnectRejected();
+    }
+
+    // Host: a connected peer that never sends JoinRequest occupies an ENet
+    // slot forever. Bound that wait with the same deadline as client join.
+    if (role_ == SessionRole::Host && state_ == SessionState::Listening) {
+        for (u8 i = 0; i < Transport::kMaxPeers; ++i) {
+            if (peerConnectedAtMs_[i] == 0 || peerToPlayer_[i] != kInvalidPlayerId) {
+                continue;
+            }
+            if (NowMs() - peerConnectedAtMs_[i] >= config_.joinTimeoutMs) {
+                NetLog.warn("net: peer {} sent no JoinRequest in {} ms; disconnecting", i,
+                    config_.joinTimeoutMs);
+                transport_.DisconnectPeer(i);
+                peerConnectedAtMs_[i] = 0;
+            }
+        }
     }
 
     // Reliable overflow is an explicit failure, never a silent drop (deepseek
@@ -259,8 +312,21 @@ void Session::Update() {
 // Transport event handlers
 // ---------------------------------------------------------------------------
 
-void Session::HandleConnect(u8 peerIndex) {
+void Session::HandleConnect(u8 peerIndex, u16 generation) {
     if (role_ == SessionRole::Host) {
+        if (peerIndex < Transport::kMaxPeers) {
+            // Missed disconnect + slot reuse: drop the stale roster mapping
+            // before this connection can inherit the previous PlayerId.
+            const PlayerId stale = peerToPlayer_[peerIndex];
+            if (stale != kInvalidPlayerId) {
+                NetLog.warn("net: peer {} reused with player {} still mapped; removing", peerIndex,
+                    stale);
+                RemovePlayer(stale, /*broadcastLeave=*/true);
+            }
+            peerToPlayer_[peerIndex] = kInvalidPlayerId;
+            peerGeneration_[peerIndex] = generation;
+            peerConnectedAtMs_[peerIndex] = NowMs();
+        }
         NetLog.info("net: peer {} connected, awaiting JoinRequest", peerIndex);
         return;
     }
@@ -285,16 +351,38 @@ void Session::HandleDisconnect(u8 peerIndex) {
                 RemovePlayer(pid, /*broadcastLeave=*/true);
             }
             peerToPlayer_[peerIndex] = kInvalidPlayerId;
+            peerGeneration_[peerIndex] = 0;
+            peerConnectedAtMs_[peerIndex] = 0;
         }
         return;
     }
     // Client: the host went away (no SessionEnd arrived — ENet detected the
     // dead peer). Distinct end reason for the host-leave UX (M4 D8).
-    // Capstone MAJOR 1: no transport_.Stop() here on purpose — the coop glue
-    // calls Stop() the frame it observes Ended, and Stop() now ALWAYS stops
-    // the transport when running, so the client can start a new session in
-    // the same process after a host-side end.
+    // Capstone MAJOR 1: no transport_.Stop() here on purpose for a Joined
+    // session — the coop glue calls Stop() the frame it observes Ended.
+    // Connecting (ENet handshake never completed) has no JoinReject coming,
+    // so tear the transport down as a start-failure. Connected (JoinRequest
+    // in flight) must NOT Stop here: Stop() would drain the inbox and drop
+    // a JoinReject still queued behind this disconnect.
+    if (state_ == SessionState::Rejected || state_ == SessionState::Ended ||
+        state_ == SessionState::Idle)
+    {
+        return;
+    }
     NetLog.warn("net: connection to host lost");
+    const SessionState previous = state_;
+    if (previous == SessionState::Connecting) {
+        startFailureReason_ = "could not reach the host";
+        endReason_ = SessionEndReason::ConnectionLost;
+        state_ = SessionState::Ended;
+        if (transport_.IsRunning()) {
+            transport_.Stop();
+        }
+        return;
+    }
+    if (previous == SessionState::Connected) {
+        startFailureReason_ = "join interrupted";
+    }
     endReason_ = SessionEndReason::ConnectionLost;
     state_ = SessionState::Ended;
 }
@@ -310,10 +398,15 @@ void Session::HandleData(const InboundPacket& pkt) {
         NetLog.warn("net: malformed packet from peer {} ({} bytes)", pkt.peerIndex, pkt.size);
         return;
     }
+    if (pkt.channel != ChannelFor(msg.type)) {
+        NetLog.warn("net: dropping {} from peer {} on channel {} (expected {})",
+            static_cast<u16>(msg.type), pkt.peerIndex, pkt.channel, ChannelFor(msg.type));
+        return;
+    }
     switch (msg.type) {
     case MsgType::JoinRequest:
         if (role_ == SessionRole::Host) {
-            OnJoinRequest(pkt.peerIndex, msg);
+            OnJoinRequest(pkt.peerIndex, msg, pkt.generation);
         }
         break;
     case MsgType::JoinAccept:
@@ -341,15 +434,11 @@ void Session::HandleData(const InboundPacket& pkt) {
         break;
     case MsgType::PlayerState:
     case MsgType::PlayerEvent:
-    case MsgType::GhostSnapshot:
-    case MsgType::EnemyEvent:
-        // M1 game traffic + v7 ghost wire: the session owns transport/roster
-        // only. The game side consumes the message; on the host the message
-        // is then star-relayed (v7: uniform — no room-scoped branches;
-        // ghost receive filtering is a game-side gate in M5.3). The host no
-        // longer sniffs rooms from the stream (the ownership table is gone).
-        // Origin stamp: overwrite the payload player/sender id from the
-        // peer map so a client cannot impersonate another slot (or the host).
+    case MsgType::HorseState:
+        // Game traffic: the session owns transport/roster only. The game
+        // side consumes the message; on the host the message is then
+        // star-relayed. Origin stamp: overwrite the payload player id from
+        // the peer map so a client cannot impersonate another slot.
         if (role_ == SessionRole::Host) {
             if (pkt.peerIndex >= Transport::kMaxPeers) {
                 break;
@@ -368,17 +457,6 @@ void Session::HandleData(const InboundPacket& pkt) {
             ForwardGameMessage(pkt.peerIndex, msg.type, msg.payload);
         }
         break;
-    case MsgType::TimeSync:
-    case MsgType::TimeEvent:
-    case MsgType::WeatherChange:
-        // M3 time/weather traffic. Consumed by the game handler; NEVER
-        // relayed (PolicyFor returns None) — the host generates these and
-        // broadcasts them host->all via SendGameMessage; a client sending
-        // them is a buggy/forged peer and is ignored rather than echoed.
-        if (gameHandler_) {
-            gameHandler_(msg.type, msg.payload);
-        }
-        break;
     default:
         // Handshake leftovers — parsed but not acted on here.
         NetLog.debug("net: ignoring {} (no handler)", static_cast<u16>(msg.type));
@@ -390,24 +468,32 @@ void Session::HandleData(const InboundPacket& pkt) {
 // Message handlers
 // ---------------------------------------------------------------------------
 
-void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
+void Session::OnJoinRequest(u8 peerIndex, const Message& msg, u16 generation) {
     if (peerIndex >= Transport::kMaxPeers) {
         return;
     }
-    // Duplicate JoinRequest guard (deepseek m2): a peer that already holds a
-    // PlayerId must not get a second slot — ignore the re-join (a buggy or
-    // malicious client would otherwise orphan the first assignment).
+    // Same-connection re-JoinRequest must not get a second slot. A different
+    // generation on this index is slot reuse after a missed disconnect —
+    // drop the stale mapping and continue the join.
     if (peerToPlayer_[peerIndex] != kInvalidPlayerId) {
-        NetLog.warn("net: duplicate JoinRequest from peer {} (already player {}); ignoring",
-            peerIndex, peerToPlayer_[peerIndex]);
-        return;
+        if (generation == peerGeneration_[peerIndex]) {
+            NetLog.warn("net: duplicate JoinRequest from peer {} (already player {}); ignoring",
+                peerIndex, peerToPlayer_[peerIndex]);
+            return;
+        }
+        NetLog.warn("net: JoinRequest on reused peer {} (was player {}); replacing", peerIndex,
+            peerToPlayer_[peerIndex]);
+        RemovePlayer(peerToPlayer_[peerIndex], /*broadcastLeave=*/true);
     }
+    peerGeneration_[peerIndex] = generation;
     const auto& req = msg.payload.joinRequest;
 
     if (req.version != kProtocolVersion) {
         PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::VersionMismatch);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
+        transport_.DisconnectPeer(peerIndex);
+        peerConnectedAtMs_[peerIndex] = 0;
         NetLog.warn("net: rejecting peer {} (version {} != {})", peerIndex, req.version,
             kProtocolVersion);
         return;
@@ -419,6 +505,8 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
         PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::InvalidSlot);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
+        transport_.DisconnectPeer(peerIndex);
+        peerConnectedAtMs_[peerIndex] = 0;
         NetLog.warn("net: rejecting peer {} (slot {} unavailable)", peerIndex, req.requestedSlot);
         return;
     }
@@ -427,6 +515,8 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
         PayloadUnion payload = {};
         payload.joinReject.reason = static_cast<u8>(JoinRejectReason::SessionFull);
         SendToPeer(peerIndex, MsgType::JoinReject, payload);
+        transport_.DisconnectPeer(peerIndex);
+        peerConnectedAtMs_[peerIndex] = 0;
         NetLog.warn("net: rejecting peer {} (session full, {}/{} players)", peerIndex,
             static_cast<u32>(PresentCount()), static_cast<u32>(config_.maxPlayers));
         return;
@@ -439,24 +529,18 @@ void Session::OnJoinRequest(u8 peerIndex, const Message& msg) {
     peerToPlayer_[peerIndex] = id;
     NetLog.info("net: player {} '{}' joined (peer {})", id, roster_[id].name, peerIndex);
 
-    // JoinAccept: assigned id + full roster + world info (00-network.md §4;
-    // M3: time/weather so a mid-game joiner starts with the host's sky).
+    // JoinAccept: assigned id + full roster + world stage (00-network.md §4).
     PayloadUnion accept = {};
     accept.joinAccept.assignedPlayerId = id;
     accept.joinAccept.stage = worldStage_;
-    accept.joinAccept.time = worldTime_;
-    accept.joinAccept.weather = worldWeather_;
     FillWireRoster(accept.joinAccept.roster);
     SendToPeer(peerIndex, MsgType::JoinAccept, accept);
 
-    // WorldInit: fixed stage + time + weather + roster (00-network.md
-    // §4/§5); M1's snapshot-on-join is a burst of ordinary per-frame
-    // PlayerState/EnemySnapshot messages sent right after this; M3 carries
-    // the current sky (task 6).
+    // WorldInit: fixed stage + roster (00-network.md §4/§5); M1's
+    // snapshot-on-join is a burst of ordinary per-frame PlayerState messages
+    // sent right after this.
     PayloadUnion init = {};
     init.worldInit.stage = worldStage_;
-    init.worldInit.time = worldTime_;
-    init.worldInit.weather = worldWeather_;
     FillWireRoster(init.worldInit.roster);
     SendToPeer(peerIndex, MsgType::WorldInit, init);
 
@@ -495,8 +579,6 @@ void Session::OnJoinAccept(const Message& msg) {
     }
     selfId_ = accept.assignedPlayerId;
     worldStage_ = accept.stage;
-    worldTime_ = accept.time;
-    worldWeather_ = accept.weather;
     ApplyRoster(accept.roster);
     endReason_ = SessionEndReason::Shutdown;
     state_ = SessionState::Joined;
@@ -562,18 +644,21 @@ void Session::OnWorldInit(const Message& msg) {
     // Capstone MINOR 8 (review-full-glm-5.2.md MINOR 8): on a client,
     // worldStage_ is ONLY a join-time reference ("where is the host" under
     // the stay-put join policy) — no client consumer reads worldStage() (the
-    // puppet gate keys on the remote's REAL stage from PlayerState; the time
-    // module reads worldTime/worldWeather). Every later roster-refresh
-    // WorldInit overwrites it with the host's CURRENT stage; harmless today,
-    // but a future "where is the host" UI marker would snap. The write stays
-    // unconditional by design; scope it to the joining peer if M5 adds a
-    // consumer.
+    // puppet gate keys on the remote's REAL stage from PlayerState). Every
+    // later roster-refresh WorldInit overwrites it with the host's CURRENT
+    // stage; harmless today, but a future "where is the host" UI marker
+    // would snap. The write stays unconditional by design; scope it to the
+    // joining peer if a consumer is added.
     worldStage_ = init.stage;
-    worldTime_ = init.time;
-    worldWeather_ = init.weather;
     ApplyRoster(init.roster);  // roster refresh; may include players who joined later
+    u8 present = 0;
+    for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
+        if (init.roster[i].present != 0) {
+            ++present;
+        }
+    }
     NetLog.info("net: world init: stage '{}' room {} (players {})", init.stage.stage,
-        static_cast<s32>(init.stage.room), init.roster.size());
+        static_cast<s32>(init.stage.room), present);
 }
 
 // ---------------------------------------------------------------------------
@@ -585,8 +670,7 @@ bool Session::SendGameMessage(MsgType type, const PayloadUnion& payload) {
         return false;
     }
     if (role_ == SessionRole::Host) {
-        // v7: uniform host->all fan-out (no room-scoped branches — the room
-        // filter is the M5.3 receive gate, not the session).
+        // Uniform host->all fan-out (no room-scoped branches).
         SendToAll(type, payload);
     } else {
         // Client: everything flows to the host, which relays to the others.

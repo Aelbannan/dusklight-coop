@@ -1,5 +1,9 @@
 # M2 design notes — combat validation & whitelist (captured from the errored M2 agent)
 
+> **Historical.** The owner-authoritative combat stack this describes was
+> deleted in M5.1. Ghost spectating was never built. Live co-op is parallel
+> worlds + puppets only.
+
 Status: **Interim notes.** The first M2 implementation agent errored (OpenRouter
 insufficient balance) before committing code. These are its verified design
 conclusions, captured so the retry starts here instead of from scratch.

@@ -17,22 +17,31 @@ namespace dusk::net::config {
 
 using ::dusk::config::ConfigVar;
 
-/// Master switch; M4+ wires this to start/stop a session from the game.
-extern ConfigVar<bool> enabled;
-/// Host listen port (00-network.md: 44771 is reserved for the v1 broadcast
-/// announce, so the session port defaults one below it). On a CLIENT this is
-/// the HOST's port — the connect target is `net.joinHost:net.hostPort` (the
-/// client transport never binds; an ephemeral port is used, so host and
-/// client may share the same value on one machine).
+/// Persisted: on launch, start a client session to joinHost:hostPort.
+/// Flipping this in-game does not start or stop a live session. Hosting is
+/// always an explicit Host press. Never auto-hosts.
+extern ConfigVar<bool> autoConnect;
+/// This-process session intent. Host/Connect set the in-memory connected
+/// bit rather than this CVar, so it is not written to config.json. Launch
+/// `--cvar net.connected=true` (Override layer) starts a session this run
+/// using net.role.
+extern ConfigVar<bool> connected;
+/// Host listen port. On a client this is the host's port — the connect
+/// target is `net.joinHost`:`net.hostPort` (the client transport never
+/// binds; an ephemeral port is used, so host and client may share the same
+/// value on one machine).
 extern ConfigVar<u16> hostPort;
-/// Manual join target IP (00-network.md §12: manual host IP join is the v1
-/// fallback until LAN discovery lands in M4).
+/// Manual join target IP or hostname. Empty is a hard fail (not localhost).
+/// Port belongs in net.hostPort, not in this string.
 extern ConfigVar<std::string> joinHost;
-/// Host: session name. Client: player name sent in JoinRequest.
+/// Host: session name in the roster. Client: player name sent in JoinRequest.
 extern ConfigVar<std::string> sessionName;
-/// Session role: "host" (default; listens on hostPort and accepts joins) or
-/// "client" (connects to joinHost). Drives the M1 session lifecycle.
+/// Session role: "host" or "client". Set by Host / Connect. Autostart from
+/// net.autoConnect always connects as client regardless of this value.
 extern ConfigVar<std::string> role;
+/// Legacy alias for the old master switch. Loaded so config.json /
+/// `--cvar net.enabled=true` can migrate; not shown in the Network tab.
+extern ConfigVar<bool> enabled;
 
 /// Registers every net CVar with the dusk config registry. Called from
 /// dusk::registerSettings() at startup.

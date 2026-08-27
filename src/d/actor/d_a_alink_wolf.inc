@@ -236,7 +236,12 @@ void daAlink_c::changeWolf() {
 
     changeCommon();
     onNoResetFlg1(FLG1_IS_WOLF);
-    deleteEquipItem(FALSE, FALSE);
+#if TARGET_PC
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
+        deleteEquipItem(FALSE, FALSE);
+    }
     field_0x2e44.init(this, l_wolfJntColData, mpLinkModel, 18);
     offNoResetFlg1(FLG1_UNK_800000);
 
@@ -566,7 +571,12 @@ void daAlink_c::changeLink(int param_0) {
 
         resetWolfAtCollision();
         resetWolfBallGrab();
-        deleteEquipItem(FALSE, FALSE);
+#if TARGET_PC
+        if (!dusk::coop::isPuppet(this))
+#endif
+        {
+            deleteEquipItem(FALSE, FALSE);
+        }
         field_0x2fb0 = 0;
 
         for (int i = 0; i < 10; i++) {
@@ -6929,7 +6939,12 @@ void daAlink_c::setWolfBallModel() {
 void daAlink_c::resetWolfBallGrab() {
     if (mEquipItem == 0x10A) {
         seStartOnlyReverb(Z2SE_OBJ_POU_SOUL_BREAK);
-        deleteEquipItem(FALSE, FALSE);
+#if TARGET_PC
+        if (!dusk::coop::isPuppet(this))
+#endif
+        {
+            deleteEquipItem(FALSE, FALSE);
+        }
 
         if (checkWolfGrabAnimeObj()) {
             resetUpperAnime(UPPER_2, 3.0f);

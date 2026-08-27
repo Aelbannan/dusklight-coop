@@ -1,6 +1,13 @@
-# Enemy authority — host-authoritative enemies from a pure `.dusk` mod
+# Enemy authority — historical (M2–M4 freeze/apply)
 
-Status: **Investigation** — feeds the consolidated implementation plan.
+> **Superseded (M5.1).** This document describes the host-authoritative enemy
+> stack that the parallel-worlds pivot deleted. Live behavior is vanilla AI on
+> every machine with local combat/drops. Ghost spectating was designed then
+> scrapped and never built. The mechanical findings below remain useful as
+> history; do not treat freeze/apply, combat validation, or context-swap
+> targeting as current code.
+
+Status: **Historical** — feeds the consolidated implementation plan.
 Companion: `docs/design/network.md` (authority model), `docs/design/mod-coop/00-network.md` (transport/protocol surface).
 
 Scope: how a **pure mod** (stock Dusklight, no fork-only symbols, hook by symbol

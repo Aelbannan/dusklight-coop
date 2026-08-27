@@ -51,26 +51,23 @@ struct PlayerSlot {
 struct SessionConfig {
     u16 port = 44770;  // host listen port; 0 = ephemeral (BoundPort())
     std::string name = "Dusklight co-op";  // host: session name; client: player name
-    std::string joinHost = "127.0.0.1";   // client: host IP
+    std::string joinHost = "127.0.0.1";   // client: host IP or hostname (no :port)
     u32 version = kProtocolVersion;       // carried in JoinRequest
     u8 requestedSlot = kAnySlot;          // client: preferred PlayerId
     u8 maxPlayers = kMaxLocalPlayers;     // host: roster cap (selftest uses 2)
-    u64 joinTimeoutMs = 8000;             // client: Connected -> Joined deadline
+    u64 joinTimeoutMs = 8000;             // Connecting, Connected-join, and host unjoined-peer deadline
     /// Host's world info sent in JoinAccept/WorldInit. M0 seeds it statically;
     /// M1+ fills it from the real sim (stage/room/spawn).
     StageInfo stage;
 };
 
 /// Game-side consumer of messages the session does not own (PlayerState,
-/// PlayerEvent, and later GhostSnapshot/EnemyEvent/time). Invoked on the game
-/// thread inside Update()/HandleData with the already-parsed payload. On the
-/// host the handler runs for every inbound game message and the message is
-/// then relayed to every other joined peer (star topology, 00-network.md §2);
-/// on a client the handler runs for messages received from the host.
-/// v7 (M5.1): the M4 room-scoped relay is GONE — every game message is
-/// either host-generated host->all (time/weather) or star-relayed
-/// (PlayerState/PlayerEvent/GhostSnapshot/EnemyEvent); ghost room filtering
-/// is a receive-side gate in M5.3, never the session (05-ghosts.md §2/§4.3).
+/// PlayerEvent). Invoked on the game thread inside Update()/HandleData with
+/// the already-parsed payload. On the host the handler runs for every inbound
+/// game message and the message is then relayed to every other joined peer
+/// (star topology, 00-network.md §2); on a client the handler runs for
+/// messages received from the host. Every game message is star-relayed
+/// (PlayerState/PlayerEvent); there is no room-scoped relay.
 using GameMessageHandler = std::function<void(MsgType type, const PayloadUnion& payload)>;
 
 class Session {
@@ -102,9 +99,9 @@ public:
     /// session: on a client to the host (peer 0), on the host to every joined
     /// peer (the host never receives its own sends back). Returns false when
     /// the session is not in a playable state. The host relays inbound game
-    /// messages to the other peers automatically (HandleData). v7 (M5.1): the
-    /// host-side fan-out is uniform — every game message reaches every joined
-    /// peer (no room-scoped branches; ghost filtering is receive-side).
+    /// messages to the other peers automatically (HandleData). Host-side
+    /// fan-out is uniform — every game message reaches every joined peer
+    /// (no room-scoped branches).
     bool SendGameMessage(MsgType type, const PayloadUnion& payload);
 
     [[nodiscard]] SessionRole role() const { return role_; }
@@ -116,24 +113,20 @@ public:
     /// observe that Stop() tears the transport down even for an Ended session.
     [[nodiscard]] bool transportRunning() const { return transport_.IsRunning(); }
     [[nodiscard]] const std::array<PlayerSlot, kMaxLocalPlayers>& roster() const { return roster_; }
-    /// Stage/time/weather from the last JoinAccept/WorldInit (client) — what
-    /// the host believes the world looks like; on the host these are the
-    /// values the game side published with setWorldTime/Weather/Stage (M3/M4:
-    /// filled every frame from the real sim) and are what joiners receive.
+    /// Stage from the last JoinAccept/WorldInit (client) — where the host
+    /// was at handshake time; on the host this is the value published with
+    /// setWorldStage (filled every frame from the real sim) and is what
+    /// joiners receive.
     [[nodiscard]] const StageInfo& worldStage() const { return worldStage_; }
-    [[nodiscard]] const TimeStateInfo& worldTime() const { return worldTime_; }
-    [[nodiscard]] const WeatherStateInfo& worldWeather() const { return worldWeather_; }
 
     /// Host-side: publish the current world stage so a mid-game joiner is
     /// told where the host's world is (JoinAccept/WorldInit carry; M4.5:
     /// join-warp is REMOVED — stay-put join — so the carry is the joiner's
     /// "where is the host" reference and feeds the cross-stage `stageOk`
     /// puppet gate; it no longer drives a warp decision). The coop tick
-    /// calls these every frame from the real Link; the session snapshots the
+    /// calls this every frame from the real Link; the session snapshots the
     /// latest value into the join handshake.
     void setWorldStage(const StageInfo& s) { worldStage_ = s; }
-    void setWorldTime(const TimeStateInfo& t) { worldTime_ = t; }
-    void setWorldWeather(const WeatherStateInfo& w) { worldWeather_ = w; }
     /// Client-side: why the session ended (for the host-leave UX / toasts).
     [[nodiscard]] SessionEndReason endReason() const { return endReason_; }
 
@@ -142,15 +135,20 @@ public:
     /// Capstone MINOR F: why the most recent StartHost/StartClient failed
     /// ("" when none), for the glue's distinct failure logging.
     [[nodiscard]] const char* startFailureReason() const { return startFailureReason_; }
+    /// Remaining Connecting / Connected-join deadline, or 0 if none.
+    [[nodiscard]] u64 deadlineRemainMs() const;
+    [[nodiscard]] const std::string& configJoinHost() const { return config_.joinHost; }
+    [[nodiscard]] u16 configPort() const { return config_.port; }
+    [[nodiscard]] const std::string& configName() const { return config_.name; }
 
 private:
     // -- transport event handlers (game thread) --
-    void HandleConnect(u8 peerIndex);
+    void HandleConnect(u8 peerIndex, u16 generation);
     void HandleDisconnect(u8 peerIndex);
     void HandleData(const InboundPacket& pkt);
 
     // -- message dispatch --
-    void OnJoinRequest(u8 peerIndex, const Message& msg);
+    void OnJoinRequest(u8 peerIndex, const Message& msg, u16 generation);
     void OnJoinAccept(const Message& msg);
     void OnJoinReject(const Message& msg);
     void OnPlayerLeave(u8 originPeer, const Message& msg);
@@ -186,12 +184,13 @@ private:
     SessionEndReason endReason_ = SessionEndReason::Shutdown;
     std::array<PlayerSlot, kMaxLocalPlayers> roster_{};
     std::array<PlayerId, Transport::kMaxPeers> peerToPlayer_{};
+    std::array<u16, Transport::kMaxPeers> peerGeneration_{};
+    std::array<u64, Transport::kMaxPeers> peerConnectedAtMs_{};
     GameMessageHandler gameHandler_;
     StageInfo worldStage_;
-    TimeStateInfo worldTime_;
-    WeatherStateInfo worldWeather_;
     u64 frame_ = 0;
-    u64 connectedAtMs_ = 0;
+    u64 startedAtMs_ = 0;     // client: StartClient → Connecting deadline
+    u64 connectedAtMs_ = 0;   // client: ENet connected → JoinAccept deadline
     // Last-observed reliable-ring drop counters (for surfacing explicit
     // reliable-overflow failures in Update()).
     u64 lastReliableOutboundDropped_ = 0;

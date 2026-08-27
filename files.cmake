@@ -1415,14 +1415,11 @@ set(DUSK_FILES
         include/helpers/endian_gx.hpp
         include/dusk/net/clock.h
         include/dusk/net/config.h
-        include/dusk/net/discovery.h
         include/dusk/net/module.h
         include/dusk/net/protocol.h
         include/dusk/net/session.h
         include/dusk/net/transport.h
         include/dusk/coop/coop.h
-        include/dusk/coop/coop_enemy.h
-        include/dusk/coop/coop_time.h
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/OSContext.cpp
         src/dusk/OSMutex.cpp
@@ -1437,8 +1434,6 @@ set(DUSK_FILES
         src/dusk/autosave.cpp
         src/dusk/config.cpp
         src/dusk/coop/coop.cpp
-        src/dusk/coop/coop_enemy.cpp
-        src/dusk/coop/coop_time.cpp
         src/dusk/config.hpp
         src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp
@@ -1516,7 +1511,7 @@ set(DUSK_FILES
         src/dusk/mouse.cpp
         src/dusk/net/clock.cpp
         src/dusk/net/config.cpp
-        src/dusk/net/discovery.cpp
+        src/dusk/net/local_ipv4.cpp
         src/dusk/net/module.cpp
         src/dusk/net/protocol.cpp
         src/dusk/net/session.cpp

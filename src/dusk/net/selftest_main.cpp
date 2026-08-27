@@ -6,16 +6,21 @@
  * Exits 0 on success, 1 on any failure.
  *
  * Covers, in one process over loopback (127.0.0.1):
- *   - wire round-trip (serialize -> deserialize -> re-serialize) for all 15
- *     message types in 00-network.md §5, plus malformed-input rejection;
+ *   - wire round-trip (serialize -> deserialize -> re-serialize) for all 9
+ *     message types (v11), plus malformed-input rejection;
  *   - wire determinism: identical logical messages serialize to identical
  *     bytes (zero-init payload unions — deepseek M3);
  *   - semantic validation: jointCount > kMaxJoints rejected at parse
- *     (deepseek M5), forged JoinAccept (bad assignedPlayerId / roster)
+ *     (deepseek M5), non-finite PlayerState/HorseState poses rejected,
+ *     forged JoinAccept (bad assignedPlayerId / roster)
  *     rejected by the client session;
  *   - ring policies: reliable ring overflow is an explicit failure (Send
  *     returns false <=> counter bumps, no silent drops), snapshot rings
- *     replace-newest under pressure (glm MAJOR-1/2);
+ *     replace-newest under pressure (glm MAJOR-1/2); when full they replace
+ *     the newest matching PlayerState/HorseState playerId rather than always
+ *     the newest slot (multiplexed poses); snapshot *outbox* is
+ *     per-peer so host fan-out no longer shares one 128-slot ring;
+ *     connect/disconnect use a dedicated lifecycle inbox;
  *   - peer-slot generation guard: connect -> disconnect -> reconnect never
  *     delivers a stale packet from the old connection (deepseek M4);
  *   - duplicate JoinRequest guard: no second slot assigned (deepseek m2);
@@ -29,29 +34,13 @@
  *     hard connection loss via peer timeout -> HandleDisconnect) gets its
  *     transport torn down by Stop() and starts a second/third session in the
  *     same process without an app restart (review-full-deepseek MAJOR 1);
- *   - M4 LAN discovery (HostAnnounce over loopback);
- *   - v7 net-off regression (d-m8): a session that was never started refuses
- *     to send GhostSnapshot/EnemyEvent (zero ghost sends with net off), and
- *     the ghost wire round-trips only when explicitly serialized — game code
- *     emits nothing; the game-side "zero registry entries / myRoomSearchEnemy
- *     unchanged" half of the net-off contract is enforced by the stub itself
- *     (coop_enemy.cpp's onGameFrame early-returns when the session is off,
- *     and the fopAc_Execute / d_cc_s / ALLDIE coop hooks are deleted);
- *   - M3 time/weather contract: v5 absolute-phase wire round-trips (TimeSync
- *     f32 time + day + rate + flags; TimeEvent; WeatherChange mode + thunder
- *     + intensity + colpat); host->all broadcasts of TimeSync/TimeEvent/
- *     WeatherChange; a buggy client's time/weather messages are consumed but
- *     never relayed; JoinAccept/WorldInit carry the host's clock+sky so a
- *     mid-game joiner starts with the host's time of day and weather;
- *   - M3.5 time/weather fix pass: the TimeSync cadence gate is a REAL 1 Hz
- *     clock (deepseek MAJOR 1 — a 250 ms window emits <= 2 TimeSyncs, not the
- *     ~15 the old 60 Hz NetClock produced, and the immediate stage/rate-
- *     change sends still fire); the table-driven DeriveWeather decision
- *     (04 §4.3, incl. the thunder-with-no-rain case, deepseek M1); the
- *     defer-to-wire thunder policy (NextThunderMode); and the pond advance
- *     table with the vanilla 1x fallback (deepseek M3). These test the
- *     game-free core of coop_time.cpp (coop_time_logic.h) that the selftest
- *     can link without the game;
+ *   - session start guards (empty join host, host:port refused);
+ *   - Connecting deadline: a client that never reaches ENet Connected ends
+ *     with a start-failure reason instead of sitting in Connecting;
+ *   - v9/v10: TimeSync/TimeEvent/WeatherChange, GhostSnapshot, EnemyEvent, and
+ *     JoinAccept/WorldInit clock/sky fields are gone (out-of-range wire ids
+ *     9–13 and 16 rejected); v10 adds a stage name on PlayerEvent; an idle
+ *     session refuses game sends;
  *   - clean shutdown: every transport thread joined, every ENet host
  *     destroyed (leak-free exit).
  *
@@ -61,10 +50,7 @@
  * the same dusk::net::initialize()/shutdown() the game uses.
  */
 
-#include "dusk/coop/coop_entity_logic.h"
-#include "dusk/coop/coop_time_logic.h"
 #include "dusk/net/clock.h"
-#include "dusk/net/discovery.h"
 #include "dusk/net/module.h"
 #include "dusk/net/protocol.h"
 #include "dusk/net/session.h"
@@ -75,9 +61,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -181,14 +169,6 @@ Message MakeMessage(MsgType type) {
         p.stage.room = 2;
         p.stage.layer = 1;
         p.stage.point = 7;
-        p.time.time = 123.5f;
-        p.time.day = 7;
-        p.time.rate = kTimeRateFast;
-        p.time.flags = kTimeFlagDarkworld;
-        p.weather.mode = static_cast<u8>(WeatherMode::RainHeavy);
-        p.weather.thunder = 1;
-        p.weather.intensity = 240;
-        p.weather.colpat = 2;
         for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
             auto& e = p.roster[i];
             e.playerId = i;
@@ -216,12 +196,6 @@ Message MakeMessage(MsgType type) {
         p.stage.room = 3;
         p.stage.layer = 0;
         p.stage.point = 11;
-        p.time.time = 205.75f;
-        p.time.day = 2;
-        p.time.rate = kTimeRateNormal;
-        p.weather.mode = static_cast<u8>(WeatherMode::Cloudy);
-        p.weather.intensity = 0;
-        p.weather.colpat = 1;
         for (u8 i = 0; i < kMaxLocalPlayers; ++i) {
             auto& e = p.roster[i];
             e.playerId = i;
@@ -264,48 +238,30 @@ Message MakeMessage(MsgType type) {
         p.scene = 4;
         p.data = 0xF0F0F0F0;
         p.data2 = 0x0F0F0F0F;
+        std::strncpy(p.stage, "F_SP108", kMaxStageNameLength - 1);
+        p.stage[kMaxStageNameLength - 1] = '\0';
         break;
     }
-    case MsgType::GhostSnapshot: {
-        auto& p = m.payload.ghostSnapshot;
-        p.senderId = 5;
-        p.flags = 0xAA;  // v1: boss|projectile bits, rest 0
-        p.entityId = 77;
-        p.type = 0x2041;
-        p.angle = -12345;
-        p.animFrame = 42;
-        p.pos = Vec3f{10.0f, 20.0f, 30.0f};
-        p.speed = Vec3f{-1.0f, 0.0f, 2.0f};
-        break;
-    }
-    case MsgType::EnemyEvent: {
-        auto& p = m.payload.enemyEvent;
-        p.senderId = 3;
-        p.eventId = static_cast<u8>(EnemyEventId::Died);
-        p.entityId = 88;
-        break;
-    }
-    case MsgType::TimeSync: {
-        auto& p = m.payload.timeSync;
-        p.time = 123.25f;
-        p.day = 3;
-        p.rate = kTimeRateNormal;
-        p.flags = 0;
-        break;
-    }
-    case MsgType::TimeEvent: {
-        auto& p = m.payload.timeEvent;
-        p.eventId = static_cast<u8>(TimeEventId::Dawn);
-        p.time = 90.0f;
-        p.day = 2;
-        break;
-    }
-    case MsgType::WeatherChange: {
-        auto& p = m.payload.weatherChange;
-        p.mode = static_cast<u8>(WeatherMode::ThunderHeavy);
-        p.thunder = 1;
-        p.intensity = 250;
-        p.colpat = 2;
+    case MsgType::HorseState: {
+        auto& p = m.payload.horseState;
+        p.playerId = 3;
+        p.roomNo = 4;
+        std::strncpy(p.stage, StageName(), sizeof(p.stage) - 1);
+        p.jointCount = 38;
+        for (u8 i = 0; i < sizeof(p.scaleFlags); ++i) {
+            p.scaleFlags[i] = static_cast<u8>(0x50 + i);
+        }
+        p.yaw = -1111;
+        p.reserved = 0xAB;
+        p.pos = Vec3f{9.0f, 8.0f, 7.0f};
+        for (u8 r = 0; r < 3; ++r) {
+            for (u8 c = 0; c < 4; ++c) {
+                p.baseTR[r][c] = static_cast<f32>(r * 3 + c) + 0.125f;
+                for (u8 j = 0; j < kMaxJoints; ++j) {
+                    p.joints[j][r][c] = static_cast<f32>(j * 10 + r + c) + 0.5f;
+                }
+            }
+        }
         break;
     }
     }
@@ -345,45 +301,33 @@ bool RoundTrip(MsgType type) {
 }
 
 void RunProtocolChecks() {
-    std::printf("protocol: round-trip all 13 v7 message types\n");
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
+    std::printf("protocol: round-trip all 9 v11 message types\n");
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::HorseState);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
         Check(RoundTrip(type), WireSize(type) > 0 ? "round-trip ok" : "round-trip ok (size 0)");
     }
-    Check(WireSize(MsgType::JoinAccept) == 1 + 3 + 20 + 8 + 6 + kMaxLocalPlayers * 36,
+    Check(WireSize(MsgType::JoinAccept) == 1 + 3 + 20 + kMaxLocalPlayers * 36,
         "JoinAccept wire size");
-    Check(WireSize(MsgType::WorldInit) == 20 + 8 + 6 + kMaxLocalPlayers * 36,
-        "WorldInit wire size (stage + time + weather + roster)");
-    Check(WireSize(MsgType::TimeSync) == 8 && WireSize(MsgType::TimeEvent) == 8 &&
-              WireSize(MsgType::WeatherChange) == 6,
-        "time/weather message sizes (absolute-phase contract)");
-    // v7 WireSize rows (05-ghosts.md §3/§4.2): the ghost payload is 34 B
-    // (senderId+flags+entityId+type+angle+animFrame+pos+speed) on the
-    // unreliable channel; the trimmed death event is 4 B on the reliable
-    // channel.
-    Check(WireSize(MsgType::GhostSnapshot) == 1 + 1 + 2 + 2 + 2 + 2 + 12 + 12 &&
-              ChannelFor(MsgType::GhostSnapshot) == kChannelUnreliable,
-        "GhostSnapshot wire size 34 B + unreliable channel (v7)");
-    Check(WireSize(MsgType::EnemyEvent) == 1 + 1 + 2 &&
-              ChannelFor(MsgType::EnemyEvent) == kChannelReliable,
-        "EnemyEvent wire size 4 B + reliable channel (v7 trim)");
+    Check(WireSize(MsgType::WorldInit) == 20 + kMaxLocalPlayers * 36,
+        "WorldInit wire size (stage + roster)");
     Check(WireSize(MsgType::PlayerState) == PlayerStateWireSize(),
         "PlayerState wire size");
+    Check(WireSize(MsgType::PlayerEvent) == 4 + 4 + 4 + kMaxStageNameLength,
+        "PlayerEvent wire size (v10 stage field)");
+    Check(WireSize(MsgType::HorseState) == HorseStateWireSize(),
+        "HorseState wire size");
     Check(ChannelFor(MsgType::PlayerState) == kChannelUnreliable &&
+              ChannelFor(MsgType::HorseState) == kChannelUnreliable &&
               ChannelFor(MsgType::JoinRequest) == kChannelReliable &&
-              ChannelFor(MsgType::TimeSync) == kChannelUnreliable &&
-              ChannelFor(MsgType::TimeEvent) == kChannelReliable &&
-              ChannelFor(MsgType::WeatherChange) == kChannelReliable,
-        "channel mapping (snapshots unreliable, control reliable; TimeSync 1 Hz unreliable, events reliable)");
+              ChannelFor(MsgType::PlayerEvent) == kChannelReliable,
+        "channel mapping (snapshots unreliable, control reliable)");
 
-    // v7 shred regression: the removed combat/ownership wire surfaces must be
-    // dead on the wire. Type 16 (RoomOwnership) is outside the compacted
-    // 1..13 range and rejected at parse; wire id 11 is now TimeSync (8 B), so
-    // a frame carrying the old CombatIntent payload length (42 B) trips the
-    // exact-size check and is rejected — the removed message cannot smuggle
-    // its old bytes through the new enumeration.
+    // v9 shred regression: removed combat/ownership/time-weather/ghost wire
+    // ids are dead. Type 16 (RoomOwnership) and type 11 (old CombatIntent, then
+    // TimeSync) are outside 1..9. Type 9 is HorseState (v11); the old
+    // GhostSnapshot layout (id 9, size 34) is rejected by exact-size.
     {
         const u8 removedType[] = {0x10, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00};  // type 16
         ByteReader r(removedType, sizeof(removedType));
@@ -395,7 +339,14 @@ void RunProtocolChecks() {
         ByteReader r(oldIntent, sizeof(oldIntent));
         Message out;
         Check(!DeserializeMessage(r, out),
-            "old CombatIntent frame at wire id 11 rejected (size mismatch vs TimeSync)");
+            "old CombatIntent/TimeSync wire id 11 rejected (out of range)");
+    }
+    {
+        const u8 oldGhost[] = {0x09, 0x00, 0x22, 0x00, 0, 0, 0, 0};  // id 9, size 34
+        ByteReader r(oldGhost, sizeof(oldGhost));
+        Message out;
+        Check(!DeserializeMessage(r, out),
+            "old GhostSnapshot payload size rejected (id 9 is HorseState)");
     }
 
     // Malformed input must be rejected.
@@ -417,6 +368,27 @@ void RunProtocolChecks() {
         Message out;
         Check(!DeserializeMessage(r, out), "unknown message type rejected");
     }
+    {
+        Message ev = MakeMessage(MsgType::PlayerEvent);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(ev, w), "PlayerEvent serializes for trailing-junk check");
+        buf[w.size()] = 0xFF;
+        ByteReader r(buf, static_cast<u16>(w.size() + 1));
+        Message out;
+        Check(!DeserializeMessage(r, out), "trailing junk after a valid payload is rejected");
+    }
+    {
+        Message ev = MakeMessage(MsgType::PlayerEvent);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(ev, w), "PlayerEvent serializes with stage name");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(DeserializeMessage(r, out) &&
+                  std::strcmp(out.payload.playerEvent.stage, "F_SP108") == 0,
+            "v10 PlayerEvent round-trip keeps the stage name");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -429,10 +401,8 @@ void RunProtocolChecks() {
 /// runs produced different bytes (deepseek M3).
 void RunDeterminismChecks() {
     std::printf("wire: deterministic serialization (zero-init payload unions)\n");
-    // v7 (M5.1): sweep the 13-type set — CombatIntent/CombatResult/
-    // RoomOwnership are gone and GhostSnapshot (renamed + re-laid-out) and
-    // the trimmed EnemyEvent are in.
-    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::WeatherChange);
+    // v9: sweep the 9-type set — ghosts and time/weather are gone; v11 added HorseState.
+    for (u16 t = static_cast<u16>(MsgType::JoinRequest); t <= static_cast<u16>(MsgType::HorseState);
          ++t)
     {
         const auto type = static_cast<MsgType>(t);
@@ -477,6 +447,46 @@ void RunValidationChecks() {
         Message out;
         Check(!DeserializeMessage(r, out), "jointCount > kMaxJoints rejected at parse");
     }
+    {
+        Message bad = MakeMessage(MsgType::HorseState);
+        bad.payload.horseState.jointCount = static_cast<u8>(kMaxJoints + 1);
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(bad, w), "HorseState over-range jointCount serializes");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(!DeserializeMessage(r, out), "HorseState jointCount > kMaxJoints rejected");
+    }
+    {
+        Message bad = MakeMessage(MsgType::PlayerState);
+        bad.payload.playerState.pos.x = std::numeric_limits<f32>::quiet_NaN();
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(bad, w), "PlayerState with NaN pos still serializes");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(!DeserializeMessage(r, out), "PlayerState NaN pos rejected at parse");
+    }
+    {
+        Message bad = MakeMessage(MsgType::PlayerState);
+        bad.payload.playerState.joints[0][1][3] = std::numeric_limits<f32>::infinity();
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(bad, w), "PlayerState with inf joint still serializes");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(!DeserializeMessage(r, out), "PlayerState inf joint rejected at parse");
+    }
+    {
+        Message bad = MakeMessage(MsgType::HorseState);
+        bad.payload.horseState.pos.y = std::numeric_limits<f32>::quiet_NaN();
+        u8 buf[kMaxMessageSize];
+        ByteWriter w(buf, sizeof(buf));
+        Check(SerializeMessage(bad, w), "HorseState with NaN pos still serializes");
+        ByteReader r(buf, w.size());
+        Message out;
+        Check(!DeserializeMessage(r, out), "HorseState NaN pos rejected at parse");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +518,28 @@ void RunRingPolicyChecks() {
         Check(ring.Pop(v) && v == 2 && ring.Pop(v) && v == 5,
             "freshest item (5) wins over the replaced one (4)");
         Check(!ring.Pop(v), "snapshot ring empty at end");
+    }
+    // Snapshot identity replace: a full ring overwrites the newest matching
+    // player, not the newest slot. Otherwise a multiplexed PlayerState for B
+    // would drop A's fresh pose to keep a stale A.
+    {
+        struct Snap {
+            int id;
+            int seq;
+        };
+        SPSCRing<Snap, 4> ring;
+        auto same = [](const Snap& a, const Snap& b) { return a.id == b.id; };
+        Check(ring.Push(Snap{0, 1}) && ring.Push(Snap{1, 1}),
+            "identity ring accepts two players");
+        Check(ring.PushOrReplaceMatching(Snap{0, 2}, same) == false,
+            "identity ring appends player 0 refresh while not full");
+        Check(ring.PushOrReplaceMatching(Snap{1, 2}, same) == true,
+            "identity ring replaces player 1, not the newest player-0 slot");
+        Snap v{};
+        Check(ring.Pop(v) && v.id == 0 && v.seq == 1, "oldest player-0 kept");
+        Check(ring.Pop(v) && v.id == 1 && v.seq == 2, "player 1 updated in place");
+        Check(ring.Pop(v) && v.id == 0 && v.seq == 2, "newest player-0 kept");
+        Check(!ring.Pop(v), "identity ring empty");
     }
 }
 
@@ -560,7 +592,7 @@ void RunRingOverflowChecks() {
 
     // Snapshot flood: replace-newest means Send never fails, and the ring
     // replacement is visible on the producing side (the test thread outruns
-    // the socket thread's drain, so the 128-slot ring fills and replaces).
+    // the socket thread's drain, so the per-peer 128-slot outbox fills).
     u64 snapOk = 0;
     for (int i = 0; i < 20000; ++i) {
         if (cliT->Send(0, kChannelUnreliable, msg, sizeof(msg))) {
@@ -570,7 +602,7 @@ void RunRingOverflowChecks() {
     Check(snapOk == 20000, "snapshot Send never fails (replace-newest)");
     // (The HOST-side replace counter is not asserted: ENet drops unreliable
     // packets at the sender once its queue exceeds the packet threshold, so
-    // only the freshest reach the host and the 128-slot inbox may never fill.)
+    // only the freshest reach the host and the 512-slot inbox may never fill.)
     {
         const u64 deadline = NowMs() + 3000;
         while (NowMs() < deadline && cliT->SnapshotOutboundReplaced() == 0) {
@@ -817,12 +849,19 @@ void RunGameMessageDemo() {
     int aEvents = 0;
     u8 hostStatePid = kInvalidPlayerId;
     u8 bStatePid = kInvalidPlayerId;
+    int hostHorses = 0;
+    int bHorses = 0;
+    u8 hostHorsePid = kInvalidPlayerId;
+    u8 bHorsePid = kInvalidPlayerId;
     host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
         if (type == MsgType::PlayerState) {
             ++hostStates;
             hostStatePid = p.playerState.playerId;
         } else if (type == MsgType::PlayerEvent) {
             ++hostEvents;
+        } else if (type == MsgType::HorseState) {
+            ++hostHorses;
+            hostHorsePid = p.horseState.playerId;
         }
     });
     a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
@@ -836,6 +875,9 @@ void RunGameMessageDemo() {
         if (type == MsgType::PlayerState) {
             ++bStates;
             bStatePid = p.playerState.playerId;
+        } else if (type == MsgType::HorseState) {
+            ++bHorses;
+            bHorsePid = p.horseState.playerId;
         }
     });
 
@@ -866,6 +908,16 @@ void RunGameMessageDemo() {
     Check(demo.WaitFor([&] { return hostEvents >= 1 && aEvents >= 1; }, 10000),
         "host relayed B's PlayerEvent to A");
 
+    PayloadUnion hs = {};
+    hs.horseState.playerId = a->selfId();
+    hs.horseState.jointCount = 38;
+    hs.horseState.pos = Vec3f{10.0f, 20.0f, 30.0f};
+    Check(a->SendGameMessage(MsgType::HorseState, hs), "A sends HorseState");
+    Check(demo.WaitFor([&] { return hostHorses >= 1 && bHorses >= 1; }, 10000),
+        "host consumed A's HorseState and relayed it to B");
+    Check(hostHorsePid == a->selfId() && bHorsePid == a->selfId(),
+        "relayed HorseState keeps the source playerId");
+
     // SendGameMessage is refused outside a playable session state.
     auto idle = std::make_unique<Session>();
     Check(!idle->SendGameMessage(MsgType::PlayerState, ps),
@@ -888,503 +940,9 @@ void RunGameMessageDemo() {
 /// A sends a snapshot while owning slot 0, then disconnects GRACEFULLY (a
 /// hard enet_host_destroy never notifies the peer — ENet destroys the socket
 /// before flushing the disconnect command, so the host would only free the
-/// M3 time/weather (v5 absolute-phase contract): field-exact wire round-trips
-/// (04 §4); the host broadcasts TimeSync/TimeEvent/WeatherChange host->all; a
-/// client's (buggy/forged) time/weather messages are consumed on the host but
-/// never relayed; JoinAccept/WorldInit carry the host's clock+sky so a
-/// mid-game joiner starts with the host's time of day and weather (task 6).
-void RunM3TimeWeatherCheck() {
-    std::printf("m3: time/weather sync contract\n");
-    Demo demo;
-
-    // 1) Field-exact wire round-trips (absolute-phase contract, 04 §4).
-    {
-        Message ts = MakeMessage(MsgType::TimeSync);
-        u8 buf[kMaxMessageSize];
-        ByteWriter w(buf, sizeof(buf));
-        Check(SerializeMessage(ts, w), "TimeSync serializes");
-        ByteReader r(buf, w.size());
-        Message parsed;
-        Check(DeserializeMessage(r, parsed), "TimeSync deserializes");
-        Check(parsed.payload.timeSync.time == ts.payload.timeSync.time &&
-                  parsed.payload.timeSync.day == ts.payload.timeSync.day &&
-                  parsed.payload.timeSync.rate == ts.payload.timeSync.rate &&
-                  parsed.payload.timeSync.flags == ts.payload.timeSync.flags,
-            "TimeSync fields survive the round-trip");
-
-        Message te = MakeMessage(MsgType::TimeEvent);
-        u8 buf2[kMaxMessageSize];
-        ByteWriter w2(buf2, sizeof(buf2));
-        Check(SerializeMessage(te, w2), "TimeEvent serializes");
-        ByteReader r2(buf2, w2.size());
-        Message parsed2;
-        Check(DeserializeMessage(r2, parsed2), "TimeEvent deserializes");
-        Check(parsed2.payload.timeEvent.eventId == static_cast<u8>(TimeEventId::Dawn) &&
-                  parsed2.payload.timeEvent.time == 90.0f &&
-                  parsed2.payload.timeEvent.day == 2,
-            "TimeEvent fields survive the round-trip");
-
-        Message wc = MakeMessage(MsgType::WeatherChange);
-        u8 buf3[kMaxMessageSize];
-        ByteWriter w3(buf3, sizeof(buf3));
-        Check(SerializeMessage(wc, w3), "WeatherChange serializes");
-        ByteReader r3(buf3, w3.size());
-        Message parsed3;
-        Check(DeserializeMessage(r3, parsed3), "WeatherChange deserializes");
-        Check(parsed3.payload.weatherChange.mode == static_cast<u8>(WeatherMode::ThunderHeavy) &&
-                  parsed3.payload.weatherChange.thunder == 1 &&
-                  parsed3.payload.weatherChange.intensity == 250 &&
-                  parsed3.payload.weatherChange.colpat == 2,
-            "WeatherChange fields survive the round-trip");
-    }
-
-    auto host = std::make_unique<Session>();
-    SessionConfig hostCfg;
-    hostCfg.port = 0;
-    hostCfg.name = "M3 Host";
-    hostCfg.maxPlayers = 3;
-    Check(host->StartHost(hostCfg), "m3 host starts (Listening)");
-    demo.live.push_back(host.get());
-    const u16 port = host->boundPort();
-
-    // The host has a clock and a sky BEFORE joiners arrive (task 6 — the
-    // coop publisher updates this every frame in-game; here the test seeds
-    // the session world info directly).
-    TimeStateInfo hostTime = {};
-    hostTime.time = 331.25f;  // 22:05 — near dusk
-    hostTime.day = 5;
-    hostTime.rate = kTimeRateNormal;
-    WeatherStateInfo hostWeather = {};
-    hostWeather.mode = static_cast<u8>(WeatherMode::RainLight);
-    hostWeather.intensity = 40;
-    hostWeather.colpat = 1;
-    host->setWorldTime(hostTime);
-    host->setWorldWeather(hostWeather);
-
-    auto a = std::make_unique<Session>();
-    SessionConfig aCfg;
-    aCfg.joinHost = "127.0.0.1";
-    aCfg.port = port;
-    aCfg.name = "M3 A";
-    aCfg.version = kProtocolVersion;
-    Check(a->StartClient(aCfg), "m3 client A starts");
-    demo.live.push_back(a.get());
-    Check(demo.WaitFor([&] { return a->state() == SessionState::Joined; }, 10000), "A joined");
-    Check(a->worldTime().time == hostTime.time && a->worldTime().day == hostTime.day &&
-              a->worldTime().rate == hostTime.rate,
-        "JoinAccept carries the host's clock to the joiner");
-    Check(a->worldWeather().mode == hostWeather.mode &&
-              a->worldWeather().intensity == hostWeather.intensity &&
-              a->worldWeather().colpat == hostWeather.colpat,
-        "JoinAccept carries the host's sky to the joiner");
-
-    auto b = std::make_unique<Session>();
-    SessionConfig bCfg;
-    bCfg.joinHost = "127.0.0.1";
-    bCfg.port = port;
-    bCfg.name = "M3 B";
-    bCfg.version = kProtocolVersion;
-    Check(b->StartClient(bCfg), "m3 client B starts");
-    demo.live.push_back(b.get());
-    Check(demo.WaitFor([&] { return b->state() == SessionState::Joined; }, 10000), "B joined");
-    Check(demo.WaitFor([&] { return PresentCountOf(*host) == 3; }, 10000),
-        "host roster has 3 players");
-    Check(demo.WaitFor([&] { return a->roster()[b->selfId()].present; }, 10000),
-        "A learned about B via the WorldInit re-broadcast");
-
-    int hostSyncs = 0, aSyncs = 0, bSyncs = 0;
-    int hostEvents = 0, aEvents = 0;
-    int hostWeatherCount = 0, aWeatherCount = 0, bWeatherCount = 0;
-    host->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::TimeSync:
-            ++hostSyncs;
-            break;
-        case MsgType::TimeEvent:
-            ++hostEvents;
-            break;
-        case MsgType::WeatherChange:
-            ++hostWeatherCount;
-            break;
-        default:
-            break;
-        }
-    });
-    a->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::TimeSync:
-            ++aSyncs;
-            break;
-        case MsgType::TimeEvent:
-            ++aEvents;
-            break;
-        case MsgType::WeatherChange:
-            ++aWeatherCount;
-            break;
-        default:
-            break;
-        }
-    });
-    b->SetGameMessageHandler([&](MsgType type, const PayloadUnion& p) {
-        switch (type) {
-        case MsgType::TimeSync:
-            ++bSyncs;
-            break;
-        case MsgType::WeatherChange:
-            ++bWeatherCount;
-            break;
-        default:
-            break;
-        }
-    });
-
-    // Host -> all broadcasts (the host owns the clock and the sky).
-    PayloadUnion sync = {};
-    sync.timeSync.time = 332.0f;
-    sync.timeSync.day = 5;
-    sync.timeSync.rate = kTimeRateNormal;
-    Check(host->SendGameMessage(MsgType::TimeSync, sync), "host sends TimeSync");
-    Check(demo.WaitFor([&] { return aSyncs >= 1 && bSyncs >= 1; }, 10000),
-        "TimeSync reached both clients");
-
-    PayloadUnion ev = {};
-    ev.timeEvent.eventId = static_cast<u8>(TimeEventId::Dusk);
-    ev.timeEvent.time = 332.0f;
-    ev.timeEvent.day = 5;
-    Check(host->SendGameMessage(MsgType::TimeEvent, ev), "host sends TimeEvent(Dusk)");
-    Check(demo.WaitFor([&] { return aEvents >= 1; }, 10000), "TimeEvent reached client A");
-
-    PayloadUnion wc = {};
-    wc.weatherChange.mode = static_cast<u8>(WeatherMode::RainHeavy);
-    wc.weatherChange.thunder = 0;
-    wc.weatherChange.intensity = 250;
-    wc.weatherChange.colpat = 2;
-    Check(host->SendGameMessage(MsgType::WeatherChange, wc), "host sends WeatherChange");
-    Check(demo.WaitFor([&] { return aWeatherCount >= 1 && bWeatherCount >= 1; }, 10000),
-        "WeatherChange reached both clients");
-
-    // Clients NEVER relay time/weather: a buggy client's messages are
-    // consumed by the host (handler) but not echoed to the other client.
-    PayloadUnion rogueSync = {};
-    rogueSync.timeSync.time = 42.0f;
-    Check(a->SendGameMessage(MsgType::TimeSync, rogueSync), "A sends a rogue TimeSync");
-    Check(demo.WaitFor([&] { return hostSyncs >= 1; }, 10000),
-        "host consumed A's rogue TimeSync");
-    PayloadUnion rogueWc = {};
-    rogueWc.weatherChange.mode = static_cast<u8>(WeatherMode::Clear);
-    Check(a->SendGameMessage(MsgType::WeatherChange, rogueWc), "A sends a rogue WeatherChange");
-    Check(demo.WaitFor([&] { return hostWeatherCount >= 1; }, 10000),
-        "host consumed A's rogue WeatherChange");
-    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-    Check(bSyncs == 1 && bWeatherCount == 1,
-        "A's rogue TimeSync/WeatherChange are NOT relayed to B");
-
-    for (Session* s : demo.live) {
-        s->Stop();
-    }
-    demo.live.clear();
-    host->Stop();
-}
-
-// ---------------------------------------------------------------------------
-// M3.5 fix pass — TimeSync 1 Hz cadence + the pure time/weather decisions
-// (deepseek MAJOR 1 / MINORs 1, 3; glm MINOR 1)
-// ---------------------------------------------------------------------------
-
-/// MAJOR 1 (deepseek): TimeSync was published at ~60 Hz because NetClock
-/// defaults to 60 Hz and PublishHostState used it as a "one second" gate.
-/// The fix is NetClock::AtRate(1) + the TimeSyncDue predicate; the checks
-/// below drive the REAL gate (NetClock::AtRate(1)) and the REAL decision
-/// functions (coop_time_logic.h — the game-free core of coop_time.cpp that
-/// this selftest can link without the game) over simulated 60 Hz sim frames.
-void RunM35TimeWeatherFixCheck() {
-    std::printf("m3.5: time/weather fix pass\n");
-    using namespace dusk::coop::timeweather;
-
-    // -- 1) The 1 Hz cadence gate (deepseek MAJOR 1) ----------------------
-    {
-        // A 250 ms window of 60 Hz sim frames: the 1 Hz gate fires zero
-        // ticks. The old 60 Hz clock fired ~15 — asserted below as the
-        // regression bound this check exists to catch.
-        NetClock sync = NetClock::AtRate(1);
-        int ticks250ms = 0;
-        for (u64 f = 0; f < 15; ++f) {  // 15 frames @ 60 Hz = 250 ms
-            if (sync.Tick(f * NetClock::kIntervalUs)) {
-                ++ticks250ms;
-            }
-        }
-        Check(ticks250ms <= 2, "TimeSync cadence: <= 2 ticks in a 250 ms window");
-
-        // The same 250 ms window on the DEFAULT 60 Hz clock — the old bug:
-        // proves the check would have caught MAJOR 1.
-        NetClock fast = NetClock();
-        int fastTicks250ms = 0;
-        for (u64 f = 0; f < 15; ++f) {
-            if (fast.Tick(f * NetClock::kIntervalUs)) {
-                ++fastTicks250ms;
-            }
-        }
-        Check(fastTicks250ms > 10, "regression guard: the old 60 Hz clock fires ~15x in 250 ms");
-
-        // Full seconds fire exactly once each (2 s at 60 Hz sim -> frames 60
-        // and 120; 120 is past the window, so 1 tick in 0..119 plus the 250 ms
-        // prefix already consumed). Continue the same clock: it must tick once
-        // per second and never burst.
-        int ticks1s = 0, ticks2s = 0;
-        for (u64 f = 15; f < 60; ++f) {
-            ticks1s += sync.Tick(f * NetClock::kIntervalUs) ? 1 : 0;
-        }
-        for (u64 f = 60; f < 120; ++f) {
-            ticks2s += sync.Tick(f * NetClock::kIntervalUs) ? 1 : 0;
-        }
-        Check(ticks1s == 0 && ticks2s == 1,
-            "TimeSync cadence: one tick at the 1 s boundary, none between");
-        Check(!sync.Tick(119 * NetClock::kIntervalUs + 1),
-            "TimeSync cadence: quiet just after the second boundary");
-
-        // Catch-up: a multi-second stall ticks ONCE (no burst).
-        NetClock gap = NetClock::AtRate(1);
-        Check(gap.Tick(0) == false && gap.Tick(4 * 1000000) == true && gap.Frame() == 1,
-            "TimeSync cadence: a 4 s stall catches up in a single tick");
-    }
-
-    // -- 2) The publish decision: 1 Hz cadence + immediate sends -----------
-    {
-        // Simulate 2 s of host publishing at 60 Hz with one stage change and
-        // one rate change injected. Cadence contributes the 1 s / 2 s sends;
-        // the stage/rate changes must still fire immediately (04 §4.1).
-        NetClock sync = NetClock::AtRate(1);
-        int sends = 0;
-        u8 rate = kTimeRateNormal, lastRate = kTimeRateNormal;
-        bool stageChanged = false;
-        for (u64 f = 0; f < 121; ++f) {  // 2 s + one frame: both boundaries
-            if (f == 30) {
-                stageChanged = true;  // stage load re-assert (04 §5.1)
-            }
-            if (f == 45) {
-                rate = kTimeRateFast;  // wolf-howl skip (04 §5.4)
-            }
-            if (TimeSyncDue(SyncDueInput{sync.Tick(f * NetClock::kIntervalUs),
-                                          stageChanged, rate, lastRate}))
-            {
-                ++sends;
-                lastRate = rate;
-            }
-            stageChanged = false;
-        }
-        // 2 cadence sends (f=60, f=120) + 1 stage + 1 rate.
-        Check(sends == 4, "TimeSync sends: 2 cadence + immediate stage + immediate rate");
-
-        // The immediate paths alone (no cadence ticks in a 250 ms window).
-        NetClock quiet = NetClock::AtRate(1);
-        int immediate = 0;
-        u8 r2 = kTimeRateNormal;
-        for (u64 f = 0; f < 15; ++f) {
-            const bool stage = (f == 5);
-            const u8 r = (f == 10) ? kTimeRateFrozen : r2;
-            if (TimeSyncDue(SyncDueInput{quiet.Tick(f * NetClock::kIntervalUs),
-                                          stage, r, r2}))
-            {
-                ++immediate;
-                r2 = r;
-            }
-        }
-        Check(immediate == 2, "immediate stage/rate sends still fire inside the 250 ms window");
-    }
-
-    // -- 3) DeriveWeather decision table (04 §4.3; deepseek M1) -----------
-    {
-        // (raincnt, snow, thunder, colpat, diceStage, diceMode) -> mode. The
-        // thunder-with-no-rain cases document that the MODE collapses to
-        // Cloudy/Clear while the wire still carries thunder=1 (NextThunderMode
-        // defers to that carried bit).
-        struct DeriveCase {
-            int raincnt, snow;
-            u8 thunder, colpat;
-            bool dice;
-            u8 diceMode;
-            u8 expectMode;
-            u16 expectIntensity;
-        };
-        const DeriveCase kCases[] = {
-            // clear / cloudy skies
-            {0, 0, 0, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 0},
-            {0, 0, 0, 1, false, 0, static_cast<u8>(WeatherMode::Cloudy), 0},
-            // thunder with no rain (deepseek M1): mode collapses, wire keeps
-            // thunder=1 + the palette colpat
-            {0, 0, 1, 1, false, 0, static_cast<u8>(WeatherMode::Cloudy), 0},
-            {0, 0, 1, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 0},
-            // rain branches (04 §4.3 table)
-            {40, 0, 0, 1, false, 0, static_cast<u8>(WeatherMode::RainLight), 40},
-            {250, 0, 0, 2, false, 0, static_cast<u8>(WeatherMode::RainHeavy), 250},
-            {10, 0, 1, 1, false, 0, static_cast<u8>(WeatherMode::ThunderLight), 10},
-            {250, 0, 1, 2, false, 0, static_cast<u8>(WeatherMode::ThunderHeavy), 250},
-            // colpat 0 + rain in the air = teardown drain
-            {5, 0, 0, 0, false, 0, static_cast<u8>(WeatherMode::Clear), 5},
-            // snow stages
-            {0, 300, 0, 1, false, 0, static_cast<u8>(WeatherMode::Snow), 300},
-            // dice stages map the machine directly (F_SP108/121/127)
-            {0, 0, 0, 0, true, 0, static_cast<u8>(WeatherMode::Clear), 0},
-            {0, 0, 0, 0, true, 1, static_cast<u8>(WeatherMode::Cloudy), 0},
-            {40, 0, 0, 0, true, 2, static_cast<u8>(WeatherMode::RainLight), 40},
-            {0, 0, 0, 0, true, 4, static_cast<u8>(WeatherMode::ThunderLight), 0},
-            {250, 0, 0, 0, true, 5, static_cast<u8>(WeatherMode::ThunderHeavy), 250},
-            {0, 0, 1, 0, true, 6, static_cast<u8>(WeatherMode::Clear), 0},  // UNK6 -> Clear
-        };
-        bool ok = true;
-        bool thunderCarried = true;
-        for (const auto& c : kCases) {
-            SkyDeriveInput in;
-            in.raincnt = c.raincnt;
-            in.snowCount = c.snow;
-            in.thunder = c.thunder;
-            in.colpat = c.colpat;
-            in.diceStage = c.dice;
-            in.diceMode = c.diceMode;
-            const DeriveResult r = DeriveWeatherFrom(in);
-            ok = ok && r.mode == c.expectMode && r.intensity == c.expectIntensity;
-            thunderCarried = thunderCarried && (r.thunder == (c.thunder != 0 ? 1 : 0));
-        }
-        Check(ok, "DeriveWeather mode/intensity table (incl. thunder-with-no-rain)");
-        Check(thunderCarried,
-            "DeriveWeather always carries the live thunder bit on the wire");
-    }
-
-    // -- 4) Defer-to-wire thunder policy (deepseek M1) ---------------------
-    {
-        // (wireMode, wireThunder, current) -> next mMode.
-        struct ThunderCase {
-            u8 mode, wireThunder, current, expect;
-        };
-        const ThunderCase kCases[] = {
-            // Cloudy: only clear when the wire says 0 (the fix — a held
-            // synced thunder with a Cloudy derivation must keep flashing)
-            {static_cast<u8>(WeatherMode::Cloudy), 1, 1, 1},
-            {static_cast<u8>(WeatherMode::Cloudy), 1, 0, 1},
-            {static_cast<u8>(WeatherMode::Cloudy), 0, 1, 0},
-            {static_cast<u8>(WeatherMode::Cloudy), 0, 2, 0},
-            // Clear: clears a 1 only when the wire says 0; kytag00's 2
-            // survives
-            {static_cast<u8>(WeatherMode::Clear), 1, 1, 1},
-            {static_cast<u8>(WeatherMode::Clear), 0, 1, 0},
-            {static_cast<u8>(WeatherMode::Clear), 0, 2, 2},
-            // thunder modes force 1
-            {static_cast<u8>(WeatherMode::ThunderLight), 1, 0, 1},
-            {static_cast<u8>(WeatherMode::ThunderHeavy), 1, 2, 1},
-            // rain/snow never touch it (kytag00 area state survives)
-            {static_cast<u8>(WeatherMode::RainLight), 0, 2, 2},
-            {static_cast<u8>(WeatherMode::Snow), 1, 2, 2},
-        };
-        bool ok = true;
-        for (const auto& c : kCases) {
-            ok = ok && NextThunderMode(c.mode, c.wireThunder, c.current) == c.expect;
-        }
-        Check(ok, "ThunderPerMode defers to the wire (clears only when thunder==0)");
-    }
-
-    // -- 5) Pond advance table (deepseek M3) -------------------------------
-    {
-        struct RateCase {
-            u8 rate;
-            f32 daytime;
-            bool pond;
-            f32 expect;
-        };
-        const RateCase kCases[] = {
-            {kTimeRateNormal, 123.0f, false, 0.012f},
-            {kTimeRateFast, 100.0f, false, 1.0f},
-            {kTimeRateFrozen, 100.0f, false, 0.0f},
-            // pond windows stay exact (vanilla triple/double)
-            {kTimeRatePond2x, 300.0f, true, 0.036f},
-            {kTimeRatePond2x, 45.0f, true, 0.036f},
-            {kTimeRatePond2x, 150.0f, true, 0.024f},
-            {kTimeRatePond2x, 180.0f, true, 0.024f},
-            // fallback outside the windows is vanilla 1x (the fix; was 2x)
-            {kTimeRatePond2x, 100.0f, true, 0.012f},
-            {kTimeRatePond2x, 240.0f, true, 0.012f},
-            // rate 3 on a non-pond stage (shouldn't happen; same 1x fallback)
-            {kTimeRatePond2x, 100.0f, false, 0.012f},
-        };
-        bool ok = true;
-        for (const auto& c : kCases) {
-            ok = ok && RatePerTick(c.rate, c.daytime, c.pond) == c.expect;
-        }
-        Check(ok, "AdvanceStep pond table (exact windows, vanilla 1x fallback)");
-    }
-
-    // -- 6) Seed-adoption decision (deepseek MINOR B) ----------------------
-    {
-        struct SeedCase {
-            bool timeValid;
-            bool timeChanged;
-            bool weatherChanged;
-            bool expectAdoptTime;
-            bool expectAdoptWeather;
-        };
-        // first-join adopts the clock (no TimeSync yet, world state present)
-        const SeedCase kCases[] = {
-            {false, true, true, true, true},
-            // a later roster-refresh with g_time.valid does NOT regress the
-            // clock (an unreliable TimeSync can overtake the reliable
-            // WorldInit it precedes)
-            {true, true, true, false, true},
-            // same-world-state re-seed with no actual change: nothing
-            {false, false, false, false, false},
-            // weather re-seeds unconditionally on change even when the clock
-            // is already valid
-            {true, false, true, false, true},
-        };
-        bool ok = true;
-        for (const auto& c : kCases) {
-            const SeedDecision d = SeedTargetsDecision(
-                SeedInput{c.timeValid, c.timeChanged, c.weatherChanged});
-            ok = ok && d.adoptTime == c.expectAdoptTime &&
-                 d.adoptWeather == c.expectAdoptWeather;
-        }
-        Check(ok,
-            "SeedTargetsDecision table (first-join adopts, later refresh does not, weather always)");
-    }
-
-    // -- 7) WeatherChange publish decision incl. the thunder edge ----------
-    //     (glm M3.5 MINOR 1): a thunder-only transition (kytag00 area-tag
-    //     arming / wether-proc case 5) must publish even when the derived
-    //     mode does not move. Non-tautological: the pre-fix mode-only gate
-    //     (without thunderChanged) returns false for the exact edge case.
-    {
-        // (modeChanged, snowDrift, stageChanged, thunderChanged) -> publish
-        struct PublishCase {
-            bool mode, snow, stage, thunder, expect;
-        };
-        const PublishCase kCases[] = {
-            // thunder-only edge: the fix publishes, the old gate would not
-            {false, false, false, true, true},
-            // unchanged sky: nothing
-            {false, false, false, false, false},
-            // ordinary mode change / stage change / snow drift still publish
-            {true, false, false, false, true},
-            {false, false, true, false, true},
-            {false, true, false, false, true},
-        };
-        bool ok = true;
-        bool oldGateMisses = false;
-        for (const auto& c : kCases) {
-            ok = ok &&
-                 WeatherPublishDue(WeatherPublishInput{c.mode, c.snow, c.stage, c.thunder}) ==
-                     c.expect;
-            // the pre-fix mode-only gate: mode || snow || stage
-            if (!c.mode && !c.snow && !c.stage && c.thunder) {
-                oldGateMisses = true;  // this case is exactly what the fix adds
-            }
-        }
-        Check(ok, "WeatherPublishDue table (thunder-only edge publishes)");
-        Check(oldGateMisses,
-            "thunder-only case is NOT publishable by the old mode-only gate (regression guard)");
-    }
-}
-
-/// slot after its ~5 s peer timeout). The generation bumps on release and
-/// reassign; A's stale snapshot is dropped at Poll time and D's fresh
-/// traffic flows normally.
+/// slot after its ~5 s peer timeout). The generation bumps on reassign; A's
+/// stale snapshot is dropped at Poll time and D's fresh traffic flows
+/// normally.
 void RunGenerationGuardCheck() {
     std::printf("generation: no stale delivery across peer-slot reuse\n");
     auto hostT = std::make_unique<Transport>();
@@ -1464,8 +1022,11 @@ void RunGenerationGuardCheck() {
                    },
                    10000, pkt),
             "host sees D connected on the reused slot 0");
-        // Drain whatever remains: A's stale snapshot must have been dropped by
-        // the generation guard, never delivered as if from D.
+        // Drain whatever remains after D occupies the slot. A's snapshot
+        // must not be delivered as if it came from D. It may already have
+        // been consumed as A's last packet (generation is not bumped on
+        // release — JoinReject must still land) or dropped here by the
+        // assign-time generation bump.
         bool sawStale = false;
         InboundPacket p;
         while (hostT->Poll(p)) {
@@ -1474,8 +1035,6 @@ void RunGenerationGuardCheck() {
             }
         }
         Check(!sawStale, "host never delivered A's stale snapshot to D");
-        Check(hostT->InboundGenerationDropped() == 1,
-            "stale inbound packet dropped by the generation guard");
 
         // D's fresh snapshot crosses the same slot fine.
         const u8 fresh[] = {'F', 'R', 'E', 'S', 'H'};
@@ -1903,93 +1462,90 @@ void RunM46SessionRestartCheck() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// M4 — LAN discovery (HostAnnounce)
-// ---------------------------------------------------------------------------
-
-void RunM4DiscoveryCheck() {
-    std::printf("m4: LAN discovery HostAnnounce (loopback)\n");
-    using namespace dusk::net::discovery;
-
-    Listener listener;
-    listener.Start();
-    const u64 before = AnnouncesReceived();
-    Announcer announcer;
-    // M4.5 (review MINOR 6): seed the player count before Start so the very
-    // first datagram never advertises 0 (ThreadMain's first send already
-    // reads the atomic). This also makes the players==2 check below free of
-    // the old SetPlayers-after-Start race.
-    announcer.SetPlayers(2);
-    announcer.Start("Dusklight Test Session", 44770, 4);
-
-    // The announcer broadcasts every 2 s (LAN + loopback targets); the
-    // loopback send is deterministic on one machine, so a few seconds of
-    // polling is ample.
-    std::vector<DiscoveredSession> found;
-    const u64 deadline = NowMs() + 8000;
-    while (NowMs() < deadline) {
-        found = listener.Sessions();
-        if (!found.empty()) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+void RunSessionStartGuardCheck() {
+    std::printf("session: start guards (empty join host, host:port refused)\n");
+    {
+        Session cli;
+        SessionConfig cfg;
+        cfg.joinHost = "   ";
+        Check(!cli.StartClient(cfg), "StartClient refuses whitespace-only join host");
+        Check(std::strcmp(cli.startFailureReason(), "join host is empty") == 0,
+            "empty join-host failure reason");
     }
-    Check(!found.empty(), "listener discovered the announcing host on loopback");
-    if (!found.empty()) {
-        const auto& ds = found.front();
-        Check(ds.port == 44770, "announce carries the session port");
-        Check(ds.players == 2 && ds.maxPlayers == 4, "announce carries players/max");
-        Check(std::strcmp(ds.name, "Dusklight Test Session") == 0,
-            "announce carries the session name");
+    {
+        Session cli;
+        SessionConfig cfg;
+        cfg.joinHost = "127.0.0.1:44770";
+        cfg.port = 44770;
+        Check(!cli.StartClient(cfg), "StartClient refuses host:port in joinHost");
+        Check(std::strstr(cli.startFailureReason(), "net.hostPort") != nullptr,
+            "host:port failure reason points at Host Port");
     }
-    Check(AnnouncesReceived() >= before + 1, "accepted datagrams counted");
+    {
+        Session host;
+        SessionConfig hcfg;
+        hcfg.port = 0;
+        Check(host.StartHost(hcfg), "ephemeral StartHost still allowed");
+        const u16 port = host.boundPort();
+        Check(port != 0, "ephemeral bind is not port 0");
+        Session cli;
+        SessionConfig ccfg;
+        ccfg.joinHost = "127.0.0.1";
+        ccfg.port = port;
+        Check(cli.StartClient(ccfg), "StartClient accepts IP + port fields");
+        cli.Stop();
+        host.Stop();
+    }
+}
 
-    announcer.Stop();
-    listener.Stop();
+void RunConnectingTimeoutCheck() {
+    std::printf("session: Connecting deadline ends an unreachable host\n");
+    Session cli;
+    SessionConfig cfg;
+    cfg.joinHost = "192.0.2.1";  // TEST-NET-1, not a local listener
+    cfg.port = 44770;
+    cfg.joinTimeoutMs = 250;
+    Check(cli.StartClient(cfg), "client starts Connecting to unroutable host");
+    Check(cli.state() == SessionState::Connecting, "state is Connecting");
+    const u64 deadline = NowMs() + 2000;
+    while (NowMs() < deadline && cli.state() == SessionState::Connecting) {
+        cli.Update();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Check(cli.state() == SessionState::Ended, "Connecting deadline (or RST) ends the session");
+    Check(cli.startFailureReason() != nullptr && cli.startFailureReason()[0] != '\0',
+        "pre-join loss sets a start-failure reason");
+    Check(!cli.transportRunning(), "transport is torn down");
+    cli.Stop();
 }
 
 // --------------------------------------------------------------------------
-// v7 (M5.1) — net-off ghost regression row (d-m8)
+// v9 — compact ids + off-session send refuse
 // --------------------------------------------------------------------------
 
-/// With the session OFF (never started — the `net.enabled=false` default),
-/// there are ZERO ghost sends: the idle Session refuses SendGameMessage for
-/// both ghost message types, and nothing else can put them on the wire (the
-/// M2 senders are shredded; the M5.2 sender does not exist yet). The game-
-/// side halves of the d-m8 contract — zero registry entries and
-/// `myRoomSearchEnemy`/ALLDIE untouched — are enforced by construction: the
-/// enemy stub's onGameFrame early-returns when the session is off, and the
-/// fopAc_Execute / d_cc_s / d_a_alldie coop hooks are deleted, so no coop
-/// code runs on the vanilla path at all.
-void RunV7NetOffRegression() {
-    std::printf("v7: net-off regression (d-m8) — zero ghost sends, dead combat/ownership ids\n");
-    Check(kProtocolVersion == 7, "protocol version is v7");
+/// Protocol v11 is 9 types (JoinRequest..HorseState); v9 deleted
+/// GhostSnapshot/EnemyEvent/time/weather. An idle session refuses every game
+/// send. v10 only grew PlayerEvent's payload (stage name). v11 added HorseState.
+void RunV9WireRegression() {
+    std::printf("v11: compact ids, HorseState, dead ghost/combat/time wire, off-session refuse\n");
+    Check(kProtocolVersion == 11, "protocol version is v11");
     Check(static_cast<u16>(MsgType::JoinRequest) == 1 &&
-              static_cast<u16>(MsgType::WeatherChange) == 13,
-        "message ids compact 1..13 (16 -> 13 types)");
+              static_cast<u16>(MsgType::HorseState) == 9,
+        "message ids compact 1..9");
 
-    // An idle (never-started) session refuses every game send — the net-off
-    // zero-ghost-sends guarantee at the session boundary.
     Session idle;
-    PayloadUnion ghost = {};
-    ghost.ghostSnapshot.senderId = 1;
-    ghost.ghostSnapshot.entityId = 0x0203;
-    PayloadUnion died = {};
-    died.enemyEvent.senderId = 1;
-    died.enemyEvent.eventId = static_cast<u8>(EnemyEventId::Died);
-    died.enemyEvent.entityId = 0x0203;
-    Check(!idle.SendGameMessage(MsgType::GhostSnapshot, ghost),
-        "off-session: GhostSnapshot send refused (zero ghost sends)");
-    Check(!idle.SendGameMessage(MsgType::EnemyEvent, died),
-        "off-session: EnemyEvent send refused");
+    PayloadUnion pose = {};
+    Check(!idle.SendGameMessage(MsgType::PlayerState, pose),
+        "off-session: PlayerState send refused");
 
-    // The removed combat/ownership wire ids are dead even at the protocol
-    // level (the exact-size rejection rows live in RunProtocolChecks; this
-    // pins the id-space boundary the shred relies on).
     Check(WireSize(static_cast<MsgType>(16)) == 0,
         "no wire size exists for the removed RoomOwnership id");
-    Check(WireSize(static_cast<MsgType>(11)) == 8,
-        "wire id 11 is TimeSync now (8 B), not CombatIntent");
+    Check(WireSize(MsgType::HorseState) == HorseStateWireSize(),
+        "wire id 9 is HorseState");
+    Check(WireSize(static_cast<MsgType>(10)) == 0,
+        "wire id 10 is gone (was EnemyEvent)");
+    Check(WireSize(static_cast<MsgType>(11)) == 0,
+        "wire id 11 is gone (was CombatIntent, then TimeSync)");
 }
 
 }  // namespace
@@ -2016,12 +1572,11 @@ int main() {
     RunOversizedMetricCheck();
     RunHandshakeDemo();
     RunGameMessageDemo();
-    RunV7NetOffRegression();
-    RunM3TimeWeatherCheck();
-    RunM35TimeWeatherFixCheck();
+    RunV9WireRegression();
     RunM4WorldStageCheck();
     RunM46SessionRestartCheck();
-    RunM4DiscoveryCheck();
+    RunSessionStartGuardCheck();
+    RunConnectingTimeoutCheck();
 
     dusk::net::shutdown();
 

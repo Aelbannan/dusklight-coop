@@ -1477,6 +1477,11 @@ public:
     BOOL checkHorseStart(u32 i_lastMode, int i_startMode);
     int setStartProcInit();
     int create();
+#if TARGET_PC
+    /// Clears the shared create-phase wait flag. A puppet create abort can
+    /// otherwise leave it stuck TRUE and skip phase-1 init on the next ALINK.
+    static void clearCreateBgWait();
+#endif
     int setRoomInfo();
     void setShapeAngleOnGround();
     void setStepsOffset();

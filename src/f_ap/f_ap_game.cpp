@@ -822,7 +822,7 @@ static void duskExecute() {
 
     // Network co-op (M1): session lifecycle + puppet spawn/despawn + receive
     // handling, once per game frame before the actor phase. No-op when
-    // net.enabled is false (single-player stays vanilla).
+    // no session is running (single-player stays vanilla).
     dusk::coop::onGameFrame();
 }
 #endif

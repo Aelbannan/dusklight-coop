@@ -1,63 +1,36 @@
 # Testing the networked co-op (net-coop)
 
-How to build, run, and verify the networked co-op milestones. Current status
-flag at the top; check it before testing.
+How to build, run, and verify the networked co-op. Current status flag at
+the top; check it before testing.
 
-> **Status: M0–M4 + M4.5 fix pass + M4.6 capstone pass + M5.1 SHRED landed
-> (branch `net-coop`).** M5.1 is the M5 pivot (`05-ghosts.md`): the
-> M2/M3/M4 owner-authoritative enemy/combat/room-ownership authority stack
-> was DELETED and everything reverted to vanilla. Co-op is now **parallel
-> worlds + ghost spectating** — every machine sims its own enemies
-> natively; only player puppets, time/weather, and (M5.2+, not yet) ghost
-> mirrors cross the wire. Protocol is now **v7 (13 message types)**:
-> `CombatIntent`/`CombatResult`/`RoomOwnership` are gone, `EnemySnapshot`→
-> `GhostSnapshot` (34 B). The M2/M4 in-game rows below describe the DEAD
-> model and apply only to the pre-M5.1 history; the M5 test list lives in
-> `05-ghosts.md §5/§7`. The pre-M5.1 note from the M4.5 capstone (stay-put
-> join, room-scoped events) is retained for history; none of the
-> enemy/combat/ownership mechanics below survive M5.1.
+> **Live model: parallel worlds + player/horse puppets. Protocol v11 (9
+> message types).** Every machine sims its own enemies, combat, clock, sky,
+> and chests. Only Link/Epona puppets cross the wire (star-relayed
+> `PlayerState` / `PlayerEvent` / `HorseState`). Stay-put join: a joining
+> client stays in its own stage; players meet by traveling. Ghost
+> spectating, LAN discovery, and the M2/M3/M4 owner-authoritative
+> enemy/combat/room-ownership stack were designed then shredded or never
+> built — do not test them. v10 added a stage name on `PlayerEvent`; v11
+> added `HorseState`.
 >
-> *(Kept for history — M4.5 removed the join-warp by user decision; stay-put
-> join policy (a joining client stays in its own stage; players meet by
-> traveling); room-scoped `EnemyEvent`; gated the SceneChange room-table
-> sniff; swept all 16 message types; seeded the announce player count.)*
->
-> **M4.6 (capstone — review-full-deepseek-v4-flash-0731.md +
-> review-full-glm-5.2.md):** the full-implementation pass. MAJOR 1 —
-> `Session::Stop()` always stops the transport when running (a session that
-> ended from the host's side — SessionEnd / connection loss — can now start a
-> new session in the same process; selftest `RunM46SessionRestartCheck` covers
-> both the graceful and the peer-timeout paths). MAJOR 2 — `PollHostDeaths`
-> no longer derefs a freed actor: the per-type adapter is stored on the entry
-> at registration (was a use-after-free on every host enemy kill). MAJOR 3 —
-> non-owner enemies are registered on the FIRST frame of a room change (not
-> the 15-frame cadence) and freeze optimistically when unregistered in a
-> non-owned room (no native-AI damage window). The MINOR cluster: SceneChange
-> receive gate (same-stage only), dead `onRoomUnload` deleted, per-stage reset
-> keyed on (stage, room), join/start-failure toasts + distinct start-failure
-> logging + failed-start reset on net.* var change, spawn-limiter reset on
-> material movement, node-stable enemy registry (std::map), 2017-B
-> PlayerState / 44-B EnemySnapshot doc corrections, live announcer player
-> count, RoomClear + cross-stage selftest rows, one sender-gate
-> implementation, v6 `scene` semantic in the version history, stale-ownership
-> sweep, `sendPlayerState` isPuppet guard, RoomClear gate < 128, OnWorldInit
-> join-time-reference comment, 03-enemies.md supersede banners, dead-wire
-> documentation (CombatResult / aggro / type). The selftest (361 checks) is
-> green on a forced rebuild; net-off boot is untouched.
+> Historical notes (not live product): M4.5 stay-put join; M4.6 session
+> restart via `Session::Stop()`; M5.1 shredded the enemy/ownership stack.
+> Those reviews still describe dead combat/time/discovery code.
 
 ## 0. Config vars (defaults)
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `net.enabled` | `false` | master switch; `false` = byte-for-byte vanilla single-player |
-| `net.role` | `"host"` | `"host"` or `"client"` |
-| `net.hostPort` | `44770` | host: the port this instance binds (and advertises in the discovery announce). **client: the HOST's port to connect to** — `net.joinHost:net.hostPort`. The client transport never binds, so the same value on both machines is correct (and required on loopback). 44771 is reserved for the discovery listener |
-| `net.joinHost` | `127.0.0.1` | what a client connects to (LAN IP for remote) |
-| `net.sessionName` | `"Dusklight co-op"` | display name (host: advertised; client: player name) |
+| `net.autoConnect` | `false` | On launch, start a **client** to `joinHost:hostPort`. Does not auto-host. In-game toggle does not start/stop a session. |
+| `net.connected` | `false` | Not persisted by the game. `--cvar net.connected=true` starts a session this run using `net.role`. |
+| `net.role` | `"host"` | `"host"` or `"client"`; set by Host / Connect. Autostart from `autoConnect` always connects as client. |
+| `net.hostPort` | `44770` | Host: bind port. Client: host's port (`joinHost`:`hostPort`). Client transport never binds. |
+| `net.joinHost` | `127.0.0.1` | Client connect IP or hostname (not `host:port`). |
+| `net.sessionName` | `"Dusklight co-op"` | Host roster name / client player name |
 
-All five are also editable in the in-game Settings → Network tab (and the
-client's "Discovered Sessions" list shows LAN hosts found by the announce
-listener — join by copying the IP into `net.joinHost`).
+Legacy `net.enabled` in `config.json` migrates: `true` + `role=client` → `autoConnect`; `true` + `role=host` does not auto-host. `--cvar net.enabled=true` still starts a session this process.
+
+These are editable in Settings → Network (except `connected` / `role` as standalone rows; Host and Connect set role).
 
 ## 1. Automated selftest (fast, no game)
 
@@ -66,23 +39,17 @@ ninja -C build/macos-default-relwithdebinfo dusk_net_selftest
 ./build/macos-default-relwithdebinfo/dusk_net_selftest
 ```
 
-Expect `PASS: all checks succeeded`, exit 0. Covers: all message round-trips
-(byte-identical serialize→deserialize, incl. the M4 RoomOwnership message),
-handshake (JoinRequest → JoinAccept+WorldInit, both rejects, PlayerLeave
-relay, SessionEnd), roster-refresh on join (3-player visibility), and the
-relay policies (PlayerState/PlayerEvent star-relay; CombatIntent routed to
-the ROOM owner; EnemySnapshot room-scoped; CombatResult/EnemyEvent
-simulcast; TimeSync/WeatherChange host→all), the time/weather contract
-(1 Hz TimeSync cadence, thunder/pond/seed tables), M4 room ownership
-(sticky first-in, host-default, transfer on leave/disconnect, intent
-routing to a non-host owner, same-room snapshot/EVENT scoping, the
-cross-stage SceneChange gate, the M4.6 RoomClear receive-gate rows and the
-explicit cross-stage EnemyEvent row), the worldStage carry (stay-put join),
-entity-id stability across takeover, LAN discovery announce/receive over
-loopback, and the M4.6 session-restart check (a client whose session ended
-from the host's side — graceful SessionEnd and hard connection loss — gets
-its transport torn down by Stop() and starts a second/third session in the
-same process).
+Expect `PASS: all checks succeeded`, exit 0. Covers: all 9 v11 message
+round-trips (byte-identical serialize→deserialize, including `HorseState`),
+NaN/Inf pose rejection, handshake (JoinRequest → JoinAccept+WorldInit, both
+rejects, PlayerLeave relay, SessionEnd), roster-refresh on join (3-player
+visibility), PlayerState/PlayerEvent/HorseState star-relay, snapshot rings
+that replace the newest matching `playerId` under pressure, the worldStage
+carry (stay-put join), and the session-restart check (a client whose session
+ended from the host's side — graceful SessionEnd and hard connection loss —
+gets its transport torn down by `Stop()` and starts a second/third session
+in the same process). Combat, ownership, time/weather, ghost, and LAN
+discovery messages are out of range on the wire and must stay rejected.
 
 ## 2. Full build
 
@@ -104,44 +71,39 @@ instance its own `net.hostPort` so the two ENet hosts don't clash.
 
 ```sh
 build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
-  --cvar net.enabled=true --cvar net.role=host --cvar net.hostPort=44770
+  --cvar net.connected=true --cvar net.role=host --cvar net.hostPort=44770
 ```
 
 **Terminal 2 — client:**
 
 ```sh
 build/macos-default-relwithdebinfo/Dusklight.app/Contents/MacOS/Dusklight \
-  --cvar net.enabled=true --cvar net.role=client --cvar net.hostPort=44770 \
+  --cvar net.connected=true --cvar net.role=client --cvar net.hostPort=44770 \
   --cvar net.joinHost=127.0.0.1
 ```
 
 Note `net.hostPort` on the client is the **host's** port (the connect target:
-`net.joinHost:net.hostPort`); the client transport never binds, so host and
-client can share 44770 on one machine. Port 44771 is the discovery
-listener's — a second client on the same machine is fine (SO_REUSEADDR).
+`net.joinHost`:`net.hostPort`); the client transport never binds, so host and
+client can share 44770 on one machine.
 
 Coop/session logs print to the terminal. Watch for, in order:
 
 1. `coop: host session started (port 44770)` / `coop: client session started`
-2. `discovery: announcing 'Dusklight co-op' on port 44770` (host) and
-   `discovery: found session ... at 127.0.0.1:44770` (client — same machine
-   discovery works via the loopback announce)
-3. On join: `puppet for player X active (pid N)` on **both** instances
-4. `apply player X to pos=(…)` — the client applies the host's pose, and vice
-   versa (the applied position must equal the received position)
+2. On join: `puppet for player X active (pid N)` on **both** instances
+3. The remote Link moves with the other player (no 1 Hz apply log; watch the
+   puppet on screen)
 
-**In-game checks per milestone:**
+**In-game checks (live model only):**
 
-| Milestone | What to verify |
-|-----------|----------------|
-| M1 players | Second player's Link appears, mirrors the other's movement/pose exactly; frozen during the local player's cutscenes; join/leave clean (puppet spawns/despawns); save file mtime unchanged (no host-save corruption) |
-| M2 enemies | Host fights an enemy → client sees the same enemy at the same HP; a client's hits kill it (host applies); drops spawn on BOTH; room-clear doors open together |
-| M2.5 targeting | Kite a whitelisted enemy (Armos `E_AI`, Kargorok `E_YC`, …) past the client's Link → it turns and attacks the NEAREST player, not just the host |
-| M3 time/weather | Same sky on both; rain arrives on both; a cutscene freezes the clock on both; a stage transition re-asserts the same time |
-| M4.5 join (stay-put) | Client joins a host in ANOTHER stage → both players STAY in their own stages (no warp, no toast, no teleport-back leash; the old wander-off-and-get-yanked behavior is gone), puppets stay hidden until both travel to a shared stage, and room ownership + combat work as normal once they meet. Save mtime untouched |
-| M4 host-leave | Host quits or kills the process → client shows a "Host left/disconnected" toast, puppets despawn, and single-player continues normally |
-| M4 ownership | Two players in different rooms of the same stage: each room's enemies sim on that room's owner (first player in, host wins its own room); the other player sees them frozen; combat from either side lands via the room-owner route; the owner leaving transfers the room |
-| M4 LAN discovery | Host running: client's log shows `discovery: found session 'Dusklight co-op' at <ip>:<port> (players n/m)` (glue line emitted by `discovery.cpp`); the Settings → Network tab lists it |
+| What | What to verify |
+|------|----------------|
+| Players | Second player's Link appears, mirrors the other's movement/pose; join/leave clean (puppet spawns/despawns); save file mtime unchanged (no host-save corruption) |
+| Appearance | Remote tunic/sword/shield match after stay-put join; swapping clothes on one machine does not swap the local player's |
+| Horse | Remote Epona follows the rider; local Epona saddle/bag materials stay correct while a horse puppet is on screen |
+| Stay-put join | Client joins a host in ANOTHER stage → both players STAY in their own stages (no warp); puppets stay hidden until both travel to a shared stage |
+| Host-leave | Host quits or kills the process → client shows a "Host left/disconnected" toast, puppets despawn, and single-player continues normally |
+| LAN join | Client `--cvar net.joinHost=127.0.0.1` (or the host's LAN IP) + Connect / `net.connected`. There is no LAN discovery broadcast — the IP is typed. |
+| Parallel worlds | Enemies, chests, clock, and sky stay **local**. Do not expect shared HP, shared drops, shared rain, or enemy aggro on the remote puppet. |
 | Save integrity | `USA/Card A/*.gci` mtime unchanged across all runs |
 
 ## 4. Two machines on LAN
@@ -157,9 +119,9 @@ Same ports are fine (different machines). Both need their own copy of the game
 
 ## 5. Regression sanity
 
-With `net.enabled=false` (default) the game must play exactly like vanilla —
-that is the baseline every milestone must preserve. Boot it once with no cvars
-and spot-check a normal stage load.
+With no session (default: `net.autoConnect=false`, no Host/Connect) the game
+must play exactly like vanilla — that is the baseline every milestone must
+preserve. Boot it once with no cvars and spot-check a normal stage load.
 
 ## 6. If something fails
 

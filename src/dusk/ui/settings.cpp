@@ -12,14 +12,18 @@
 #include "dusk/data.hpp"
 #include "dusk/file_select.hpp"
 #include "dusk/net/config.h"
-#include "dusk/net/discovery.h"
+#include "dusk/net/local_ipv4.h"
+#include "dusk/net/protocol.h"
+#include "dusk/coop/coop.h"
 #include "dusk/imgui/ImGuiEngine.hpp"
 #include "dusk/io.hpp"
 #include "dusk/livesplit.h"
 #include "dusk/discord_presence.hpp"
+#include "dusk/main.h"
 #include "dusk/speedrun.h"
 #include "graphics_tuner.hpp"
 #include "m_Do/m_Do_main.h"
+#include "m_Do/m_Do_audio.h"
 #include "menu_bar.hpp"
 #include "modal.hpp"
 #include "number_button.hpp"
@@ -39,7 +43,9 @@
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <filesystem>
+#include <string>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -253,6 +259,202 @@ public:
 private:
     Rml::String mCurrentRml;
 };
+
+class SessionStatusText : public Component {
+public:
+    explicit SessionStatusText(Rml::Element* parent) : Component(append(parent, "div")) {}
+
+    bool focus() override { return false; }
+
+    void update() override {
+        const Rml::String rml = Rml::String("Status: ") + dusk::coop::sessionStatusLabel();
+        if (rml != mCurrentRml) {
+            mRoot->SetInnerRML(escape(rml));
+            mCurrentRml = rml;
+        }
+        Component::update();
+    }
+
+private:
+    Rml::String mCurrentRml;
+};
+
+void confirm_session_restart(std::function<void()> proceed) {
+    if (!dusk::coop::sessionWouldRestart()) {
+        proceed();
+        return;
+    }
+    auto dismiss = [](Modal& modal) {
+        mDoAud_seStartMenu(kSoundWindowClose);
+        modal.pop();
+    };
+    const char* body = dusk::coop::hostRole()
+                           ? "This restarts the session. Other players will be disconnected."
+                           : "This disconnects you and starts a new session with the settings "
+                             "above.";
+    push_document(std::make_unique<Modal>(Modal::Props{
+        .title = "Restart session?",
+        .bodyRml = body,
+        .actions =
+            {
+                ModalAction{
+                    .label = "Cancel",
+                    .onPressed = dismiss,
+                },
+                ModalAction{
+                    .label = "Restart",
+                    .onPressed =
+                        [proceed = std::move(proceed), dismiss](Modal& modal) {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            dismiss(modal);
+                            proceed();
+                        },
+                },
+            },
+        .onDismiss = dismiss,
+        .icon = "warning",
+    }));
+}
+
+void show_network_error_modal(std::string_view message) {
+    auto dismiss = [](Modal& modal) {
+        mDoAud_seStartMenu(kSoundWindowClose);
+        modal.pop();
+    };
+    push_document(std::make_unique<Modal>(Modal::Props{
+        .title = "Cannot start session",
+        .bodyRml = escape(message),
+        .actions =
+            {
+                ModalAction{
+                    .label = "OK",
+                    .onPressed = dismiss,
+                },
+            },
+        .onDismiss = dismiss,
+        .icon = "warning",
+    }));
+    if (auto* doc = top_document()) {
+        doc->focus();
+    }
+}
+
+void confirm_autoconnect_off_disconnect() {
+    if (!dusk::coop::connected() && !dusk::coop::sessionStarted()) {
+        return;
+    }
+    auto dismiss = [](Modal& modal) {
+        mDoAud_seStartMenu(kSoundWindowClose);
+        modal.pop();
+    };
+    push_document(std::make_unique<Modal>(Modal::Props{
+        .title = "Stop this session?",
+        .bodyRml = "Auto-connect on launch is now off. Disconnect this session too, or keep it "
+                   "until you press Disconnect?",
+        .actions =
+            {
+                ModalAction{
+                    .label = "Keep session",
+                    .onPressed = dismiss,
+                },
+                ModalAction{
+                    .label = "Disconnect",
+                    .onPressed =
+                        [dismiss](Modal& modal) {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            dismiss(modal);
+                            dusk::coop::requestDisconnect();
+                        },
+                },
+            },
+        .onDismiss = dismiss,
+        .icon = "warning",
+    }));
+}
+
+std::string trim_copy(std::string s) {
+    const auto begin = s.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(begin, end - begin + 1);
+}
+
+std::string truncate_utf8_bytes(const std::string& s, size_t maxBytes) {
+    if (s.size() <= maxBytes) {
+        return s;
+    }
+    size_t i = maxBytes;
+    while (i > 0 && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80) {
+        --i;
+    }
+    return s.substr(0, i);
+}
+
+void apply_join_host(Rml::String value) {
+    std::string host = trim_copy(std::string(value.c_str()));
+    const auto colon = host.find(':');
+    if (colon != std::string::npos) {
+        if (host.find(':', colon + 1) != std::string::npos) {
+            show_network_error_modal(
+                "Join Host IP is an IPv4 address or hostname. IPv6 is not supported. Put the "
+                "port in Port.");
+            return;
+        }
+        const std::string name = host.substr(0, colon);
+        const std::string portStr = host.substr(colon + 1);
+        int port = 0;
+        const char* begin = portStr.data();
+        const char* end = begin + portStr.size();
+        const auto parsed = std::from_chars(begin, end, port);
+        if (name.empty() || parsed.ec != std::errc() || parsed.ptr != end || port < 1 ||
+            port > 65535)
+        {
+            show_network_error_modal("Put the port in Port (1–65535).");
+            return;
+        }
+        dusk::net::config::joinHost.setValue(name);
+        dusk::net::config::hostPort.setValue(static_cast<u16>(port));
+        config::save();
+        return;
+    }
+    dusk::net::config::joinHost.setValue(host);
+    config::save();
+}
+
+void confirm_host_disconnect(std::function<void()> proceed) {
+    if (!dusk::coop::hostRole()) {
+        proceed();
+        return;
+    }
+    auto dismiss = [](Modal& modal) {
+        mDoAud_seStartMenu(kSoundWindowClose);
+        modal.pop();
+    };
+    push_document(std::make_unique<Modal>(Modal::Props{
+        .title = "End session?",
+        .bodyRml = "This ends the session. Other players will be disconnected.",
+        .actions =
+            {
+                ModalAction{
+                    .label = "Cancel",
+                    .onPressed = dismiss,
+                },
+                ModalAction{
+                    .label = "Disconnect",
+                    .onPressed =
+                        [proceed = std::move(proceed), dismiss](Modal& modal) {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            dismiss(modal);
+                            proceed();
+                        },
+                },
+            },
+        .onDismiss = dismiss,
+        .icon = "warning",
+    }));
+}
 
 void show_data_folder_error_modal(std::string_view message) {
     auto dismiss = [](Modal& modal) {
@@ -1531,50 +1733,33 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "Disables the game HUD and all background music.<br/><br/>Useful for recording footage.");
     });
 
-    // M4: network co-op settings — the net.* CVars (config.cpp) in a minimal
-    // surface. Most take effect on the next session start (a running session
-    // is not reconfigured mid-game). Discovered sessions are listed here so a
-    // host on the LAN can be joined by IP without typing the address.
+    // Network co-op: Auto-connect on launch is persisted client autostart.
+    // Host / Connect set this-process connected; Disconnect clears it without
+    // touching Auto-connect.
     add_tab("Network", [this](Rml::Element* content) {
         auto& leftPane = add_child<Pane>(content, Pane::Type::Controlled);
         auto& rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
 
         leftPane.add_section("Session");
-        config_bool_select(leftPane, rightPane, dusk::net::config::enabled,
+        config_bool_select(leftPane, rightPane, dusk::net::config::autoConnect,
             {
-                .key = "Co-op Networking",
+                .key = "Auto-connect on launch",
                 .helpText =
-                    "Master switch for LAN co-op. Off = byte-for-byte vanilla single-player.",
-            });
-        leftPane.register_control(
-            leftPane.add_select_button({
-                .key = "Role",
-                .getValue = [] { return Rml::String(dusk::net::config::role.getValue()); },
-                .isModified =
-                    [] { return dusk::net::config::role.getValue() != "host"; },
-            }),
-            rightPane,
-            [](Pane& pane) {
-                pane.add_button({
-                        .text = "Host",
-                        .isSelected = [] { return dusk::net::config::role.getValue() == "host"; },
-                    })
-                    .on_pressed([] {
-                        mDoAud_seStartMenu(kSoundItemChange);
-                        dusk::net::config::role.setValue("host");
-                        config::save();
-                    });
-                pane.add_button({
-                        .text = "Client",
-                        .isSelected =
-                            [] { return dusk::net::config::role.getValue() == "client"; },
-                    })
-                    .on_pressed([] {
-                        mDoAud_seStartMenu(kSoundItemChange);
-                        dusk::net::config::role.setValue("client");
-                        config::save();
-                    });
-                pane.add_text("Host listens for joins; Client connects to the join host IP.");
+                    "When the game launches, connect as a client to Join Host IP on Port. "
+                    "Does not host. Turning this on in-game does not start a session; "
+                    "turning it off does not stop one — you will be asked. Press Host, "
+                    "Connect, or Disconnect for this session."
+                    "<br/><br/>Other players' Links are shown as puppets. Each player "
+                    "keeps their own save, inventory, time of day, weather, and enemies. "
+                    "Joining does not warp you to the host; meet by traveling to the "
+                    "same stage. There is no password — anyone on the LAN who has the "
+                    "host's IPv4 and Port can join.",
+                .onChange =
+                    [](bool enabled) {
+                        if (!enabled) {
+                            confirm_autoconnect_off_disconnect();
+                        }
+                    },
             });
         leftPane.register_control(
             leftPane.add_child<StringButton>(StringButton::Props{
@@ -1582,70 +1767,154 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 .getValue = [] { return Rml::String(dusk::net::config::sessionName.getValue()); },
                 .setValue =
                     [](Rml::String value) {
-                        dusk::net::config::sessionName.setValue(value.c_str());
+                        dusk::net::config::sessionName.setValue(
+                            truncate_utf8_bytes(std::string(value.c_str()),
+                                dusk::net::kMaxNameLength - 1)
+                                .c_str());
                         config::save();
+                    },
+                .isModified =
+                    [] {
+                        return dusk::net::config::sessionName.getValue() !=
+                               dusk::net::config::sessionName.getDefaultValue();
                     },
                 .maxLength = 31,
             }),
             rightPane,
             [](Pane& pane) {
-                pane.add_text("Host: advertised in the LAN discovery announce. Client: your "
-                              "player name in the session.");
+                pane.add_text("Your name in the session. Applied when you press Host or Connect.");
             });
         leftPane.register_control(
             leftPane.add_child<NumberButton>(NumberButton::Props{
-                .key = "Host Port",
+                .key = "Port",
                 .getValue = [] { return static_cast<int>(dusk::net::config::hostPort.getValue()); },
                 .setValue =
                     [](int value) {
-                        if (value >= 0 && value <= 65535) {
+                        if (value >= 1 && value <= 65535) {
                             dusk::net::config::hostPort.setValue(static_cast<u16>(value));
                             config::save();
                         }
                     },
+                .isModified =
+                    [] {
+                        return dusk::net::config::hostPort.getValue() !=
+                               dusk::net::config::hostPort.getDefaultValue();
+                    },
+                .min = 1,
                 .max = 65535,
             }),
             rightPane,
             [](Pane& pane) {
-                pane.add_text("Host: the port this instance binds (default 44770; 44771 is "
-                              "reserved for the LAN discovery announce). Client: the HOST's port "
-                              "to connect to (net.joinHost:net.hostPort) — the client never "
-                              "binds, so host and client can share the same value.");
+                pane.add_text("The host's listen port (default 44770). The host binds it; a "
+                              "client connects to it. Host and client on the same machine can "
+                              "share this value. Applied when you press Host or Connect. Allow "
+                              "the port through your firewall.");
             });
         leftPane.register_control(
             leftPane.add_child<StringButton>(StringButton::Props{
                 .key = "Join Host IP",
                 .getValue = [] { return Rml::String(dusk::net::config::joinHost.getValue()); },
-                .setValue =
-                    [](Rml::String value) {
-                        dusk::net::config::joinHost.setValue(value.c_str());
-                        config::save();
+                .setValue = [](Rml::String value) { apply_join_host(std::move(value)); },
+                .isModified =
+                    [] {
+                        return dusk::net::config::joinHost.getValue() !=
+                               dusk::net::config::joinHost.getDefaultValue();
                     },
-                .maxLength = 45,
+                .maxLength = 128,
             }),
             rightPane,
             [](Pane& pane) {
-                pane.add_text("Client: the host's LAN IP (manual join fallback; discovery below "
-                              "offers discovered addresses).");
+                pane.add_text("Client: the host's LAN IPv4 or hostname (Wi-Fi or ethernet). "
+                              "Paste host:port to fill Port automatically. Empty will not "
+                              "connect. Leave 127.0.0.1 to join another instance on this "
+                              "computer. IPv6 is not supported.");
             });
 
-        leftPane.add_section("Discovered Sessions");
-        auto* listener = dusk::net::discovery::ActiveListener();
-        if (listener != nullptr && listener->running()) {
-            const auto sessions = listener->Sessions();
-            if (sessions.empty()) {
-                leftPane.add_text("Listening... sessions found on the LAN will appear here and "
-                                  "in the log.");
-            } else {
-                for (const auto& s : sessions) {
-                    leftPane.add_text(fmt::format("{} at {}:{} ({} players)", s.name, s.ip,
-                        s.port, static_cast<u32>(s.players)));
+        leftPane.add_section("Connection");
+        leftPane.add_child<SessionStatusText>();
+        leftPane.register_control(
+            leftPane
+                .add_button({
+                    .text = "Host",
+                    .isSelected = [] { return dusk::coop::hostingCurrentSettings(); },
+                })
+                .on_pressed([] {
+                    mDoAud_seStartMenu(kSoundItemChange);
+                    if (dusk::coop::hostingCurrentSettings()) {
+                        return;
+                    }
+                    if (!dusk::coop::hostPortValid()) {
+                        show_network_error_modal("Port must be between 1 and 65535.");
+                        return;
+                    }
+                    confirm_session_restart([] { dusk::coop::requestHost(); });
+                }),
+            rightPane,
+            [](Pane& pane) {
+                const char* ips = dusk::net::localIpv4Label();
+                std::string help =
+                    "Listen for joins on Port. Does not turn on Auto-connect. Pressing Host "
+                    "again with unchanged settings does nothing; changing Port or Session Name "
+                    "restarts the session and disconnects other players (you will be asked).";
+                if (ips != nullptr && ips[0] != '\0') {
+                    help += " This machine's LAN IPv4: ";
+                    help += ips;
+                    help += ". Give that and Port to other players. Anyone on the LAN who has "
+                            "them can join (no password).";
+                } else {
+                    help += " Could not detect a LAN IPv4 — check your network settings. Anyone "
+                            "on the LAN who has this machine's IPv4 and Port can join (no "
+                            "password).";
                 }
-            }
-        } else {
-            leftPane.add_text("No discovery listener active. Start a client session to listen "
-                              "for hosts on the LAN.");
-        }
+                pane.add_text(help);
+            });
+        leftPane.register_control(
+            leftPane
+                .add_button({
+                    .text = "Connect",
+                    .isSelected = [] { return dusk::coop::connectingCurrentSettings(); },
+                    .isDisabled = [] { return dusk::coop::joinTargetError() != nullptr; },
+                })
+                .on_pressed([] {
+                    mDoAud_seStartMenu(kSoundItemChange);
+                    const char* err = dusk::coop::joinTargetError();
+                    if (err != nullptr) {
+                        show_network_error_modal(err);
+                        return;
+                    }
+                    if (dusk::coop::connectingCurrentSettings()) {
+                        return;
+                    }
+                    confirm_session_restart([] { dusk::coop::requestConnect(); });
+                }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_text(
+                    "Connect to Join Host IP on Port. You stay on your own save's stage; "
+                    "meet by traveling. Puppets appear when you share a stage. Does not turn "
+                    "on Auto-connect. If a session is already running, this restarts it "
+                    "(you will be asked to confirm). Invalid Join Host IP is refused before "
+                    "any session is torn down.");
+            });
+        leftPane.register_control(
+            leftPane
+                .add_button({
+                    .text = "Disconnect",
+                    .isDisabled =
+                        [] {
+                            return !dusk::coop::connected() && !dusk::coop::sessionStarted();
+                        },
+                })
+                .on_pressed([] {
+                    mDoAud_seStartMenu(kSoundItemChange);
+                    confirm_host_disconnect([] { dusk::coop::requestDisconnect(); });
+                }),
+            rightPane,
+            [](Pane& pane) {
+                pane.add_text("Stop this session and return to single-player. Auto-connect on "
+                              "launch is left as-is, so the next launch will still auto-connect "
+                              "if it is on. Ending a host session disconnects other players.");
+            });
     });
 }
 

@@ -11,11 +11,8 @@
  * tick, catching up missed intervals in a single step so the cadence never
  * drifts and never bursts.
  *
- * The default rate is 60 Hz (per-frame player/enemy snapshots). Slower
- * gates are constructed with AtRate() — the TimeSync publisher uses
- * `NetClock::AtRate(1)` for its real 1 Hz cadence (M3.5 fix for the
- * "60 Hz TimeSync" spec violation; the previous 60 Hz default made
- * `oneSecondDue` fire 60×/s).
+ * The default rate is 60 Hz (per-frame player snapshots). Slower gates are
+ * constructed with AtRate() (e.g. `NetClock::AtRate(1)` for a 1 Hz tick).
  */
 
 #include <dolphin/types.h>
@@ -34,7 +31,7 @@ public:
     explicit NetClock(u64 nowUs = 0) { Reset(nowUs); }
 
     /// Returns a clock at a custom cadence (e.g. `NetClock::AtRate(1)` for
-    /// the 1 Hz TimeSync gate). Kept as a named factory rather than a second
+    /// a 1 Hz gate). Kept as a named factory rather than a second
     /// integral ctor: `NetClock(u64 nowUs)` takes the arming timestamp, and
     /// a `NetClock(u32 hz)` overload would silently re-bind existing
     /// `NetClock(1000000)` call sites from "arm at 1 s" to "1 MHz ticks".

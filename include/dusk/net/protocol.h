@@ -13,9 +13,9 @@
  * fixed-capacity NUL-padded arrays, WorldInit is stage+roster only — no
  * full-state sections), so the hot path never allocates and a received
  * message can be validated against its expected size in one check.
- * DeserializeMessage stays exact-size by design: variable-length messages
- * are rejected. Channel 0 is reliable (control/events), channel 1 is
- * unreliable sequenced (snapshots — PlayerState / GhostSnapshot / TimeSync),
+ * DeserializeMessage stays exact-size by design: the buffer after the header
+ * must be exactly the payload (trailing junk is rejected). Channel 0 is reliable (control/events), channel 1 is
+ * unreliable sequenced (snapshots — PlayerState),
  * per 00-network.md §1.
  *
  * The pose fields in PlayerState follow 00-network.md §5's joint-list format.
@@ -54,11 +54,8 @@ namespace dusk::net {
 /// contract hitPos/attackerPos — see m2-design-notes.md §1.
 ///
 /// v5 (M3): TimeSync/TimeEvent/WeatherChange moved from the M0 placeholder
-/// layouts (phase f32/u32 opaque) to the absolute-phase contract of
-/// 04-time-weather.md §4 (time f32 0..360 + day + rate + flags; event +
-/// time + day; mode + thunder + intensity + colpat). JoinAccept/WorldInit
-/// carry the same TimeStateInfo/WeatherStateInfo so a mid-game joiner starts
-/// with the host's sky.
+/// layouts to the absolute-phase contract of 04-time-weather.md §4, and
+/// JoinAccept/WorldInit carried TimeStateInfo/WeatherStateInfo. Removed in v9.
 ///
 /// v6 (M4): added RoomOwnershipMsg (reliable, host->all) carrying one room
 /// owner assignment (stage + room + owner PlayerId) — the distributed
@@ -74,19 +71,33 @@ namespace dusk::net {
 /// move, 0 = cross-stage / not a SceneChange). Semantic change to an existing
 /// field, NO layout change — hence no bump there.
 ///
-/// v7 (M5.1, the parallel-worlds pivot — 05-ghosts.md §3): BREAKING
-/// DELETION. The M2/M3/M4 authority stack is gone: CombatIntentMsg,
-/// CombatResultMsg and RoomOwnershipMsg are deleted, EnemySnapshotMsg is
-/// renamed GhostSnapshotMsg with the ghost-layer field set (§4.2, 34 B — the
-/// old hp/maxHp/aggro/semantics combat wire and the M4.5 capstone "M5 decides
-/// wire-vs-drop" notes resolve as DROPPED), EnemyEventMsg is trimmed to
-/// {senderId, eventId, entityId} (Died only — Spawned/RoomClear/BossPhase
-/// dropped), and the per-player room-ownership map that rode PlayerState/
-/// PlayerEvent is gone (the session no longer sniffs rooms; puppets are
-/// whole-session star-relayed). Type count 16 -> 13. Ghost traffic is
-/// broadcast to every joined peer; room filtering is a receive-side gate in
-/// M5.3, never the wire. Wire semantics of every surviving message unchanged.
-constexpr u16 kProtocolVersion = 7;
+/// v7 (M5.1, the parallel-worlds pivot): BREAKING DELETION. The M2/M3/M4
+/// authority stack is gone: CombatIntentMsg, CombatResultMsg and
+/// RoomOwnershipMsg are deleted, EnemySnapshotMsg is renamed GhostSnapshotMsg
+/// (reserved, never consumed), EnemyEventMsg is trimmed to Died-only, and the
+/// per-player room-ownership map that rode PlayerState/PlayerEvent is gone
+/// (the session no longer sniffs rooms; puppets are whole-session
+/// star-relayed). Type count 16 -> 13.
+///
+/// v8: TimeSync carries the host stage (24 B) so stay-put clients can veto a
+/// clock that raced ahead of PlayerState. DeserializeMessage is exact-size.
+///
+/// v9: BREAKING DELETION of time/weather sync and ghost spectating.
+/// Parallel-worlds co-op keeps each save's own clock, sky, and enemies;
+/// TimeSync/TimeEvent/WeatherChange, GhostSnapshot, and EnemyEvent are gone,
+/// as are TimeStateInfo/WeatherStateInfo on JoinAccept/WorldInit. Type count
+/// 13 -> 8. Wire semantics of every surviving message unchanged.
+///
+/// v10: PlayerEventMsg gained a 16-B stage name so SceneChange can name the
+/// destination on the reliable channel (cross-stage no longer depends on a
+/// 30-frame unreliable PlayerState burst). Equip/Form/Attention leave it
+/// zeroed. Layout change → bump.
+///
+/// v11: HorseState (unreliable, type 9) — ridden-only visual Epona puppet.
+/// Sent alongside PlayerState while checkHorseRide(); receivers spawn a
+/// frozen daHorse_c that never occupies mPlayerPtr[1]. Type count 8 -> 9.
+/// kPlayerStateFlagHorseRide (bit 5) marks horse vs boar/canoe riding.
+constexpr u16 kProtocolVersion = 11;
 
 /// Session-wide player id space (0..kMaxLocalPlayers-1), per
 /// docs/design/network.md §3.
@@ -129,11 +140,7 @@ enum class MsgType : u16 {
     WorldInit = 6,
     PlayerState = 7,
     PlayerEvent = 8,
-    GhostSnapshot = 9,  // was EnemySnapshot (v7 rename; field set replaced, 44 B -> 34 B)
-    EnemyEvent = 10,
-    TimeSync = 11,
-    TimeEvent = 12,
-    WeatherChange = 13,
+    HorseState = 9,  // v11: ridden Epona pose (unreliable snapshot)
 };
 
 enum class JoinRejectReason : u8 {
@@ -165,56 +172,13 @@ enum class PlayerEventId : u8 {
     Respawn = 3,         // (reserved)
     SceneChange = 4,     // data: roomNo
     Equip = 5,           // data: equipItem u16 | selectItemId u8 | clothes u8;
-                         //       data2: leftItemJnt u16 | rightItemJnt u16
+                         //       data2: leftItemJnt u16 | rightItemJnt u16;
+                         //       scene: sword item id; reserved: shield item id
+                         //       (scene/reserved unused by Equip until this;
+                         //       no layout change, no version bump)
     AttentionChange = 6, // data: session entity id of the lock target
                          //       (kInvalidPlayerId/0xFFFF = none or local-only)
 };
-
-/// Ghost-layer death events (05-ghosts.md §4.2). v7 ships Died ONLY:
-/// Spawned/RoomClear/BossPhase are dropped — spawns are implicit-by-first-
-/// snapshot, despawns are Died-or-TTL, ALLDIE/door-clear is local (gF12/F13,
-/// m2). Spawned returns with the M6 wave seam.
-enum class EnemyEventId : u8 {
-    Died = 0,
-};
-
-/// Day-clock boundary events (04-time-weather.md §4.2): NEW_DAY fires on the
-/// 360 wrap (host mDate++ + dKankyo_DayProc), DAWN/DUSK on the upward
-/// crossing of phase 90 / 285 (dKy_daynight_check edges).
-enum class TimeEventId : u8 {
-    NewDay = 0,
-    Dawn = 1,
-    Dusk = 2,
-};
-
-/// Semantic weather mode (04-time-weather.md §4.3). The host derives it from
-/// the live sky state (dice machine / kytag06 / snow); clients use its
-/// canonical per-mode raincnt target for the local ramp.
-enum class WeatherMode : u8 {
-    Clear = 0,
-    Cloudy = 1,
-    RainLight = 2,   // raincnt ~40, colpat 1
-    RainHeavy = 3,   // raincnt ~250, colpat 2
-    ThunderLight = 4, // thunder on + colpat 1
-    ThunderHeavy = 5, // thunder on + colpat 2
-    Snow = 6,         // mSnowCount 0..500 (Snowpeak stages)
-};
-
-// ---------------------------------------------------------------------------
-// Time/weather constants (04-time-weather.md §1.2/§4.1)
-// ---------------------------------------------------------------------------
-
-/// TimeSync rate bucket: the client replicates the absolute phase by
-/// `ratePerTick * simTicks` between absolute syncs.
-constexpr u8 kTimeRateFrozen = 0;  // no advance (event/message/tag/room-gate)
-constexpr u8 kTimeRateNormal = 1;  // 0.012 / sim tick
-constexpr u8 kTimeRateFast = 2;    // 1.0 / tick (wolf-howl fast-forward)
-constexpr u8 kTimeRatePond2x = 3;  // Fishing Pond / Hena's Hut double-advance
-
-/// TimeSync flags bit 0: the host's twilight (darkworld) clock is active —
-/// its daytime is pinned to 0 and the synced value is fixed twilight lighting
-/// (04-time-weather.md §5.5).
-constexpr u8 kTimeFlagDarkworld = 1 << 0;
 
 // ---------------------------------------------------------------------------
 // Primitives (fixed layout; mirror cXyz / Vec3s but self-contained)
@@ -252,25 +216,6 @@ struct StageInfo {
     s16 point = 0;
 };
 
-/// Absolute day-clocked state (04-time-weather.md §4.1): f32 phase 0..360
-/// (15 units = 1 hour), save day counter, advance-rate bucket, flags.
-struct TimeStateInfo {
-    f32 time = 0.0f;  // absolute phase 0..360
-    u16 day = 0;      // dComIfGs_getDate()
-    u8 rate = 0;      // kTimeRate*
-    u8 flags = 0;     // kTimeFlag* bits
-};
-
-/// Sky state (04-time-weather.md §4.3): semantic mode + mThunderEff.mMode +
-/// intensity (raincnt 0..250 or mSnowCount 0..500) + mColpatWeather.
-struct WeatherStateInfo {
-    u8 mode = 0;       // WeatherMode
-    u8 thunder = 0;    // mThunderEff.mMode (0/1)
-    u16 intensity = 0; // raincnt (rain modes) or mSnowCount (Snow)
-    u8 colpat = 0;     // mColpatWeather: 0 clear | 1 cloudy/light | 2 heavy/storm
-    u8 pad = 0;
-};
-
 struct JoinRequestMsg {
     u32 version = 0;   // must equal kProtocolVersion
     u8 requestedSlot = kAnySlot;
@@ -282,8 +227,6 @@ struct JoinAcceptMsg {
     u8 assignedPlayerId = kInvalidPlayerId;
     u8 reserved[3] = {};
     StageInfo stage;
-    TimeStateInfo time;
-    WeatherStateInfo weather;
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
@@ -303,26 +246,22 @@ struct SessionEndMsg {
 };
 
 /// Sent to a joining client right after JoinAccept (00-network.md §4). Fixed
-/// size by contract: stage + time + weather + roster. M1's snapshot-on-join is
-/// a burst of ordinary per-frame PlayerState messages sent right after
-/// WorldInit — no count-prefixed full-state sections live here.
-/// M3 (v5): carries the host's current time/weather so a mid-game joiner
-/// starts with the host's sky; the roster-refresh broadcast on later joins
-/// keeps already-joined peers' sky targets current at the same time.
+/// size by contract: stage + roster. M1's snapshot-on-join is a burst of
+/// ordinary per-frame PlayerState messages sent right after WorldInit — no
+/// count-prefixed full-state sections live here. v9 dropped the M3 clock/sky
+/// fields; each save keeps its own time and weather.
 struct WorldInitMsg {
     StageInfo stage;
-    TimeStateInfo time;
-    WeatherStateInfo weather;
     std::array<PlayerInfo, kMaxLocalPlayers> roster;
 };
 
-/// PlayerState semantic bits (02-player-state.md §2.1). Bit 5 (player-no-draw)
-/// is never transmitted — a hidden Link keeps sending its pose.
+/// PlayerState semantic bits (02-player-state.md §2.1).
 constexpr u8 kPlayerStateFlagRiding = 1 << 0;        // mRideStatus != 0
 constexpr u8 kPlayerStateFlagInvuln = 1 << 1;        // mDamageTimer > 0
 constexpr u8 kPlayerStateFlagSubjectivity = 1 << 2;  // mProcID == PROC_SUBJECTIVITY
 constexpr u8 kPlayerStateFlagDowned = 1 << 3;        // downed/dead local life state
 constexpr u8 kPlayerStateFlagDemo = 1 << 4;          // mDemo.getDemoType() != 0
+constexpr u8 kPlayerStateFlagHorseRide = 1 << 5;     // checkHorseRide() — v11 horse puppet
 
 /// Per-frame pose sync (00-network.md §5 PlayerState; Rev 3 D4 raw-matrix
 /// pose, M1). The sender's J3DMtxBuffer per-joint anmMtx table is copied
@@ -353,86 +292,41 @@ struct PlayerStateMsg {
     Mtx joints[kMaxJoints];    // per-joint getAnmMtx(j), root-relative
 };
 
+/// Per-frame ridden-Epona pose (v11). Same raw-matrix contract as PlayerState
+/// so the puppet horse renders the sender's baked IK/neck/tail without
+/// replaying daHorse_c's action procs. Only sent while checkHorseRide();
+/// jointCount is 38 on the Horse model (fits kMaxJoints).
+struct HorseStateMsg {
+    u8 playerId = kInvalidPlayerId;
+    s8 roomNo = 0;
+    char stage[kMaxStageNameLength] = {};
+    u8 jointCount = 0;         // 0..kMaxJoints
+    u8 scaleFlags[(kMaxJoints + 7) / 8] = {};
+    s16 yaw = 0;               // shape_angle.y
+    u8 reserved = 0;
+    Vec3f pos;
+    Mtx baseTR;
+    Mtx joints[kMaxJoints];
+};
+
 struct PlayerEventMsg {
     u8 playerId = kInvalidPlayerId;
     u8 eventId = 0;  // PlayerEventId
-    /// PlayerEventId::SceneChange only (M4.5 review MINOR 1): 1 = the move is
-    /// WITHIN the current stage (same stage, new room), 0 = the stage itself
-    /// changed (cross-stage) or not a SceneChange. v7 (M5.1): the host's
-    /// room-ownership sniff is gone with the ownership table — the byte now
-    /// only feeds the receive-side puppet gate in coop.cpp (same-stage room
-    /// adoption), which is valid for same-stage moves only.
+    /// SceneChange (M4.5 review MINOR 1): 1 = the move is WITHIN the current
+    /// stage (same stage, new room), 0 = the stage itself changed
+    /// (cross-stage) or not a SceneChange. The host's room-ownership sniff is
+    /// gone with the ownership table — the byte now only feeds the
+    /// receive-side puppet gate in coop.cpp (same-stage room adoption), which
+    /// is valid for same-stage moves only.
+    /// Equip: sword item id (dItemNo_*); 0 = field unused (pre-appearance peers).
     u8 scene = 0;
-    u8 reserved = 0;
+    u8 reserved = 0;  // Equip: shield item id (dItemNo_*); else unused
     u32 data = 0;   // event-specific payload (see PlayerEventId)
     u32 data2 = 0;  // extended event payload (M1: item joints)
-};
-
-/// Ghost-layer pose snapshot (05-ghosts.md §4.2), unreliable channel. The
-/// ghost SENDER is M5.2; in M5.1 this message is wire-only — no game code
-/// emits or consumes it yet (the stub ships zero ghost traffic). The layout
-/// IS the v7 design wire (34 B payload): sender-stamped so a receiver keys
-/// its registry on (senderId, entityId) and drops senderId == selfId()
-/// self-echoes on the host (d-B1/gF5). `animFrame` is the morf frame only —
-/// action ids were never transmitted (d-B2); the high 16 bits the old u32
-/// `anim` promised are gone.
-struct GhostSnapshotMsg {
-    u8 senderId = kInvalidPlayerId;  // session PlayerId — receiver registry key
-    u8 flags = 0;                    // bit0 boss; bit1 projectile; v1: rest 0
-    u16 entityId = 0xFFFF;           // (room<<8)|setID, or owner-major dynamic id
-    u16 type = 0;                    // procName (profile id)
-    s16 angle = 0;                   // shape_angle.y
-    u16 animFrame = 0;               // morf frame only (v1 fidelity)
-    Vec3f pos;
-    Vec3f speed;                     // knockback / projectiles (M5.4 speed-lerp)
-};
-
-/// Ghost death event (05-ghosts.md §4.2), reliable channel. Trimmed to Died
-/// only (gF12/F13): the receiver despawns the ghost on Died or a 1 s silence
-/// TTL. `data`/`flags`/`flagMask` (drop table id + save switch grant) and the
-/// Spawned/RoomClear/BossPhase events are DROPPED — drops and save switches
-/// are fully local per player's own kills in the parallel-worlds model.
-struct EnemyEventMsg {
-    u8 senderId = kInvalidPlayerId;
-    u8 eventId = 0;  // EnemyEventId::Died
-    u16 entityId = 0xFFFF;
-};
-
-// ---------------------------------------------------------------------------
-// Time & weather messages (04-time-weather.md §4; M3 absolute-phase contract)
-// ---------------------------------------------------------------------------
-
-/// Unreliable-sequenced, 1 Hz. Absolute phase self-corrects; the rate lets
-/// clients advance by `ratePermTick * simTicks` between syncs (frozen during
-/// events/messages/time-control tags — rate=0).
-struct TimeSyncMsg {
-    f32 time = 0.0f;  // absolute phase 0..360
-    u16 day = 0;      // dComIfGs_getDate()
-    u8 rate = 0;      // kTimeRate*
-    u8 flags = 0;     // kTimeFlag* bits
-};
-
-/// Reliable, on boundary crossing (360 wrap / 90 / 285). Advisory: the phase
-/// in TimeSync already encodes the boundary; the reliable event exists so
-/// local one-shot behavior (temp-bit clears, future per-player forms) fires
-/// exactly once.
-struct TimeEventMsg {
-    u8 eventId = 0;  // TimeEventId
-    u8 pad = 0;
-    f32 time = 0.0f;  // phase at the event
-    u16 day = 0;      // day at the event
-};
-
-/// Reliable, on mode change + after every stage change (weather is fully
-/// reset per stage, 04 §5.6). Carries the current intensity; clients re-pin
-/// on receipt and re-run the vanilla dice ramp toward the per-mode target
-/// between receipts (04 §4.3 — do not stream the ±1-3/frame ramp).
-struct WeatherChangeMsg {
-    u8 mode = 0;       // WeatherMode
-    u8 thunder = 0;    // mThunderEff.mMode
-    u16 intensity = 0; // current raincnt / mSnowCount
-    u8 colpat = 0;     // mColpatWeather
-    u8 pad = 0;
+    /// v10: SceneChange destination stage (NUL-padded). Empty on other events.
+    /// Cross-stage receivers adopt this instead of blanking the name and
+    /// waiting on an unreliable PlayerState.
+    char stage[kMaxStageNameLength] = {};
 };
 
 // ---------------------------------------------------------------------------
@@ -602,11 +496,7 @@ union PayloadUnion {
     WorldInitMsg worldInit;
     PlayerStateMsg playerState;
     PlayerEventMsg playerEvent;
-    GhostSnapshotMsg ghostSnapshot;
-    EnemyEventMsg enemyEvent;
-    TimeSyncMsg timeSync;
-    TimeEventMsg timeEvent;
-    WeatherChangeMsg weatherChange;
+    HorseStateMsg horseState;
 
     PayloadUnion() { std::memset(this, 0, sizeof(PayloadUnion)); }
 };
@@ -623,8 +513,7 @@ u16 WireSize(MsgType type);
 constexpr u8 ChannelFor(MsgType type) {
     switch (type) {
     case MsgType::PlayerState:
-    case MsgType::GhostSnapshot:
-    case MsgType::TimeSync:
+    case MsgType::HorseState:
         return kChannelUnreliable;
     default:
         return kChannelReliable;
@@ -639,6 +528,12 @@ bool SerializeMessage(const Message& msg, ByteWriter& w);
 /// pos + baseTR + full kMaxJoints table).
 constexpr u16 PlayerStateWireSize() {
     return 5 + kMaxStageNameLength + (kMaxJoints + 7) / 8 + 10 + 1 + 12 + sizeof(Mtx) +
+           kMaxJoints * sizeof(Mtx);
+}
+
+/// HorseState payload: id+room+stage+jointCount+scale+yaw+reserved+pos+baseTR+joints.
+constexpr u16 HorseStateWireSize() {
+    return 1 + 1 + kMaxStageNameLength + 1 + (kMaxJoints + 7) / 8 + 2 + 1 + 12 + sizeof(Mtx) +
            kMaxJoints * sizeof(Mtx);
 }
 

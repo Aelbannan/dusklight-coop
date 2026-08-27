@@ -1,9 +1,13 @@
 # Design: Networked co-op (LAN-first)
 
-Status: **Draft — design record of an ongoing discussion. Not yet implemented.**
+Status: **Historical — design record of the pre-M5.1 hybrid (shared enemies,
+shared sky). Not the live model.**
 
-This document records the architecture decisions for adding LAN/online play to the
-co-op mod, replacing (or optionally complementing) same-machine split-screen.
+Live co-op (protocol v10) is **parallel worlds**: each machine sims its own
+enemies, clock, and sky. Only player puppets cross the wire. Stay-put join:
+players meet by traveling to a shared stage and room.
+
+This document records the architecture decisions discussed before that pivot.
 
 ## 1. Problem statement
 

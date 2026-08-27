@@ -12,6 +12,26 @@ aurora::Module NetLog("dusk::net::transport");
 
 constexpr int kServiceTimeoutMs = 8;  // upper bound on socket-thread wakeup latency
 
+/// Snapshot identity: PlayerState/HorseState packets for the same player
+/// replace each other under ring pressure. Other channel-1 payloads (tests,
+/// unknown) match on type so a flood still coalesces.
+bool SameSnapshotIdentity(const u8* a, u16 aSize, const u8* b, u16 bSize) {
+    if (aSize < 5 || bSize < 5) {
+        return false;
+    }
+    const u16 typeA = static_cast<u16>(a[0] | (a[1] << 8));
+    const u16 typeB = static_cast<u16>(b[0] | (b[1] << 8));
+    if (typeA != typeB) {
+        return false;
+    }
+    if (typeA == static_cast<u16>(MsgType::PlayerState) ||
+        typeA == static_cast<u16>(MsgType::HorseState))
+    {
+        return a[4] == b[4];
+    }
+    return true;
+}
+
 u64 NowUs() {
     return static_cast<u64>(
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -52,6 +72,7 @@ bool Transport::StartHost(u16 port, size_t maxPeers) {
     for (auto& gen : peerGenerations_) {
         gen.store(0, std::memory_order_relaxed);
     }
+    ResetThreadSharedState();
     // Visible before the thread spawns so IsRunning() is true immediately
     // after StartHost returns (GLM MINOR-2).
     running_.store(true, std::memory_order_relaxed);
@@ -99,6 +120,7 @@ bool Transport::StartClient(const std::string& host, u16 port) {
     for (auto& gen : peerGenerations_) {
         gen.store(0, std::memory_order_relaxed);
     }
+    ResetThreadSharedState();
     // Visible before the thread spawns (GLM MINOR-2); the client's single
     // peer is not yet "connected" — the CONNECT event on the socket thread
     // assigns it slot 0.
@@ -120,6 +142,7 @@ void Transport::Stop() {
     }
     host_ = nullptr;
     running_.store(false, std::memory_order_relaxed);
+    ResetThreadSharedState();
 }
 
 bool Transport::IsRunning() const {
@@ -144,8 +167,11 @@ bool Transport::Send(u8 peerIndex, u8 channel, const void* data, u16 size) {
     p.generation = PeerGeneration(peerIndex);
     std::memcpy(p.data, data, size);
     if (channel == kChannelUnreliable) {
-        // Snapshots: replace-newest under pressure — Send never fails.
-        if (snapshotOutbox_.PushOrReplace(p)) {
+        // Snapshots: per-peer outbox, replace matching playerId under pressure.
+        auto same = [](const OutboundPacket& x, const OutboundPacket& y) {
+            return SameSnapshotIdentity(x.data, x.size, y.data, y.size);
+        };
+        if (q_->snapshotOutbox[peerIndex].PushOrReplaceMatching(p, same)) {
             snapshotOutboundReplaced_.fetch_add(1, std::memory_order_relaxed);
         }
         return true;
@@ -153,7 +179,7 @@ bool Transport::Send(u8 peerIndex, u8 channel, const void* data, u16 size) {
     // Reliable: a full ring is an explicit, visible failure, never a silent
     // drop (deepseek M2 / glm MAJOR-1). The counter is the session-visible
     // error signal.
-    if (!reliableOutbox_.Push(p)) {
+    if (!q_->reliableOutbox.Push(p)) {
         reliableOutboundDropped_.fetch_add(1, std::memory_order_relaxed);
         NetLog.warn("reliable outbox ring full; dropping {} bytes to peer {} (explicit failure)",
             size, peerIndex);
@@ -162,10 +188,59 @@ bool Transport::Send(u8 peerIndex, u8 channel, const void* data, u16 size) {
     return true;
 }
 
+void Transport::DisconnectPeer(u8 peerIndex) {
+    if (peerIndex >= kMaxPeers) {
+        return;
+    }
+    q_->disconnectRequested[peerIndex].store(true, std::memory_order_release);
+}
+
+void Transport::ResetThreadSharedState() {
+    q_->pendingDisconnectBits.store(0, std::memory_order_relaxed);
+    q_->snapshotPollCursor = 0;
+    for (auto& flag : q_->disconnectRequested) {
+        flag.store(false, std::memory_order_relaxed);
+    }
+    q_->lifecycleInbox.Reset();
+    q_->reliableInbox.Reset();
+    q_->reliableOutbox.Reset();
+    for (auto& ring : q_->snapshotInbox) {
+        ring.Reset();
+    }
+    for (auto& ring : q_->snapshotOutbox) {
+        ring.Reset();
+    }
+}
+
 bool Transport::Poll(InboundPacket& out) {
-    // Reliable inbox first (control/events keep priority), then snapshots.
+    // Lifecycle (connect/disconnect) first — must not sit behind a full
+    // reliable-data ring. Then sticky disconnects from a full lifecycle
+    // inbox (so a missed DISCONNECT cannot leave peerToPlayer_ mapped).
+    // Then reliable data, then per-peer snapshots in round-robin.
     for (;;) {
-        if (!reliableInbox_.Pop(out)) {
+        if (!q_->lifecycleInbox.Pop(out)) {
+            break;
+        }
+        return true;
+    }
+    {
+        const u32 bits = q_->pendingDisconnectBits.load(std::memory_order_acquire);
+        if (bits != 0) {
+            for (u8 i = 0; i < kMaxPeers; ++i) {
+                const u32 mask = 1u << i;
+                if ((bits & mask) == 0) {
+                    continue;
+                }
+                q_->pendingDisconnectBits.fetch_and(~mask, std::memory_order_acq_rel);
+                out = InboundPacket{};
+                out.type = NetEventType::Disconnected;
+                out.peerIndex = i;
+                return true;
+            }
+        }
+    }
+    for (;;) {
+        if (!q_->reliableInbox.Pop(out)) {
             break;
         }
         if (out.type == NetEventType::Data && out.generation != PeerGeneration(out.peerIndex)) {
@@ -174,10 +249,12 @@ bool Transport::Poll(InboundPacket& out) {
         }
         return true;
     }
-    for (;;) {
-        if (!snapshotInbox_.Pop(out)) {
-            break;
+    for (size_t n = 0; n < kMaxPeers; ++n) {
+        const u8 i = static_cast<u8>((q_->snapshotPollCursor + n) % kMaxPeers);
+        if (!q_->snapshotInbox[i].Pop(out)) {
+            continue;
         }
+        q_->snapshotPollCursor = static_cast<u8>((i + 1) % kMaxPeers);
         if (out.type == NetEventType::Data && out.generation != PeerGeneration(out.peerIndex)) {
             inboundGenerationDropped_.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -236,9 +313,17 @@ void Transport::HandleSocketEvent(ENetEvent& event) {
         pkt.type = NetEventType::Connected;
         pkt.peerIndex = index;
         pkt.size = 0;
-        if (!reliableInbox_.Push(pkt)) {
-            reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
-            NetLog.warn("reliable inbox full; dropping connect event for peer {}", index);
+        pkt.generation = PeerGeneration(index);
+        // A later CONNECT on this slot means the previous occupant's
+        // disconnect (if it was dropped) must not fire after we hand this
+        // connect to the session.
+        q_->pendingDisconnectBits.fetch_and(~(1u << index), std::memory_order_relaxed);
+        if (!q_->lifecycleInbox.Push(pkt)) {
+            lifecycleDropped_.fetch_add(1, std::memory_order_relaxed);
+            NetLog.warn("lifecycle inbox full; resetting peer {} (connect event dropped)", index);
+            enet_peer_reset(event.peer);
+            ReleasePeerSlot(index);
+            break;
         }
         NetLog.info("peer {} connected", index);
         break;
@@ -250,9 +335,10 @@ void Transport::HandleSocketEvent(ENetEvent& event) {
         pkt.type = NetEventType::Disconnected;
         pkt.peerIndex = index;
         pkt.size = 0;
-        if (!reliableInbox_.Push(pkt)) {
-            reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
-            NetLog.warn("reliable inbox full; dropping disconnect event for peer {}", index);
+        if (!q_->lifecycleInbox.Push(pkt)) {
+            lifecycleDropped_.fetch_add(1, std::memory_order_relaxed);
+            q_->pendingDisconnectBits.fetch_or(1u << index, std::memory_order_relaxed);
+            NetLog.warn("lifecycle inbox full; sticky-disconnect armed for peer {}", index);
         }
         NetLog.info("peer {} disconnected", index);
         break;
@@ -280,11 +366,14 @@ void Transport::HandleSocketEvent(ENetEvent& event) {
         pkt.generation = PeerGeneration(index);
         std::memcpy(pkt.data, event.packet->data, pkt.size);
         if (pkt.channel == kChannelUnreliable) {
-            if (snapshotInbox_.PushOrReplace(pkt)) {
+            auto same = [](const InboundPacket& x, const InboundPacket& y) {
+                return SameSnapshotIdentity(x.data, x.size, y.data, y.size);
+            };
+            if (index < kMaxPeers && q_->snapshotInbox[index].PushOrReplaceMatching(pkt, same)) {
                 snapshotInboundReplaced_.fetch_add(1, std::memory_order_relaxed);
             }
             packetsReceived_.fetch_add(1, std::memory_order_relaxed);
-        } else if (reliableInbox_.Push(pkt)) {
+        } else if (q_->reliableInbox.Push(pkt)) {
             packetsReceived_.fetch_add(1, std::memory_order_relaxed);
         } else {
             reliableInboundDropped_.fetch_add(1, std::memory_order_relaxed);
@@ -299,16 +388,27 @@ void Transport::HandleSocketEvent(ENetEvent& event) {
 }
 
 void Transport::DrainOutbox() {
-    // Reliable (control/events/combat) first, then snapshots.
+    // Reliable (control/events) first, then per-peer snapshots.
     OutboundPacket p;
-    while (reliableOutbox_.Pop(p)) {
+    while (q_->reliableOutbox.Pop(p)) {
         SendPacket(p);
     }
-    while (snapshotOutbox_.Pop(p)) {
-        SendPacket(p);
+    for (size_t i = 0; i < kMaxPeers; ++i) {
+        while (q_->snapshotOutbox[i].Pop(p)) {
+            SendPacket(p);
+        }
     }
     if (host_ != nullptr) {
         enet_host_flush(host_);
+    }
+    for (size_t i = 0; i < kMaxPeers; ++i) {
+        if (!q_->disconnectRequested[i].exchange(false, std::memory_order_acq_rel)) {
+            continue;
+        }
+        ENetPeer* peer = PeerAt(static_cast<u8>(i));
+        if (peer != nullptr) {
+            enet_peer_disconnect_later(peer, 0);
+        }
     }
 }
 
@@ -356,7 +456,10 @@ u8 Transport::AssignPeerSlot(ENetPeer* peer) {
 void Transport::ReleasePeerSlot(u8 index) {
     if (index < kMaxPeers) {
         peerSlots_[index] = nullptr;
-        peerGenerations_[index].fetch_add(1, std::memory_order_relaxed);
+        // Do not bump generation here. AssignPeerSlot bumps on reuse, which
+        // is enough to drop stale packets. Bumping on release made Poll()
+        // drop in-flight JoinReject after disconnect_later (the socket
+        // thread releases the slot before the game thread drains the inbox).
     }
 }
 

@@ -22,7 +22,10 @@
 
 #if TARGET_PC
 #include "dusk/dusk.h"
+#include "dusk/coop/coop.h"
 #include "dusk/frame_interpolation.h"
+#include "JSystem/J3DGraphBase/J3DMaterial.h"
+#include "JSystem/J3DGraphBase/J3DShape.h"
 
 namespace {
 // FRAME INTERP NOTE: Sim tick control point snapshots for interpolation
@@ -34,6 +37,74 @@ int s_horseReinSimNumCurr;
 bool s_horseReinSimPrevValid;
 bool s_horseReinSimCurrValid;
 uint64_t s_horseReinSimRolledSeq;
+
+J3DShape* HorseShapeAt(J3DModelData* data, u16 idx) {
+    if (data == nullptr) {
+        return nullptr;
+    }
+    J3DMaterial* mat = data->getMaterialNodePointer(idx);
+    return mat != nullptr ? mat->getShape() : nullptr;
+}
+
+void HorseSetShapeHidden(J3DShape* shape, bool hidden) {
+    if (shape == nullptr) {
+        return;
+    }
+    if (hidden) {
+        shape->hide();
+    } else {
+        shape->show();
+    }
+}
+
+/// Shared J3DModelData hide/show (saddle / bag) is mutated by every Horse
+/// actor. Save and restore around draw so a puppet cannot leave the real
+/// Epona with the wrong materials, and vice versa.
+struct HorseSharedShapeScope {
+    J3DShape* mat2;
+    J3DShape* mat5;
+    bool hid2;
+    bool hid5;
+    bool armed;
+
+    HorseSharedShapeScope(J3DModelData* data, bool enable)
+        : mat2(nullptr), mat5(nullptr), hid2(false), hid5(false), armed(false) {
+        if (!enable) {
+            return;
+        }
+        mat2 = HorseShapeAt(data, 2);
+        mat5 = HorseShapeAt(data, 5);
+        hid2 = mat2 != nullptr && mat2->checkFlag(J3DShpFlag_Visible);
+        hid5 = mat5 != nullptr && mat5->checkFlag(J3DShpFlag_Visible);
+        armed = true;
+    }
+
+    ~HorseSharedShapeScope() {
+        if (!armed) {
+            return;
+        }
+        HorseSetShapeHidden(mat2, hid2);
+        HorseSetShapeHidden(mat5, hid5);
+    }
+
+    HorseSharedShapeScope(const HorseSharedShapeScope&) = delete;
+    HorseSharedShapeScope& operator=(const HorseSharedShapeScope&) = delete;
+};
+
+void ApplyHorseDrawMaterials(daHorse_c* horse, BOOL isPuppet) {
+    J3DModelData* data = horse->m_modelData;
+    if (isPuppet) {
+        HorseSetShapeHidden(HorseShapeAt(data, 2), false);
+        HorseSetShapeHidden(HorseShapeAt(data, 5), false);
+        return;
+    }
+    HorseSetShapeHidden(HorseShapeAt(data, 2),
+        (dComIfGp_getCameraAttentionStatus(0) & 0x40) != 0);
+    daAlink_c* player_p = daAlink_getAlinkActorClass();
+    const bool hideBag = horse->checkResetStateFlg0(daHorse_c::RFLG0_UNK_200) ||
+        (player_p != nullptr && player_p->checkHorseZelda());
+    HorseSetShapeHidden(HorseShapeAt(data, 5), hideBag);
+}
 }  // namespace
 #endif
 
@@ -582,6 +653,11 @@ static int daHorse_modelCallBack(J3DJoint* i_joint, int param_1) {
     daHorse_c* a_this = (daHorse_c*)j3dSys.getModel()->getUserArea();
 
     if (param_1 == 0) {
+#if TARGET_PC
+        if (dusk::coop::isHorsePuppet(a_this)) {
+            return 1;
+        }
+#endif
         a_this->modelCallBack(jnt_no);
     }
 
@@ -681,11 +757,17 @@ extern int g_horsePosInit;
 int daHorse_c::create() {
     fopAcM_ct(this, daHorse_c);
 
+#if TARGET_PC
+    const BOOL isPuppetCreate = dusk::coop::isHorsePuppet(this);
+#else
+    const BOOL isPuppetCreate = FALSE;
+#endif
+
     if (checkEnding()) {
         onStateFlg0(FLG0_UNK_8000);
     }
 
-    if (!checkStateFlg0(FLG0_UNK_8000) &&
+    if (!isPuppetCreate && !checkStateFlg0(FLG0_UNK_8000) &&
            /* Cutscene - Cutscene - attacked by monsters at Ordon spring */
         (((dComIfGs_isEventBit(dSv_event_flag_c::M_008)
             /* Main Event - Epona rescued flag */
@@ -705,7 +787,7 @@ int daHorse_c::create() {
             return cPhs_INIT_e;
         }
 
-        if (dComIfGp_getHorseActor() != NULL) {
+        if (!isPuppetCreate && dComIfGp_getHorseActor() != NULL) {
             return cPhs_ERROR_e;
         }
 
@@ -724,7 +806,9 @@ int daHorse_c::create() {
         m_onRideFlg = &daHorse_c::onRideFlgSubstance;
         m_offRideFlg = &daHorse_c::offRideFlgSubstance;
 
-        if (daAlink_getAlinkActorClass()->checkHorseStart() || checkStateFlg0(FLG0_UNK_8000) ||
+        if (isPuppetCreate) {
+            // Keep the spawn pos/angle from fopAcM_create (HorseState).
+        } else if (daAlink_getAlinkActorClass()->checkHorseStart() || checkStateFlg0(FLG0_UNK_8000) ||
             (DEBUG && g_horsePosInit) ||
             strcmp(dComIfGs_getHorseRestartStageName(), "") == 0
             /* dSv_event_flag_c::M_002 - Cutscene - [cutscene: 2] Met with Ilia (brings horse to
@@ -861,10 +945,19 @@ int daHorse_c::create() {
         setBodyPart();
         field_0x17b8 = m_bodyEyePos;
 
-        m_acch.CrrPos(dComIfG_Bgsp());
-        setRoomInfo(1);
+        // Puppets skip bg snap + room bind: CrrPos/setRoomInfo(1) would pull
+        // the shared-archive horse onto local collision at spawn, fighting
+        // the pose apply path. Link puppets already skip this pair.
+        if (!isPuppetCreate) {
+            m_acch.CrrPos(dComIfG_Bgsp());
+            setRoomInfo(1);
+        }
 
-        dComIfGp_setHorseActor(this);
+        if (!isPuppetCreate) {
+            dComIfGp_setHorseActor(this);
+        } else {
+            attention_info.flags = 0;
+        }
         field_0x16e8 = shape_angle.y;
 
         cXyz* sp2C;
@@ -898,6 +991,11 @@ int daHorse_c::create() {
         fopAcM_setStageLayer(this);
     }
 
+#if TARGET_PC
+    if (isPuppetCreate && phase_state == cPhs_COMPLEATE_e) {
+        dusk::coop::onHorseCreated(this);
+    }
+#endif
     return phase_state;
 }
 
@@ -3475,6 +3573,11 @@ void daHorse_c::setBoarHit(fopAc_ac_c* param_0, int param_1) {
 }
 
 void daHorse_c::savePos() {
+#if TARGET_PC
+    if (dusk::coop::isHorsePuppet(this)) {
+        return;
+    }
+#endif
     if (this->model != NULL && !checkStateFlg0(FLG0_UNK_8000) && !checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
         dComIfGs_setHorseRestart(dComIfGp_getStartStageName(), current.pos, shape_angle.y, fopAcM_GetRoomNo(this));
     }
@@ -4437,6 +4540,11 @@ static void* daHorse_searchSceneChangeArea(fopAc_ac_c* i_actor, void* i_data) {
 }
 
 int daHorse_c::execute() {
+#if TARGET_PC
+    if (dusk::coop::isHorsePuppet(this)) {
+        return dusk::coop::horsePuppetExecute(this);
+    }
+#endif
     m_scnChg_num = 0;
     fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, NULL);
     m_zeldaActorKeep.setActor();
@@ -4614,6 +4722,11 @@ int daHorse_c::execute() {
         footBgCheck();
         setTailAngle();
 
+#if TARGET_PC
+        if (dusk::coop::remoteCount() > 0) {
+            m_modelData->getJointNodePointer(0)->setMtxCalc(m_mtxcalc);
+        }
+#endif
         m_model->calc();
         setBodyPart();
 
@@ -4683,10 +4796,17 @@ int daHorse_c::execute() {
 
     m_endResetStateFlg0 = 0;
 
-    if (checkResetStateFlg0(RFLG0_UNK_200) || player_p->checkHorseZelda()) {
-        m_modelData->getMaterialNodePointer(5)->getShape()->hide();
-    } else {
-        m_modelData->getMaterialNodePointer(5)->getShape()->show();
+#if TARGET_PC
+    // Shared J3DModelData: hide/show here would leak onto horse puppets.
+    // Session-active draws apply materials 2/5 per instance and restore.
+    if (!dusk::coop::sessionActive())
+#endif
+    {
+        if (checkResetStateFlg0(RFLG0_UNK_200) || player_p->checkHorseZelda()) {
+            m_modelData->getMaterialNodePointer(5)->getShape()->hide();
+        } else {
+            m_modelData->getMaterialNodePointer(5)->getShape()->show();
+        }
     }
 
     dMeter2Info_setHorseLifeCount(m_lashCnt);
@@ -4698,6 +4818,11 @@ static int daHorse_Execute(daHorse_c* i_this) {
 }
 
 int daHorse_c::draw() {
+#if TARGET_PC
+    if (dusk::coop::horsePuppetDrawHidden(this)) {
+        return 1;
+    }
+#endif
     g_env_light.settingTevStruct(0, &current.pos, &tevStr);
     if (checkStateFlg0(FLG0_NO_DRAW_WAIT) || checkResetStateFlg0(RFLG0_UNK_80)) {
         return 1;
@@ -4705,19 +4830,37 @@ int daHorse_c::draw() {
 
     g_env_light.setLightTevColorType_MAJI(m_model, &tevStr);
 
+#if TARGET_PC
+    const BOOL isPuppetDraw = dusk::coop::isHorsePuppet(this);
+    HorseSharedShapeScope shapeScope(m_modelData, dusk::coop::sessionActive());
+    if (dusk::coop::sessionActive()) {
+        ApplyHorseDrawMaterials(this, isPuppetDraw);
+    } else if (!isPuppetDraw) {
+        if (dComIfGp_getCameraAttentionStatus(0) & 0x40) {
+            m_modelData->getMaterialNodePointer(2)->getShape()->hide();
+        } else {
+            m_modelData->getMaterialNodePointer(2)->getShape()->show();
+        }
+    }
+    if (!isPuppetDraw) {
+        m_btp.entry(m_modelData, m_btpFrame);
+    }
+#else
+    const BOOL isPuppetDraw = FALSE;
     if (dComIfGp_getCameraAttentionStatus(0) & 0x40) {
         m_modelData->getMaterialNodePointer(2)->getShape()->hide();
     } else {
         m_modelData->getMaterialNodePointer(2)->getShape()->show();
     }
-
     m_btp.entry(m_modelData, m_btpFrame);
+#endif
+
     mDoExt_modelEntryDL(m_model);
 
     cXyz shadow_pos(current.pos.x, 100.0f + current.pos.y, current.pos.z);
     m_shadowID = dComIfGd_setShadow(m_shadowID, 0, m_model, &shadow_pos, 1000.0f, 0.0f, current.pos.y, m_acch.GetGroundH(), m_acch.m_gnd, &tevStr, 0, 1.0f, dDlst_shadowControl_c::getSimpleTex());
     
-    if (!checkResetStateFlg0(RFLG0_UNK_100) && (!checkStateFlg0(FLG0_UNK_1) || !daAlink_getAlinkActorClass()->checkHorseSubjectivity())) {
+    if (!isPuppetDraw && !checkResetStateFlg0(RFLG0_UNK_100) && (!checkStateFlg0(FLG0_UNK_1) || !daAlink_getAlinkActorClass()->checkHorseSubjectivity())) {
         static GXColor reinLineColor = {0x00, 0x00, 0x00, 0xFF};
         m_reinLine.update(field_0x1204, 1.5f, reinLineColor, 0, &tevStr);
         dComIfGd_set3DlineMat(&m_reinLine);
@@ -4742,6 +4885,11 @@ daHorse_c::~daHorse_c() {
     if (dComIfGp_getHorseActor() == this) {
         dComIfGp_setHorseActor(NULL);
     }
+#if TARGET_PC
+    if (dusk::coop::isHorsePuppet(this)) {
+        dusk::coop::onHorseDestroyed(this);
+    }
+#endif
 }
 
 static int daHorse_Delete(daHorse_c* i_this) {

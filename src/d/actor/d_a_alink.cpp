@@ -4716,7 +4716,12 @@ void daAlink_c::playerInit() {
 
     mMagneBootsPlight.mPow = 0.0f;
     mMagneBootsPlight.mFluctuation = 0.0f;
-    dKy_plight_set(&mMagneBootsPlight);
+#if TARGET_PC
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
+        dKy_plight_set(&mMagneBootsPlight);
+    }
 
     setSelectEquipItem(FALSE);
 
@@ -4931,10 +4936,27 @@ int daAlink_c::setStartProcInit() {
     return sp10;
 }
 
+#if TARGET_PC
+namespace {
+// Shared across every daAlink_c::create (vanilla used a function-local
+// static). Lifted so a puppet create abort can clear it from the destructor
+// path; leaving it TRUE skips heaps/playerInit on the next ALINK.
+BOOL s_alinkCreateBgWait = FALSE;
+}
+
+void daAlink_c::clearCreateBgWait() {
+    s_alinkCreateBgWait = FALSE;
+}
+#endif
+
 int daAlink_c::create() {
     fopAcM_ct(this, daAlink_c);
 
+#if TARGET_PC
+    BOOL& bgWaitFlg = s_alinkCreateBgWait;
+#else
     static BOOL bgWaitFlg = FALSE;
+#endif
 
     u32 sceneMode = getLastSceneMode();
     s32 startMode = getStartMode();
@@ -5013,12 +5035,21 @@ int daAlink_c::create() {
         fopAcM_setStageLayer(&LEAFDRAW_BASE(this));
 
         if (sceneMode == 7) {
+#if TARGET_PC
+            if (!isPuppetCreate)
+#endif
+            {
             current.pos = dComIfGs_getTurnRestartPos();
             shape_angle.y = dComIfGs_getTurnRestartAngleY();
             current.angle.y = shape_angle.y;
+            }
         }
 
-        if ((
+        if (
+#if TARGET_PC
+            !isPuppetCreate &&
+#endif
+            ((
                 (
                     !checkBossOctaIealRoom()
                     #if DEBUG
@@ -5035,7 +5066,7 @@ int daAlink_c::create() {
                 startPoint == -4
             )
             || sceneMode == 9
-            )
+            ))
         {
             attention_info.position.set(current.pos.x + cM_ssin(shape_angle.y) * 70.0f,
                                          current.pos.y + 80.0f,
@@ -5046,7 +5077,11 @@ int daAlink_c::create() {
         } else {
             attention_info.position.y = current.pos.y + 150.0f;
         }
+#if TARGET_PC
+        attention_info.flags = isPuppetCreate ? 0 : -1;
+#else
         attention_info.flags = -1;
+#endif
 
         if (!dComIfGp_getEventManager().dataLoaded()) {
             return cPhs_INIT_e;
@@ -5104,6 +5139,15 @@ int daAlink_c::create() {
 #endif
     }
 
+#if TARGET_PC
+    // Puppets skip CrrPos + the phase-2 ground/water/ride wait: spawn is
+    // local Link + 120 units, which is void in the air (clawshot/jump) and
+    // can sit across a room boundary. Apply drives pos/room from the wire
+    // and never CrrPos (would fight swim/climb). RoomCheck here would
+    // zoneCountCheck/loadRoom a room the local player is not in.
+    if (!isPuppetCreate)
+#endif
+    {
     mLinkAcch.CrrPos(dComIfG_Bgsp());
     void* portalActor = NULL;
 
@@ -5122,12 +5166,8 @@ int daAlink_c::create() {
     }
 
     if (portalActor != NULL) {
-#if TARGET_PC
-        if (!isPuppetCreate)
-#endif
-        {
-            dComIfGp_getEvent()->setPtD(portalActor);
-        }
+        dComIfGp_getEvent()->setPtD(portalActor);
+    }
     }
 
     bgWaitFlg = FALSE;
@@ -5142,6 +5182,14 @@ int daAlink_c::create() {
     field_0x3780 = current.pos;
     mLinkAcch.ClrGndThinCellingOff();
 
+#if TARGET_PC
+    // Puppets skip RoomCheck / water / boar-battle flags: CrrPos was skipped
+    // so m_gnd is not a real ground poly, and setRoomInfo() would
+    // zoneCountCheck/loadRoom a room the local player is not in. Room comes
+    // from fopAcM_create and is overwritten from the wire on apply.
+    if (!isPuppetCreate)
+#endif
+    {
     int bg_roomId = dComIfG_Bgsp().GetRoomId(mLinkAcch.m_gnd);
     fopAcM_SetRoomNo(this, bg_roomId + 1);
     setRoomInfo();
@@ -5155,6 +5203,7 @@ int daAlink_c::create() {
                dComIfG_play_c::getLayerNo(0) == 0)
     {
         onNoResetFlg2(FLG2_BOAR_SINGLE_BATTLE_2ND);
+    }
     }
 
     J3DAnmTransform* underBck;
@@ -5186,7 +5235,14 @@ int daAlink_c::create() {
     {
         midna_prm = setStartProcInit();
     }
-    setSelectEquipItem(FALSE);
+#if TARGET_PC
+    // Puppets skip the local save's sword/sheath; the first Equip event
+    // rebuilds appearance from the remote player's select-equip.
+    if (!isPuppetCreate)
+#endif
+    {
+        setSelectEquipItem(FALSE);
+    }
     setMatrix();
     allAnimePlay();
     mpLinkModel->calc();
@@ -5211,6 +5267,10 @@ int daAlink_c::create() {
         setItemActor();
     }
 
+#if TARGET_PC
+    if (!isPuppetCreate)
+#endif
+    {
     if ((dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
         !isHorseStart && !isEnteringLV7)
     {
@@ -5220,6 +5280,7 @@ int daAlink_c::create() {
     if ((dComIfGs_getLastSceneMode() & 0x200000) && !checkCloudSea()) {
         onNoResetFlg2(FLG2_UNK_1);
         mZ2Link.setKanteraState(2);
+    }
     }
 
     if (checkCarryStartLightBallA() || checkCarryStartLightBallB()) {
@@ -19547,7 +19608,7 @@ void daAlink_c::modelCalc(J3DModel* i_model) {
         // drive every other Link's animation (risk 2).
         //
         // Gated on a live session with remotes (or this instance being a
-        // puppet) so single-player with net.enabled=false stays byte-for-byte
+        // puppet) so single-player with no session stays byte-for-byte
         // vanilla (review m1 MINOR m2).
         //
         // The face/hat models (mpLinkFaceModel/mpLinkHatModel) are also
@@ -20121,7 +20182,12 @@ daAlink_c::~daAlink_c() {
         mDoExt_destroyExpHeap(mpShieldArcHeap);
     }
 
-    dKy_plight_cut(&mMagneBootsPlight);
+#if TARGET_PC
+    if (!dusk::coop::isPuppet(this))
+#endif
+    {
+        dKy_plight_cut(&mMagneBootsPlight);
+    }
 
 #if TARGET_PC
     // Co-op (M1): slot-0 pointers only belong to the real Link; a puppet

@@ -18,20 +18,28 @@
  * so shutdown never blocks on disconnect acks).
  *
  * Channel-split rings (M0.5): reliable traffic (channel 0 — control, events)
- * and unreliable snapshots (channel 1 — PlayerState/GhostSnapshot/TimeSync)
- * never share a ring. The two classes have opposite overflow
- * policies:
+ * and unreliable snapshots (channel 1 — PlayerState)
+ * never share a ring. Overflow policies:
  *   - reliable: a full ring is an EXPLICIT failure — Send() returns false,
  *     a counter bumps, and the session observes it. A reliable event is never
  *     silently dropped (review M0: deepseek M2, glm MAJOR-1).
- *   - snapshots: replace-newest (drop-oldest equivalent) — a full ring keeps
- *     the freshest item, stale entries age out (glm MAJOR-2, deepseek m4).
+ *   - connect/disconnect: a dedicated lifecycle inbox so a full reliable-data
+ *     ring cannot drop a peer coming or going (zombie roster).
+ *   - snapshots: per-source inbox + per-destination outbox; a full ring
+ *     replace-newests that peer's newest *matching* snapshot (same
+ *     PlayerState/HorseState playerId) so a multiplexed fan-out cannot
+ *     drop player B to keep a stale player A. Falls back to newest-slot
+ *     replace when no match exists (glm MAJOR-2). The host's O(remotes²)
+ *     fan-out no longer shares one 128-slot outbox, and one sender cannot
+ *     monopolize inbound snapshots.
  *
  * Peer-slot generation guard (deepseek M4): each slot carries a connection
- * generation, bumped when a slot is assigned AND when it is released. Every
- * ring entry is stamped with the slot generation at enqueue and dropped on
- * mismatch at drain/poll, so a packet enqueued for an old connection can
- * never be delivered to the new connection that reuses the slot.
+ * generation, bumped when a slot is assigned. Every ring entry is stamped
+ * with the slot generation at enqueue and dropped on mismatch at drain/poll,
+ * so a packet enqueued for an old connection can never be delivered to the
+ * new connection that reuses the slot. Generation is NOT bumped on release:
+ * in-flight packets from the disconnecting peer (JoinReject racing
+ * disconnect_later) must still reach the game thread.
  */
 
 #include "dusk/net/protocol.h"
@@ -42,6 +50,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -54,10 +63,16 @@ constexpr u8 kInvalidPeer = 0xFF;
 /// Ring capacity for channel-0 (reliable) traffic. Control/events/combat are
 /// sparse but correctness-critical; overflow is an explicit failure.
 constexpr size_t kReliableRingCapacity = 64;
-/// Ring capacity for channel-1 (unreliable snapshot) traffic. The 60 Hz pose
-/// stream can exceed a frame's worth of slots during a game-thread hitch;
-/// replace-newest keeps the freshest state under pressure.
-constexpr size_t kSnapshotRingCapacity = 128;
+/// Connect/disconnect events get their own inbox so a full reliable-data
+/// ring can never drop a peer coming or going (zombie roster / ignored rejoin).
+constexpr size_t kLifecycleRingCapacity = 16;
+/// Per-source inbound snapshot ring. One peer cannot monopolize a shared
+/// inbox; 128 slots is the same hitch headroom as the matching outbox.
+constexpr size_t kSnapshotInboxPerPeer = 128;
+/// Per-destination outbound snapshot ring. Host fan-out is O(remotes²)
+/// PlayerStates/frame into this slot; 128 per peer is ~18 frames at 7
+/// packets/peer/frame (one pose per player) before replace-newest kicks in.
+constexpr size_t kSnapshotOutboxPerPeer = 128;
 
 /// Bound on the number of ENet events the socket thread processes before
 /// draining the outbox, so a continuous inbound stream cannot starve
@@ -104,15 +119,36 @@ public:
     /// position (tail) — the producer only ever overwrites a slot the
     /// consumer has not read.
     bool PushOrReplace(const T& item) {
+        return PushOrReplaceMatching(item, [](const T&, const T&) { return false; });
+    }
+
+    /// Like PushOrReplace, but when full prefers overwriting the newest
+    /// already-queued item for which `same(queued, item)` is true. Snapshot
+    /// rings multiplex many players onto one peer; replacing an unrelated
+    /// newest packet would drop that player's fresh pose and keep a stale
+    /// one. The consumer's current read slot (`tail`) is never overwritten.
+    /// Falls back to replacing the newest slot when no match is found.
+    template <typename Same>
+    bool PushOrReplaceMatching(const T& item, Same same) {
+        const size_t mask = Capacity - 1;
         const size_t head = head_.load(std::memory_order_relaxed);
-        const size_t next = (head + 1) & (Capacity - 1);
-        if (next == tail_.load(std::memory_order_acquire)) {
-            slots_[(head - 1) & (Capacity - 1)] = item;  // already published; no head update
-            return true;
+        const size_t next = (head + 1) & mask;
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        if (next != tail) {
+            slots_[head] = item;
+            head_.store(next, std::memory_order_release);
+            return false;
         }
-        slots_[head] = item;
-        head_.store(next, std::memory_order_release);
-        return false;
+        size_t i = (head - 1) & mask;
+        while (i != tail) {
+            if (same(slots_[i], item)) {
+                slots_[i] = item;
+                return true;
+            }
+            i = (i - 1) & mask;
+        }
+        slots_[(head - 1) & mask] = item;
+        return true;
     }
 
     /// Consumer side. Returns false when empty.
@@ -130,6 +166,13 @@ public:
         const size_t head = head_.load(std::memory_order_acquire);
         const size_t tail = tail_.load(std::memory_order_acquire);
         return (head + Capacity - tail) & (Capacity - 1);
+    }
+
+    /// Drop every queued item. Single-threaded only (call after the socket
+    /// thread has joined, or before it is spawned).
+    void Reset() {
+        head_.store(0, std::memory_order_relaxed);
+        tail_.store(0, std::memory_order_relaxed);
     }
 
 private:
@@ -207,10 +250,16 @@ public:
     /// outbox ring; the socket thread drains it.
     ///   - reliable ring full: returns false and bumps ReliableOutboundDropped()
     ///     (explicit failure — never a silent drop);
-    ///   - snapshot ring full: replaces the newest entry (returns true).
+    ///   - snapshot outbox (per peer) full: replaces the newest matching
+    ///     PlayerState/HorseState for that playerId, else the newest entry
+    ///     (returns true).
     /// Also returns false when the transport is not running or the message is
     /// too large.
     bool Send(u8 peerIndex, u8 channel, const void* data, u16 size);
+
+    /// Game-thread: ask the socket thread to disconnect `peerIndex` after
+    /// draining already-queued reliable packets (JoinReject then hang up).
+    void DisconnectPeer(u8 peerIndex);
 
     /// Capstone MINOR F: why the most recent StartHost/StartClient failed
     /// ("" when none or when the last start succeeded). const char* to a
@@ -219,9 +268,10 @@ public:
     /// already-running vs resolve-failed).
     [[nodiscard]] const char* LastStartError() const { return lastStartError_; }
 
-    /// Game-thread API: pop the next inbound packet (reliable inbox first,
-    /// then the snapshot inbox). Drops stale packets whose peer slot was
-    /// reused by a newer connection (bumps InboundGenerationDropped()).
+    /// Game-thread API: pop the next inbound packet (lifecycle first, then
+    /// sticky disconnects from a full lifecycle inbox, then reliable data,
+    /// then per-peer snapshots in round-robin). Drops stale Data packets
+    /// whose peer slot was reused (bumps InboundGenerationDropped()).
     /// Returns false when empty.
     bool Poll(InboundPacket& out);
 
@@ -234,6 +284,10 @@ public:
     [[nodiscard]] u64 SnapshotOutboundReplaced() const { return snapshotOutboundReplaced_.load(std::memory_order_relaxed); }
     /// Reliable inbound messages dropped because the reliable inbox was full.
     [[nodiscard]] u64 ReliableInboundDropped() const { return reliableInboundDropped_.load(std::memory_order_relaxed); }
+    /// Connect/disconnect events that could not be queued (peer was reset on
+    /// connect; disconnect is retried via a sticky bit so the session cannot
+    /// miss a leave).
+    [[nodiscard]] u64 LifecycleDropped() const { return lifecycleDropped_.load(std::memory_order_relaxed); }
     /// Snapshot inbound messages that replaced a newer entry under pressure.
     [[nodiscard]] u64 SnapshotInboundReplaced() const { return snapshotInboundReplaced_.load(std::memory_order_relaxed); }
     /// Inbound ENet packets larger than kMaxMessageSize, dropped at the socket.
@@ -251,6 +305,7 @@ private:
     void HandleSocketEvent(ENetEvent& event);
     void DrainOutbox();
     void SendPacket(const OutboundPacket& p);
+    void ResetThreadSharedState();
 
     u8 AssignPeerSlot(ENetPeer* peer);
     void ReleasePeerSlot(u8 index);
@@ -268,20 +323,31 @@ private:
 
     // Written only by the socket thread (the game thread never touches this).
     std::array<ENetPeer*, kMaxPeers> peerSlots_{};
-    // Peer-slot connection generation: bumped on assign AND release (socket
-    // thread); read by the game thread to stamp Send() entries and filter
-    // Poll(). Prevents stale-packet misdelivery across slot reuse.
+    // Peer-slot connection generation: bumped on assign (socket thread);
+    // read by the game thread to stamp Send() entries and filter Poll().
+    // Not bumped on release — in-flight packets from the disconnecting peer
+    // must still be delivered (JoinReject vs disconnect_later).
     std::array<std::atomic<u16>, kMaxPeers> peerGenerations_{};
 
-    // Channel-split SPSC rings: reliable (0) vs snapshots (1), both directions.
-    SPSCRing<InboundPacket, kReliableRingCapacity> reliableInbox_;
-    SPSCRing<InboundPacket, kSnapshotRingCapacity> snapshotInbox_;
-    SPSCRing<OutboundPacket, kReliableRingCapacity> reliableOutbox_;
-    SPSCRing<OutboundPacket, kSnapshotRingCapacity> snapshotOutbox_;
+    // The snapshot rings are ~7 MB (128 slots × 4 KB × 7 peers × 2 directions).
+    // Heap-allocate them so a stack Session (selftest) cannot blow the 8 MB
+    // default thread stack. The game keeps Session in static storage.
+    struct Queues {
+        SPSCRing<InboundPacket, kLifecycleRingCapacity> lifecycleInbox;
+        SPSCRing<InboundPacket, kReliableRingCapacity> reliableInbox;
+        std::array<SPSCRing<InboundPacket, kSnapshotInboxPerPeer>, kMaxPeers> snapshotInbox;
+        SPSCRing<OutboundPacket, kReliableRingCapacity> reliableOutbox;
+        std::array<SPSCRing<OutboundPacket, kSnapshotOutboxPerPeer>, kMaxPeers> snapshotOutbox;
+        std::array<std::atomic<bool>, kMaxPeers> disconnectRequested{};
+        std::atomic<u32> pendingDisconnectBits{0};
+        u8 snapshotPollCursor = 0;
+    };
+    std::unique_ptr<Queues> q_{std::make_unique<Queues>()};
 
     std::atomic<u64> reliableOutboundDropped_{0};
     std::atomic<u64> snapshotOutboundReplaced_{0};
     std::atomic<u64> reliableInboundDropped_{0};
+    std::atomic<u64> lifecycleDropped_{0};
     std::atomic<u64> snapshotInboundReplaced_{0};
     std::atomic<u64> inboundOversized_{0};
     std::atomic<u64> inboundGenerationDropped_{0};

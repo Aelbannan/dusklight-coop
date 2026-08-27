@@ -1,5 +1,13 @@
 # Implementation plan — networked co-op (Rev 3, fork-based)
 
+> **LIVE MODEL (post M5.1):** parallel worlds + player/horse puppets,
+> protocol **v11** (9 message types: handshake + `PlayerState` /
+> `PlayerEvent` + `HorseState`). Enemies, combat, clock, sky, and chests
+> stay local. D1 live colliders, D3 enemy targeting, D5 shared drops, M2–M4
+> room ownership, time/weather sync, and LAN discovery were designed then
+> shredded or never built. Milestone sections below are historical; do not
+> implement or test them as current product.
+
 Status: **Revision 3 — decision: full fork, not a mod.** Sources: `00-network.md` (transport/session),
 `01-puppet-link.md`…`04-time-weather.md` (mechanical investigations — their *findings* carry over;
 their "hook from a mod" framing becomes "`#if TARGET_PC` guard in source"), `review-kimi-k3.md` +
@@ -257,11 +265,11 @@ wolf-revert built in per-player `forms` watching DAWN/DUSK events (vanilla has n
 
 ### M5 — Future
 
-> **SUPERSEDED by `05-ghosts.md` (the M5 pivot).** The M5.1 SHRED deleted
-> the M2/M3/M4 enemy/combat/ownership direction below. Everything following
-> this banner is history. Current M5 state: M5.1 shipped parallel worlds
-> + puppets + time/weather (protocol v7); M5.2+ ships the ghost layer per
-> `05-ghosts.md`.
+> **SUPERSEDED.** The M5.1 SHRED deleted the M2/M3/M4 enemy/combat/ownership
+> direction below. Ghost spectating (the M5.2+ layer) was designed then
+> scrapped and never built. Current co-op: parallel worlds + puppets
+> (protocol v9); enemies, clock, and sky stay local. Everything following
+> this banner is history.
 
 Dynamic waves (`EnemyEvent(spawn/die)`), horse entity channel, PvP (dummy damage table +
 `DamagePlayer` intent), enemy pose matrix-copy upgrade, interpolation if internet play appears.

@@ -13,9 +13,6 @@
 #include "f_op/f_op_camera_mng.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
-#if TARGET_PC
-#include "dusk/coop/coop_time.h"
-#endif
 
 static void dice_wether_init(u8 i_weatherMode, f32 i_weatherTime, f32 i_currentTime) {
     dScnKy_env_light_c* env_light = dKy_getEnvlight();
@@ -292,17 +289,7 @@ static dPnt* near_rail_get(kytag06_class* i_this, cXyz* i_pos) {
 
 static int daKytag06_Draw(kytag06_class* i_this) {
     if (i_this->mType == 4) {
-        #if TARGET_PC
-        // M3: the dice-weather machine (dKy_event_proc) is suppressed on a
-        // synced client — the host owns the sky and publishes WeatherChange
-        // (04 §5.7). R16 verified: the type-4 branch drives weather state
-        // only (raincnt/colpat/thunder + the dice counters), so skipping the
-        // whole call is safe. The host / offline client runs it natively.
-        if (!dusk::coop::timeweather::suppressDiceWeather())
-        #endif
-        {
-            daKytag06_type_04_Execute(i_this);
-        }
+        daKytag06_type_04_Execute(i_this);
     }
 
     return 1;
